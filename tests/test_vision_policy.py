@@ -12,7 +12,7 @@ from agent import (
     VisionPolicyDecision,
     VisionPolicyWorker,
 )
-from agent.vision_policy import _skill_catalog_payload
+from agent.vision_policy import _skill_catalog_payload, _VisionDecisionRequest
 from core.context import SkillContext
 from core.models import SkillArgs, SkillMetadata, SkillResult
 from core.runtime import SkillRuntime
@@ -249,6 +249,108 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_model_metrics_include_request_and_latency_fields(self) -> None:
+        invoker = FakeVisionInvoker([{"action": "ignore"}])
+        invoker.last_metrics = {
+            "round_trip_s": 0.475,
+            "network_rtt_s": 0.08,
+            "inference_s": 0.426,
+        }
+        worker = VisionPolicyWorker(
+            SkillRuntime(SimulatedRobotAdapter()),
+            VisionDecisionAgent(invoker=invoker),
+            VideoBuffer(window_s=2.0, max_frames=60),
+        )
+
+        metrics = worker._build_model_metrics(
+            request_id="vision-000001",
+            captured_at_s=10.0,
+            sent_at_s=10.05,
+            finished_at_s=10.525,
+            frame_count=8,
+        )
+
+        self.assertEqual(metrics["request_id"], "vision-000001")
+        self.assertEqual(metrics["frame_count"], 8)
+        self.assertEqual(metrics["frame_age_ms"], 525.0)
+        self.assertEqual(metrics["end_to_end_latency_ms"], 525.0)
+        self.assertEqual(metrics["network_rtt_ms"], 80.0)
+        self.assertEqual(metrics["inference_latency_ms"], 426.0)
+
+    async def test_policy_context_reports_active_skill_and_last_decision(self) -> None:
+        worker = VisionPolicyWorker(
+            SkillRuntime(SimulatedRobotAdapter()),
+            VisionDecisionAgent(invoker=FakeVisionInvoker([{"action": "ignore"}])),
+            VideoBuffer(window_s=2.0, max_frames=60),
+        )
+        worker._active_skill = "wave"
+        worker._active_started_at_s = time.monotonic() - 1.0
+        worker._active_task = asyncio.create_task(asyncio.sleep(1.0))
+        worker._last_decision = AgentDecision(
+            action="execute_skill",
+            skill="wave",
+            arguments={"arm": "right"},
+        )
+
+        try:
+            context = worker._build_policy_context()
+        finally:
+            worker._active_task.cancel()
+            await asyncio.gather(worker._active_task, return_exceptions=True)
+
+        self.assertEqual(context["active_skill"], "wave")
+        self.assertEqual(context["robot_motion"], "executing")
+        self.assertGreaterEqual(float(context["active_skill_elapsed_s"]), 1.0)
+        self.assertEqual(
+            context["last_decision"],
+            {
+                "action": "execute_skill",
+                "skill": "wave",
+                "arguments": {"arm": "right"},
+                "speech": None,
+                "reason": None,
+            },
+        )
+
+    async def test_execution_drops_action_that_ages_in_queue(self) -> None:
+        robot = SimulatedRobotAdapter()
+        runtime = SkillRuntime(robot)
+        runtime.register(WaveSkill())
+        frame = camera_frame(time.monotonic() - 1.0)
+        decision = AgentDecision(
+            action="execute_skill",
+            skill="wave",
+            arguments={"arm": "right"},
+        )
+        worker = VisionPolicyWorker(
+            runtime,
+            VisionDecisionAgent(invoker=FakeVisionInvoker([{"action": "ignore"}])),
+            VideoBuffer(window_s=2.0, max_frames=60),
+            max_decision_age_s=0.1,
+        )
+        await worker._decision_queue.put(
+            _VisionDecisionRequest(
+                decision=decision,
+                frames=(frame,),
+                robot_state=RobotState(hardware=False, connected=True),
+                request_id="vision-queue-old",
+                model_metrics={"request_id": "vision-queue-old"},
+            )
+        )
+        task = asyncio.create_task(worker._execution_loop())
+        try:
+            deadline = time.monotonic() + 0.2
+            while not worker._outcome_queue.qsize() and time.monotonic() < deadline:
+                await asyncio.sleep(0.005)
+            outcomes = worker.drain_outcomes()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        self.assertNotIn(("wave", "right"), robot.events)
+        self.assertEqual(outcomes[0].request_id, "vision-queue-old")
+        self.assertIn("before execution", outcomes[0].suppressed_reason or "")
+
     async def test_execute_and_speak_runs_action_and_speech_concurrently(self) -> None:
         action_started = asyncio.Event()
         speech_started = asyncio.Event()

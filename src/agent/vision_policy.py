@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import time
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
@@ -92,6 +93,7 @@ class OllamaVisionInvoker:
         self.model_name = model_name
         self._client = ollama.AsyncClient(host=base_url)
         self.last_metrics: dict[str, object] = {}
+        self._request_id = 0
         self.output_schema = output_schema or AgentDecision.model_json_schema()
         self.max_new_tokens = max_new_tokens
         self.constrain_json = constrain_json
@@ -101,6 +103,8 @@ class OllamaVisionInvoker:
         await self._client.show(self.model_name)
 
     async def ainvoke(self, frames: Sequence[object], prompt: str) -> object:
+        self._request_id += 1
+        remote_request_id = self._request_id
         started = time.monotonic()
         encoded_frames = [self._as_bytes(frame) for frame in frames]
         response = await self._client.chat(
@@ -125,8 +129,10 @@ class OllamaVisionInvoker:
             raise DecisionAgentError("Ollama returned an incomplete response; check server logs")
         if payload.get("done_reason") == "length":
             raise DecisionAgentError("Ollama exhausted the output token budget; refusing truncated decision")
+        finished = time.monotonic()
         self.last_metrics = {
-            "round_trip_s": round(time.monotonic() - started, 3),
+            "remote_request_id": remote_request_id,
+            "round_trip_s": round(finished - started, 3),
             "frame_count": len(frames),
             "input_tokens": payload.get("prompt_eval_count"),
             "generated_tokens": payload.get("eval_count"),
@@ -135,6 +141,20 @@ class OllamaVisionInvoker:
             value = payload.get(field)
             if isinstance(value, (int, float)):
                 self.last_metrics[field.replace("_duration", "_s")] = round(value / 1e9, 3)
+        total_s = self.last_metrics.get("total_s")
+        round_trip_s = self.last_metrics.get("round_trip_s")
+        if isinstance(total_s, (int, float)) and isinstance(round_trip_s, (int, float)):
+            self.last_metrics["network_rtt_s"] = round(
+                max(0.0, round_trip_s - total_s),
+                3,
+            )
+        prompt_eval_s = self.last_metrics.get("prompt_eval_s")
+        eval_s = self.last_metrics.get("eval_s")
+        if isinstance(prompt_eval_s, (int, float)) or isinstance(eval_s, (int, float)):
+            self.last_metrics["inference_s"] = round(
+                float(prompt_eval_s or 0.0) + float(eval_s or 0.0),
+                3,
+            )
         message = response.get("message") if isinstance(response, Mapping) else None
         if isinstance(message, Mapping):
             return str(message.get("content", ""))
@@ -528,6 +548,8 @@ class VisionPolicyOutcome:
     skill_result: SkillResult | None = None
     speech_spoken: bool = False
     suppressed_reason: str | None = None
+    request_id: str | None = None
+    model_metrics: Mapping[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         decision_age_s = (
@@ -553,6 +575,8 @@ class VisionPolicyOutcome:
             ),
             "speech_spoken": self.speech_spoken,
             "suppressed_reason": self.suppressed_reason,
+            "request_id": self.request_id,
+            "model_metrics": dict(self.model_metrics or {}),
         }
 
 
@@ -572,6 +596,7 @@ class VisionPolicyDecision:
     robot_state: RobotState
     policy_context: Mapping[str, object] | None = None
     model_metrics: Mapping[str, object] | None = None
+    request_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -591,7 +616,17 @@ class VisionPolicyDecision:
             },
             "policy_context": dict(self.policy_context or {}),
             "model_metrics": dict(self.model_metrics or {}),
+            "request_id": self.request_id,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _VisionDecisionRequest:
+    decision: AgentDecision
+    frames: tuple[CameraFrame, ...]
+    robot_state: RobotState
+    request_id: str
+    model_metrics: Mapping[str, object]
 
 
 class VisionPolicyWorker:
@@ -632,9 +667,12 @@ class VisionPolicyWorker:
         self.frame_count = frame_count
         self.action_cooldown_s = action_cooldown_s
         self.max_decision_age_s = max_decision_age_s
-        self._decision_queue: asyncio.Queue[
-            tuple[AgentDecision, tuple[CameraFrame, ...], RobotState]
-        ] = asyncio.Queue(maxsize=1)
+        # A single consumer and a one-item latest-wins queue are intentional:
+        # an in-flight remote inference is never followed by a backlog of old
+        # windows. The next request samples the newest VideoBuffer window.
+        self._decision_queue: asyncio.Queue[_VisionDecisionRequest] = asyncio.Queue(
+            maxsize=1
+        )
         self._outcome_queue: asyncio.Queue[VisionPolicyOutcome] = asyncio.Queue(
             maxsize=queue_size
         )
@@ -648,11 +686,15 @@ class VisionPolicyWorker:
         self._active_task: asyncio.Task[tuple[SkillResult | None, bool]] | None = None
         self._active_signature: str | None = None
         self._active_skill: str | None = None
+        self._active_started_at_s: float | None = None
         self._active_required_resources: tuple[str, ...] = ()
+        self._last_decision: AgentDecision | None = None
         self._last_selected_skill: str | None = None
         self._last_selected_at_s: float | None = None
         self._last_close_obstacle_at_s: float | None = None
         self._last_action_at: dict[str, float] = {}
+        self._request_sequence = 0
+        self._decision_finished_at_s: deque[float] = deque(maxlen=32)
         self._interrupt_lock = asyncio.Lock()
         self._safety_latched = False
 
@@ -701,6 +743,7 @@ class VisionPolicyWorker:
         self._active_task = None
         self._active_signature = None
         self._active_skill = None
+        self._active_started_at_s = None
         self._active_required_resources = ()
 
     def drain_outcomes(self) -> tuple[VisionPolicyOutcome, ...]:
@@ -727,6 +770,7 @@ class VisionPolicyWorker:
             self._active_task = None
             self._active_signature = None
             self._active_skill = None
+            self._active_started_at_s = None
             self._active_required_resources = ()
             if had_active_behavior or force_stop:
                 try:
@@ -760,6 +804,7 @@ class VisionPolicyWorker:
                 self._active_task = None
                 self._active_signature = None
                 self._active_skill = None
+                self._active_started_at_s = None
                 self._active_required_resources = ()
             try:
                 await self.runtime.robot.stop()
@@ -778,10 +823,12 @@ class VisionPolicyWorker:
             started = time.monotonic()
             frames = self.video_buffer.sample(self.frame_count)
             if len(frames) >= getattr(self.decision_agent, "minimum_frames", 1):
+                request_id = self._next_request_id()
+                captured_at_s = frames[-1].observed_at_s
                 capture_path = None
                 try:
                     frames = self._orient_frames(frames)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - policy must remain alive
                     self._put_latest(self._error_queue, VisionPolicyError(stage="decision", message=f"frame rotation failed: {exc}"))
                     await asyncio.sleep(self.interval_s)
                     continue
@@ -791,13 +838,17 @@ class VisionPolicyWorker:
                         frames = tuple(replace(f, rgb=OllamaVisionInvoker._as_bytes(f.rgb)) for f in frames)
                         capture_path = await asyncio.to_thread(self.capture.begin, frames)
                         logging.getLogger("agent.vision_capture").info("saved model inputs: %s", capture_path)
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 - capture is optional
                         logging.getLogger("agent.vision_capture").warning("capture disabled after write failure: %s", exc)
                         self.capture = None
                 try:
                     robot_state = await self.runtime.robot.get_state()
                     policy_context = self._build_policy_context()
                     policy_context["vision_rotation_deg"] = self.rotation_deg
+                    policy_context["request_id"] = request_id
+                    policy_context["captured_at_s"] = captured_at_s
+                    sent_at_s = time.monotonic()
+                    policy_context["sent_at_s"] = sent_at_s
                     decision = await self.decision_agent.decide(
                         frames,
                         robot_state,
@@ -805,10 +856,20 @@ class VisionPolicyWorker:
                         policy_context=policy_context,
                     )
                     decided_at_s = time.monotonic()
+                    self._last_decision = decision
+                    model_metrics = self._build_model_metrics(
+                        request_id=request_id,
+                        captured_at_s=captured_at_s,
+                        sent_at_s=sent_at_s,
+                        finished_at_s=decided_at_s,
+                        frame_count=len(frames),
+                    )
+                    self._record_decision_completion(decided_at_s)
+                    model_metrics["decision_rate_hz"] = self._decision_rate_hz()
                     self._finish_capture(capture_path, {
                         "decided_at_s": decided_at_s,
                         "decision": decision.model_dump(),
-                        "model_metrics": dict(self.decision_agent.last_metrics),
+                        "model_metrics": model_metrics,
                         "policy_context": policy_context,
                     })
                     self._put_latest(
@@ -821,8 +882,9 @@ class VisionPolicyWorker:
                             decision=decision,
                             robot_state=robot_state,
                             policy_context=policy_context,
-                            model_metrics={**self.decision_agent.last_metrics,
+                            model_metrics={**model_metrics,
                                            **({"capture_path": str(capture_path)} if capture_path else {})},
+                            request_id=request_id,
                         ),
                     )
                     decision_age_s = max(
@@ -831,8 +893,7 @@ class VisionPolicyWorker:
                     )
                     if (
                         self.max_decision_age_s is not None
-                        and decision.action
-                        in {"execute_skill", "execute_and_speak", "speak"}
+                        and self._decision_requires_fresh_frames(decision)
                         and decision_age_s > self.max_decision_age_s
                     ):
                         self._put_latest(
@@ -841,6 +902,8 @@ class VisionPolicyWorker:
                                 decision,
                                 frames,
                                 robot_state,
+                                request_id=request_id,
+                                model_metrics=model_metrics,
                                 suppressed_reason=(
                                     "stale visual decision: "
                                     f"{decision_age_s:.2f}s old exceeds "
@@ -856,6 +919,8 @@ class VisionPolicyWorker:
                                 decision,
                                 frames,
                                 robot_state,
+                                request_id=request_id,
+                                model_metrics=model_metrics,
                                 executed=interrupted,
                                 suppressed_reason=(
                                     None if interrupted else "no active behavior"
@@ -865,7 +930,13 @@ class VisionPolicyWorker:
                     else:
                         self._put_latest(
                             self._decision_queue,
-                            (decision, frames, robot_state),
+                            _VisionDecisionRequest(
+                                decision=decision,
+                                frames=frames,
+                                robot_state=robot_state,
+                                request_id=request_id,
+                                model_metrics=model_metrics,
+                            ),
                         )
                 except Exception as exc:  # noqa: BLE001 - policy must remain alive
                     self._finish_capture(capture_path, {"error": str(exc)})
@@ -881,7 +952,7 @@ class VisionPolicyWorker:
         if path is not None and self.capture is not None:
             try:
                 self.capture.finish(path, result)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - capture must not stop policy
                 logging.getLogger("agent.vision_capture").warning("could not save capture result: %s", exc)
 
     def _orient_frames(self, frames):
@@ -899,14 +970,54 @@ class VisionPolicyWorker:
 
     async def _execution_loop(self) -> None:
         while True:
-            decision, frames, robot_state = await self._decision_queue.get()
+            request = await self._decision_queue.get()
+            decision = request.decision
+            frames = request.frames
+            robot_state = request.robot_state
             try:
                 if decision.action in {"continue", "ignore"}:
                     self._put_latest(
                         self._outcome_queue,
-                        self._outcome(decision, frames, robot_state),
+                        self._outcome(
+                            decision,
+                            frames,
+                            robot_state,
+                            request_id=request.request_id,
+                            model_metrics=request.model_metrics,
+                        ),
                     )
                     continue
+
+                # A decision can wait in the one-item queue while another
+                # behavior is finishing. Re-check freshness immediately before
+                # starting any physical action so an old window can never
+                # command the robot.
+                if (
+                    self.max_decision_age_s is not None
+                    and self._decision_requires_fresh_frames(decision)
+                    and frames
+                ):
+                    decision_age_s = max(
+                        0.0,
+                        time.monotonic() - frames[-1].observed_at_s,
+                    )
+                    if decision_age_s > self.max_decision_age_s:
+                        self._put_latest(
+                            self._outcome_queue,
+                            self._outcome(
+                                decision,
+                                frames,
+                                robot_state,
+                                request_id=request.request_id,
+                                model_metrics=request.model_metrics,
+                                suppressed_reason=(
+                                    "stale visual decision before execution: "
+                                    f"{decision_age_s:.2f}s old exceeds "
+                                    f"{self.max_decision_age_s:.2f}s limit"
+                                ),
+                            ),
+                        )
+                        continue
 
                 if (
                     self._safety_latched
@@ -920,6 +1031,8 @@ class VisionPolicyWorker:
                             decision,
                             frames,
                             robot_state,
+                            request_id=request.request_id,
+                            model_metrics=request.model_metrics,
                             suppressed_reason=(
                                 "depth safety latch blocks mobile-base skills"
                             ),
@@ -934,6 +1047,8 @@ class VisionPolicyWorker:
                             decision,
                             frames,
                             robot_state,
+                            request_id=request.request_id,
+                            model_metrics=request.model_metrics,
                             suppressed_reason=(
                                 "recovered handshake lacks recent close-range "
                                 "depth evidence"
@@ -951,6 +1066,8 @@ class VisionPolicyWorker:
                             decision,
                             frames,
                             robot_state,
+                            request_id=request.request_id,
+                            model_metrics=request.model_metrics,
                             suppressed_reason="identical behavior is already active",
                         ),
                     )
@@ -966,6 +1083,8 @@ class VisionPolicyWorker:
                             decision,
                             frames,
                             robot_state,
+                            request_id=request.request_id,
+                            model_metrics=request.model_metrics,
                             suppressed_reason="identical behavior is in cooldown",
                         ),
                     )
@@ -975,9 +1094,11 @@ class VisionPolicyWorker:
 
                 self._active_signature = signature
                 self._active_skill = decision.skill
+                self._active_started_at_s = now
                 self._active_required_resources = self._decision_required_resources(
                     decision
                 )
+                self._last_decision = decision
                 if decision.skill is not None:
                     self._last_selected_skill = self._canonical_skill_name(
                         decision.skill
@@ -998,6 +1119,7 @@ class VisionPolicyWorker:
                     self._active_task = None
                     self._active_signature = None
                     self._active_skill = None
+                    self._active_started_at_s = None
                     self._active_required_resources = ()
                 self._put_latest(
                     self._outcome_queue,
@@ -1005,6 +1127,8 @@ class VisionPolicyWorker:
                         decision,
                         frames,
                         robot_state,
+                        request_id=request.request_id,
+                        model_metrics=request.model_metrics,
                         executed=True,
                         skill_result=skill_result,
                         speech_spoken=speech_spoken,
@@ -1014,6 +1138,7 @@ class VisionPolicyWorker:
                 self._active_task = None
                 self._active_signature = None
                 self._active_skill = None
+                self._active_started_at_s = None
                 self._active_required_resources = ()
                 self._put_latest(
                     self._error_queue,
@@ -1091,8 +1216,24 @@ class VisionPolicyWorker:
         return "mobile_base" in self._decision_required_resources(decision)
 
     def _build_policy_context(self) -> dict[str, object]:
+        active = self._active_task is not None and not self._active_task.done()
         context: dict[str, object] = {
             "active_skill": self._active_skill,
+            "skill_started_at_s": self._active_started_at_s,
+            "active_skill_elapsed_s": (
+                round(
+                    max(0.0, time.monotonic() - self._active_started_at_s),
+                    3,
+                )
+                if self._active_started_at_s is not None
+                else 0.0
+            ),
+            "robot_motion": "executing" if active else "idle",
+            "last_decision": (
+                self._last_decision.to_dict()
+                if self._last_decision is not None
+                else None
+            ),
             "last_selected_skill": self._last_selected_skill,
             "safety_latched": self._safety_latched,
         }
@@ -1151,6 +1292,80 @@ class VisionPolicyWorker:
         return _CANONICAL_SKILL_NAMES.get(skill_name, skill_name)
 
     @staticmethod
+    def _decision_requires_fresh_frames(decision: AgentDecision) -> bool:
+        return decision.action in {
+            "execute_skill",
+            "execute_and_speak",
+            "speak",
+        }
+
+    def _next_request_id(self) -> str:
+        self._request_sequence += 1
+        return f"vision-{self._request_sequence:06d}"
+
+    def _build_model_metrics(
+        self,
+        *,
+        request_id: str,
+        captured_at_s: float,
+        sent_at_s: float,
+        finished_at_s: float,
+        frame_count: int,
+    ) -> dict[str, object]:
+        """Combine backend timings with local end-to-end timing.
+
+        The Ollama API exposes server-side generation timings and one wall-clock
+        round trip. It does not expose separate upload/download timings, so we
+        intentionally report only the measurable network and inference values.
+        """
+
+        raw_metrics = getattr(self.decision_agent, "last_metrics", {})
+        metrics = dict(raw_metrics) if isinstance(raw_metrics, Mapping) else {}
+        frame_age_s = max(0.0, finished_at_s - captured_at_s)
+        metrics.update(
+            {
+                "request_id": request_id,
+                "captured_at_s": captured_at_s,
+                "sent_at_s": sent_at_s,
+                "finished_at_s": finished_at_s,
+                "frame_count": frame_count,
+                "frame_age_s": round(frame_age_s, 3),
+                "frame_age_ms": round(frame_age_s * 1000.0, 1),
+                "end_to_end_latency_s": round(frame_age_s, 3),
+                "end_to_end_latency_ms": round(frame_age_s * 1000.0, 1),
+            }
+        )
+
+        round_trip_s = metrics.get("round_trip_s")
+        if isinstance(round_trip_s, (int, float)):
+            metrics["round_trip_ms"] = round(float(round_trip_s) * 1000.0, 1)
+        network_rtt_s = metrics.get("network_rtt_s")
+        if isinstance(network_rtt_s, (int, float)):
+            metrics["network_rtt_ms"] = round(float(network_rtt_s) * 1000.0, 1)
+        inference_s = metrics.get("inference_s")
+        if isinstance(inference_s, (int, float)):
+            metrics["inference_latency_s"] = round(float(inference_s), 3)
+            metrics["inference_latency_ms"] = round(float(inference_s) * 1000.0, 1)
+        return metrics
+
+    def _record_decision_completion(self, finished_at_s: float) -> None:
+        self._decision_finished_at_s.append(finished_at_s)
+
+    def _decision_rate_hz(self) -> float:
+        if len(self._decision_finished_at_s) < 2:
+            return 0.0
+        elapsed_s = (
+            self._decision_finished_at_s[-1]
+            - self._decision_finished_at_s[0]
+        )
+        if elapsed_s <= 0:
+            return 0.0
+        return round(
+            (len(self._decision_finished_at_s) - 1) / elapsed_s,
+            3,
+        )
+
+    @staticmethod
     def _decision_signature(decision: AgentDecision) -> str:
         return json.dumps(
             {
@@ -1178,6 +1393,8 @@ class VisionPolicyWorker:
         skill_result: SkillResult | None = None,
         speech_spoken: bool = False,
         suppressed_reason: str | None = None,
+        request_id: str | None = None,
+        model_metrics: Mapping[str, object] | None = None,
     ) -> VisionPolicyOutcome:
         return VisionPolicyOutcome(
             decided_at_s=time.monotonic(),
@@ -1190,6 +1407,8 @@ class VisionPolicyWorker:
             skill_result=skill_result,
             speech_spoken=speech_spoken,
             suppressed_reason=suppressed_reason,
+            request_id=request_id,
+            model_metrics=model_metrics,
         )
 
     @staticmethod

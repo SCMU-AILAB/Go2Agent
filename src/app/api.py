@@ -236,7 +236,7 @@ def create_app(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the G1 console FastAPI server")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--hardware", action="store_true")
     parser.add_argument("--network", default="")

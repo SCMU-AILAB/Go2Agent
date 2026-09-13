@@ -193,16 +193,12 @@ class RealSensePersonDetector:
             pipeline.start(config)
             align = bindings.realsense.align(bindings.realsense.stream.color)
             hog = bindings.opencv.HOGDescriptor()
-            hog.setSVMDetector(
-                bindings.opencv.HOGDescriptor_getDefaultPeopleDetector()
-            )
+            hog.setSVMDetector(bindings.opencv.HOGDescriptor_getDefaultPeopleDetector())
         except Exception as exc:
             try:
                 pipeline.stop()
             except Exception:
-                logger.exception(
-                    "failed to stop RealSense pipeline after open failure"
-                )
+                logger.exception("failed to stop RealSense pipeline after open failure")
             raise PerceptionError(f"failed to open RealSense D435i: {exc}") from exc
 
         self._bindings = bindings
@@ -445,8 +441,7 @@ class RealSensePersonDetector:
             opencv_module = importlib.import_module("cv2")
         except ImportError as exc:
             raise PerceptionError(
-                "native D435i dependencies are unavailable or ABI-incompatible: "
-                f"{exc}"
+                f"native D435i dependencies are unavailable or ABI-incompatible: {exc}"
             ) from exc
         return RealSenseBindings(
             realsense=cast(_RealSenseApi, cast(object, realsense_module)),

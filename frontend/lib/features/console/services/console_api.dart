@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/console_snapshot.dart';
+import 'console_transport.dart';
 
 class ConsoleApiException implements Exception {
   const ConsoleApiException(this.message, {this.statusCode});
@@ -39,8 +40,10 @@ abstract interface class ConsoleApi {
 
 class HttpConsoleApi implements ConsoleApi {
   HttpConsoleApi({Uri? baseUri, http.Client? client})
-    : baseUri = baseUri ?? Uri.parse(defaultBaseUrl),
-      _client = client ?? http.Client();
+    : this._(baseUri ?? Uri.parse(defaultBaseUrl), client);
+
+  HttpConsoleApi._(this.baseUri, http.Client? client)
+    : _client = client ?? createConsoleHttpClient(baseUri);
 
   static const defaultBaseUrl = String.fromEnvironment(
     'G1_API_BASE_URL',
@@ -123,7 +126,7 @@ class HttpConsoleApi implements ConsoleApi {
       query: null,
       fragment: null,
     );
-    final channel = WebSocketChannel.connect(eventUri);
+    final channel = connectConsoleWebSocket(eventUri);
     _eventChannel = channel;
     try {
       await channel.ready;

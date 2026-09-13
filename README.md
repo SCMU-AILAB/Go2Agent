@@ -134,7 +134,7 @@ python3 -m pip install -e ~/unitree_sdk2/unitree_sdk2_bindings
 ## Flutter 控制台 FastAPI 后端
 
 `g1-api` 提供与仓库内 `frontend/` 的 `ConsoleController` 状态字段对齐的 REST 和
-WebSocket 接口。默认绑定 `127.0.0.1:8000`、使用模拟机器人，并在进程启动时自动
+WebSocket 接口。默认绑定 `0.0.0.0:8000`、使用模拟机器人，并在进程启动时自动
 创建后端会话：
 
 ```bash
@@ -147,8 +147,7 @@ SDK 的 `AudioClient`：
 ```bash
 uv run g1-api \
   --hardware \
-  --network eth0 \
-  --host 0.0.0.0
+  --network eth0
 ```
 
 若只需要真机动作、不需要扬声器，可增加 `--no-audio`。D435i 通过 USB 连接运行

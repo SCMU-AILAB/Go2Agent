@@ -530,9 +530,7 @@ class UnitreeG1Adapter:
                 self._require_success("shake_hand stage 0", status)
                 self._legacy_handshake_active = True
                 return
-            raise RobotCommandError(
-                f"{action_name} requires G1ArmActionClient support"
-            )
+            raise RobotCommandError(f"{action_name} requires G1ArmActionClient support")
 
     def _execute_custom_arm_action_sync(self, action_name: str) -> None:
         with self._native_lock:
@@ -551,9 +549,7 @@ class UnitreeG1Adapter:
                 )
             stop_custom_action = getattr(self._arm_action, "stop_custom_action", None)
             if not callable(stop_custom_action):
-                raise RobotCommandError(
-                    "G1 bindings do not provide stop_custom_action"
-                )
+                raise RobotCommandError("G1 bindings do not provide stop_custom_action")
             self._require_success("stop custom arm action", stop_custom_action())
 
     def _release_arm_sync(self) -> None:
@@ -811,7 +807,9 @@ class UnitreeG1Adapter:
         name: str,
     ) -> int:
         if set(arguments) != {name}:
-            raise RobotCommandError(f"{action} requires exactly one integer '{name}' argument")
+            raise RobotCommandError(
+                f"{action} requires exactly one integer '{name}' argument"
+            )
         value = arguments[name]
         if not isinstance(value, int) or isinstance(value, bool):
             raise RobotCommandError(f"{action} argument '{name}' must be an integer")
@@ -824,7 +822,9 @@ class UnitreeG1Adapter:
         name: str,
     ) -> float:
         if set(arguments) != {name}:
-            raise RobotCommandError(f"{action} requires exactly one numeric '{name}' argument")
+            raise RobotCommandError(
+                f"{action} requires exactly one numeric '{name}' argument"
+            )
         value = arguments[name]
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise RobotCommandError(f"{action} argument '{name}' must be numeric")
@@ -1005,10 +1005,7 @@ class UnitreeG1Adapter:
             7400: "the rt/armsdk topic is occupied",
             7401: "the arm is holding; release action 99 first",
             7402: "invalid arm action id",
-            7404: (
-                "arm actions require FSM 500, 501, or 801 "
-                "(FSM 801 modes 0 or 3)"
-            ),
+            7404: ("arm actions require FSM 500, 501, or 801 (FSM 801 modes 0 or 3)"),
         }.get(status)
 
     @staticmethod
