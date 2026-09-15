@@ -24,6 +24,19 @@ from .directional import (
     TurnLeftSkill,
     TurnRightSkill,
 )
+from .go2_motion import (
+    GO2_VELOCITY_REFRESH_S,
+    Go2LinearMoveArgs,
+    Go2MoveArgs,
+    Go2MoveBackwardSkill,
+    Go2MoveForwardSkill,
+    Go2MoveLeftSkill,
+    Go2MoveRightSkill,
+    Go2MoveSkill,
+    Go2TurnArgs,
+    Go2TurnLeftSkill,
+    Go2TurnRightSkill,
+)
 from .move_backward import MoveBackwardArgs, MoveBackwardSkill
 from .operator_controls import (
     BalanceModeArgs,
@@ -60,6 +73,7 @@ from .wave import WaveArgs, WaveHandSkill, WaveSkill
 
 __all__ = [
     "ARM_ACTION_VERIFICATION_TIMEOUT_S",
+    "GO2_VELOCITY_REFRESH_S",
     "ArmActionArgs",
     "BalanceModeArgs",
     "ContinuousGaitSkill",
@@ -68,6 +82,16 @@ __all__ = [
     "FsmApiArgs",
     "FsmApiSkill",
     "FsmIdArgs",
+    "Go2LinearMoveArgs",
+    "Go2MoveArgs",
+    "Go2MoveBackwardSkill",
+    "Go2MoveForwardSkill",
+    "Go2MoveLeftSkill",
+    "Go2MoveRightSkill",
+    "Go2MoveSkill",
+    "Go2TurnArgs",
+    "Go2TurnLeftSkill",
+    "Go2TurnRightSkill",
     "HandshakeArgs",
     "HandshakeSkill",
     "InternalControlArgs",

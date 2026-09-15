@@ -15,8 +15,15 @@ from adapters import (
 )
 from agent import AgentError, RobotAgent
 from core.runtime import SkillRuntime
-from robot import RobotAdapter, SimulatedRobotAdapter, UnitreeG1Adapter, UnitreeG1Config
-from skills import register_g1_skills
+from robot import (
+    ROBOT_MODELS,
+    HardwareRobot,
+    RobotAdapter,
+    RobotModel,
+    create_hardware_robot,
+    create_simulated_robot,
+)
+from skills import register_g1_skills, register_go2_skills
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,6 +38,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--network", default="", help="Unitree DDS interface, e.g. eth0")
     parser.add_argument("--domain-id", type=int, default=0)
     parser.add_argument("--hardware", action="store_true")
+    parser.add_argument(
+        "--robot",
+        choices=ROBOT_MODELS,
+        default=os.getenv("G1_ROBOT_MODEL", "g1"),
+        help="robot model to assemble; go2 uses SportClient and a reduced skill catalog",
+    )
     parser.add_argument(
         "--include-operator-only-skills",
         action="store_true",
@@ -66,30 +79,27 @@ async def _run_turn(
 
 
 async def run(args: argparse.Namespace) -> None:
-    hardware_robot: UnitreeG1Adapter | None = None
+    hardware_robot: HardwareRobot | None = None
     audio: UnitreeAudioOutput | None = None
     robot: RobotAdapter
+    robot_model: RobotModel = args.robot
 
     if args.hardware:
-        hardware_robot = UnitreeG1Adapter(
-            UnitreeG1Config(
-                network_interface=args.network,
-                domain_id=args.domain_id,
-            )
+        hardware_robot = create_hardware_robot(
+            robot_model,
+            network_interface=args.network,
+            domain_id=args.domain_id,
         )
         robot = hardware_robot
     else:
-        robot = SimulatedRobotAdapter()
+        robot = create_simulated_robot(robot_model)
 
     runtime = SkillRuntime(robot)
-    register_g1_skills(
-        runtime,
-        include_operator_only=getattr(
-            args,
-            "include_operator_only_skills",
-            False,
-        ),
-    )
+    include_operator_only = getattr(args, "include_operator_only_skills", False)
+    if robot_model == "go2":
+        register_go2_skills(runtime, include_operator_only=include_operator_only)
+    else:
+        register_g1_skills(runtime, include_operator_only=include_operator_only)
     agent = RobotAgent(runtime, model_name=args.model, base_url=args.ollama_url)
     microphone = (
         MicrophoneASR(
@@ -106,7 +116,10 @@ async def run(args: argparse.Namespace) -> None:
     try:
         if hardware_robot is not None:
             await hardware_robot.connect()
-            if not args.no_audio:
+            if robot_model == "go2":
+                if not args.no_audio:
+                    print("[audio] Go2 does not use G1 AudioClient TTS; audio disabled.")
+            elif not args.no_audio:
                 audio = UnitreeAudioOutput(
                     hardware_robot,
                     speaker_id=args.speaker_id,

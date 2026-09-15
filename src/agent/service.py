@@ -22,6 +22,22 @@ returns success. If a tool fails or rejects its arguments, explain the failure
 briefly. Do not invent robot capabilities or emit action JSON.
 """
 
+GO2_SYSTEM_PROMPT = """You are the conversational controller for a Unitree Go2 quadruped.
+
+Reply in the user's language and keep spoken responses concise.
+Only use the registered skill tools. Go2 has no humanoid arm: never invent
+wave, handshake, high-five, or custom arm actions. Prefer stand_up, sit,
+hello, bounded moves, and stop. Never claim that a physical action succeeded
+before the tool returns success. If a tool fails, explain the failure briefly.
+Do not invent robot capabilities or emit action JSON.
+"""
+
+
+def system_prompt_for(robot_model: str) -> str:
+    if robot_model == "go2":
+        return GO2_SYSTEM_PROMPT
+    return SYSTEM_PROMPT
+
 
 class AgentError(RuntimeError):
     """Raised when the Agent fails to produce a usable final response."""

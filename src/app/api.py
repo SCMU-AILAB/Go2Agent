@@ -239,6 +239,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--hardware", action="store_true")
+    parser.add_argument(
+        "--robot",
+        choices=("g1", "go2"),
+        default="g1",
+        help="robot model to assemble; go2 uses SportClient and a reduced skill catalog",
+    )
     parser.add_argument("--network", default="")
     parser.add_argument("--domain-id", type=int, default=0)
     parser.add_argument("--model")
@@ -273,6 +279,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     config = BackendConfig(
         hardware=args.hardware,
+        robot_model=args.robot,
         network_interface=args.network,
         domain_id=args.domain_id,
         include_operator_only_skills=args.include_operator_only_skills,

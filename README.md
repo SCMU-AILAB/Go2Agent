@@ -1,5 +1,10 @@
 # G1 Agent
 
+Go2 适配已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`，以及 `--robot go2`
+装配路径（CLI / FastAPI / perception）。Go2 使用 `register_go2_skills()` 与
+周期性刷新的移动技能；G1 `AudioClient` TTS 不会挂到 Go2。详见
+[Go2 Adapter 说明](docs/go2-adapter.md)。默认仍为 G1。
+
 ## 控制台视觉接入（2026-09-12）
 
 Flutter控制台已接入原有滑动视频策略。后端选择本地相机时，提交任务启动持续视觉

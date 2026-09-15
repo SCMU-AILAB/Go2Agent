@@ -42,13 +42,15 @@ from perception import (
     WorldState,
 )
 from robot import (
+    ROBOT_MODELS,
+    HardwareRobot,
     RobotAdapter,
     RobotCommandError,
-    SimulatedRobotAdapter,
-    UnitreeG1Adapter,
-    UnitreeG1Config,
+    RobotModel,
+    create_hardware_robot,
+    create_simulated_robot,
 )
-from skills import register_g1_skills
+from skills import register_g1_skills, register_go2_skills
 
 from .structured_log import configure_structured_logging, emit_log
 
@@ -81,6 +83,12 @@ def parse_args() -> argparse.Namespace:
         help="Unitree DDS interface, e.g. eth0",
     )
     parser.add_argument("--domain-id", type=int, default=0)
+    parser.add_argument(
+        "--robot",
+        choices=ROBOT_MODELS,
+        default=os.getenv("G1_ROBOT_MODEL", "g1"),
+        help="robot model to assemble; go2 uses SportClient and a reduced skill catalog",
+    )
     parser.add_argument("--vision-generate-speech", action="store_true",
                         help="generate a short contextual utterance with each confirmed social gesture")
     parser.add_argument("--vision-rotation-deg", type=int, choices=(0, 90, 180, 270), default=0,
@@ -585,30 +593,27 @@ async def run_vision_perception_loop(
 
 
 async def _run(args: argparse.Namespace) -> int:
-    hardware_robot: UnitreeG1Adapter | None = None
+    hardware_robot: HardwareRobot | None = None
     audio: UnitreeAudioOutput | None = None
     vision_agent: VisionDecisionAgent | None = None
     robot: RobotAdapter
+    robot_model: RobotModel = args.robot
     if args.hardware:
-        hardware_robot = UnitreeG1Adapter(
-            UnitreeG1Config(
-                network_interface=args.network,
-                domain_id=args.domain_id,
-            )
+        hardware_robot = create_hardware_robot(
+            robot_model,
+            network_interface=args.network,
+            domain_id=args.domain_id,
         )
         robot = hardware_robot
     else:
-        robot = SimulatedRobotAdapter()
+        robot = create_simulated_robot(robot_model)
 
     runtime = SkillRuntime(robot)
-    register_g1_skills(
-        runtime,
-        include_operator_only=getattr(
-            args,
-            "include_operator_only_skills",
-            False,
-        ),
-    )
+    include_operator_only = getattr(args, "include_operator_only_skills", False)
+    if robot_model == "go2":
+        register_go2_skills(runtime, include_operator_only=include_operator_only)
+    else:
+        register_g1_skills(runtime, include_operator_only=include_operator_only)
     camera = RealSensePersonDetector(
         serial=args.camera_serial,
         width=args.width,
@@ -645,6 +650,7 @@ async def _run(args: argparse.Namespace) -> int:
             "model": selected_model,
             "camera_serial": args.camera_serial,
             "hardware": args.hardware,
+            "robot_model": robot_model,
             "vision_social_profile": args.vision_social_profile if args.vision_task == "social" else None,
             "vision_thinking_disabled": args.vision_disable_thinking,
             "vision_frame_count": (
@@ -744,9 +750,23 @@ async def _run(args: argparse.Namespace) -> int:
             emit_log(
                 owner="robot.adapter",
                 event_type="robot_connected",
-                data={"network": args.network, "domain_id": args.domain_id},
+                data={
+                    "network": args.network,
+                    "domain_id": args.domain_id,
+                    "robot_model": robot_model,
+                },
             )
-            if not args.no_audio:
+            if robot_model == "go2":
+                if not args.no_audio:
+                    emit_log(
+                        owner="robot.audio",
+                        event_type="audio_skipped",
+                        data={
+                            "reason": "go2_has_no_g1_audio_client",
+                            "speaker_id": args.speaker_id,
+                        },
+                    )
+            elif not args.no_audio:
                 audio = UnitreeAudioOutput(
                     hardware_robot,
                     speaker_id=args.speaker_id,

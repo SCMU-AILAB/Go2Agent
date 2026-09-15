@@ -12,6 +12,7 @@ from app.api import create_app
 from app.backend import AgentFactory, BackendConfig, ConsoleBackend
 from core.runtime import SkillRuntime
 from robot import SimulatedRobotAdapter
+from skills import build_go2_autonomy_skills
 
 
 class FakeAgent:
@@ -80,6 +81,19 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(console.json()["robot"]["mode"], "simulation")
 
         self.assertFalse(backend.backend)
+
+    def test_go2_config_registers_reduced_catalog(self) -> None:
+        backend = ConsoleBackend(
+            BackendConfig(audio_enabled=False, robot_model="go2"),
+            agent_factory=fake_agent_factory,
+        )
+        registered = {skill.metadata.name for skill in backend.runtime.registry.list()}
+        expected = {skill.metadata.name for skill in build_go2_autonomy_skills()}
+        self.assertEqual(registered, expected)
+        self.assertIn("hello", registered)
+        self.assertNotIn("handshake", registered)
+        self.assertTrue(backend.system_prompt.startswith("You are the conversational controller for a Unitree Go2"))
+        self.assertEqual(backend.config.robot_model, "go2")
 
     def test_console_schema_matches_flutter_field_names(self) -> None:
         with TestClient(create_app(backend=self.build_backend())) as client:

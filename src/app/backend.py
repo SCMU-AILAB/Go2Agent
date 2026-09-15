@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from adapters import AudioOutputError, UnitreeAudioOutput
 from adapters.langchain import SkillToolObserver
 from agent import AgentError, RobotAgent
-from agent.service import SYSTEM_PROMPT
+from agent.service import system_prompt_for
 from agent.social_vision import SocialVisionAgent
 from agent.vision_policy import OllamaVisionInvoker, VisionPolicyWorker
 from core.runtime import SkillRuntime
@@ -27,13 +27,14 @@ from perception import (
     VideoBuffer,
 )
 from robot import (
+    HardwareRobot,
     RobotAdapter,
     RobotCommandError,
-    SimulatedRobotAdapter,
-    UnitreeG1Adapter,
-    UnitreeG1Config,
+    RobotModel,
+    create_hardware_robot,
+    create_simulated_robot,
 )
-from skills import register_g1_skills
+from skills import register_g1_skills, register_go2_skills
 
 from .perception import _DepthSafetyGate
 
@@ -133,6 +134,7 @@ type AgentFactory = Callable[[SkillRuntime, str, SkillToolObserver], ChatAgent]
 @dataclass(frozen=True, slots=True)
 class BackendConfig:
     hardware: bool = False
+    robot_model: RobotModel = "g1"
     network_interface: str = ""
     domain_id: int = 0
     include_operator_only_skills: bool = False
@@ -211,25 +213,30 @@ class ConsoleBackend(SkillToolObserver):
         vision_agent_factory: Callable[[str], SocialVisionAgent] | None = None,
     ) -> None:
         self.config = config or BackendConfig()
-        self.hardware_robot: UnitreeG1Adapter | None = None
+        self.hardware_robot: HardwareRobot | None = None
         if robot is not None:
             self.robot = robot
         elif self.config.hardware:
-            self.hardware_robot = UnitreeG1Adapter(
-                UnitreeG1Config(
-                    network_interface=self.config.network_interface,
-                    domain_id=self.config.domain_id,
-                )
+            self.hardware_robot = create_hardware_robot(
+                self.config.robot_model,
+                network_interface=self.config.network_interface,
+                domain_id=self.config.domain_id,
             )
             self.robot = self.hardware_robot
         else:
-            self.robot = SimulatedRobotAdapter()
+            self.robot = create_simulated_robot(self.config.robot_model)
 
         self.runtime = SkillRuntime(self.robot)
-        register_g1_skills(
-            self.runtime,
-            include_operator_only=self.config.include_operator_only_skills,
-        )
+        if self.config.robot_model == "go2":
+            register_go2_skills(
+                self.runtime,
+                include_operator_only=self.config.include_operator_only_skills,
+            )
+        else:
+            register_g1_skills(
+                self.runtime,
+                include_operator_only=self.config.include_operator_only_skills,
+            )
         self._agent_factory = agent_factory or self._build_agent
         self._camera_factory = camera_factory or self._build_camera
         self._vision_agent_factory = vision_agent_factory or self._build_vision_agent
@@ -251,7 +258,7 @@ class ConsoleBackend(SkillToolObserver):
         self.starting = False
         self.busy = False
         self.prompt_saved = True
-        self.system_prompt = SYSTEM_PROMPT
+        self.system_prompt = system_prompt_for(self.config.robot_model)
         self.session_id = "—"
         self.task_id: str | None = None
         self.camera_source: Literal["demo", "local"] = self.config.camera_source
@@ -337,12 +344,21 @@ class ConsoleBackend(SkillToolObserver):
                 if self.hardware_robot is not None:
                     await self.hardware_robot.connect()
                     self.robot_connected = True
-                    if self.config.audio_enabled:
+                    if (
+                        self.config.audio_enabled
+                        and self.config.robot_model != "go2"
+                    ):
                         self._audio = UnitreeAudioOutput(
                             self.hardware_robot,
                             speaker_id=self.config.speaker_id,
                         )
                         await self._audio.connect()
+                    elif self.config.audio_enabled:
+                        await self._log(
+                            "WARN",
+                            "audio",
+                            "Go2 不使用 G1 AudioClient TTS，语音输出已禁用。",
+                        )
                 else:
                     state = await self.robot.get_state()
                     self.robot_connected = state.connected
@@ -370,7 +386,12 @@ class ConsoleBackend(SkillToolObserver):
                         # robot console remain otherwise usable.
                         pass
                 mode = "真机" if self.config.hardware else "模拟"
-                await self._log("INFO", "backend", f"后端已启动 · {mode}模式。")
+                model_label = "Go2" if self.config.robot_model == "go2" else "G1"
+                await self._log(
+                    "INFO",
+                    "backend",
+                    f"后端已启动 · {model_label} · {mode}模式。",
+                )
                 await self._log("INFO", "agent", "Agent 与 SkillRuntime 已就绪。")
                 self._emit_state()
                 return self.snapshot()
@@ -987,7 +1008,10 @@ class ConsoleBackend(SkillToolObserver):
             robot=RobotView(
                 mode="hardware" if self.config.hardware else "simulation",
                 connected=self.robot_connected,
-                details=self.robot_details,
+                details={
+                    "robot_model": self.config.robot_model,
+                    **self.robot_details,
+                },
             ),
             camera=CameraView(
                 source=self.camera_source,
