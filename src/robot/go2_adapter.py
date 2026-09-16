@@ -10,6 +10,8 @@ import asyncio
 import importlib
 import logging
 import math
+import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, TypeVar, cast
@@ -31,10 +33,19 @@ class Go2SportClientApi(Protocol):
     def stop_move(self) -> int: ...
 
 
+class Go2StateSubscriberApi(Protocol):
+    def init_channel(self) -> None: ...
+
+    def close_channel(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class Go2Bindings:
     channel: ChannelApi
     create_sport_client: Callable[[], Go2SportClientApi]
+    create_state_subscriber: (
+        Callable[[Callable[[object], None]], Go2StateSubscriberApi] | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +117,10 @@ class UnitreeGo2Adapter:
         self._bindings = bindings
         self._sport: Go2SportClientApi | None = None
         self._lock = asyncio.Lock()
+        self._state_subscriber: Go2StateSubscriberApi | None = None
+        self._state_lock = threading.Lock()
+        self._latest_state: dict[str, object] | None = None
+        self._latest_state_at: float | None = None
 
     @property
     def connected(self) -> bool:
@@ -124,7 +139,7 @@ class UnitreeGo2Adapter:
                         await asyncio.shield(pending)
                     except asyncio.CancelledError:
                         continue
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - drain in-flight native call
                         break
                 if not pending.cancelled():
                     pending.exception()
@@ -150,6 +165,10 @@ class UnitreeGo2Adapter:
             client = bindings.create_sport_client()
             client.set_timeout(self.config.timeout_s)
             client.init()
+            subscriber = None
+            if bindings.create_state_subscriber is not None:
+                subscriber = bindings.create_state_subscriber(self._on_state)
+                subscriber.init_channel()
         except Exception:
             if initialized:
                 try:
@@ -159,6 +178,7 @@ class UnitreeGo2Adapter:
             raise
         self._bindings = bindings
         self._sport = client
+        self._state_subscriber = subscriber
 
     async def close(self) -> None:
         await self._run_native("close", self._close_sync)
@@ -166,24 +186,51 @@ class UnitreeGo2Adapter:
     def _close_sync(self) -> None:
         if self._sport is None:
             return
+        if self._state_subscriber is not None:
+            self._state_subscriber.close_channel()
+            self._state_subscriber = None
         self._sport = None
         assert self._bindings is not None
         self._bindings.channel.release()
 
     async def get_state(self) -> RobotState:
         async with self._lock:
+            with self._state_lock:
+                details = dict(self._latest_state or {})
+                state_at = self._latest_state_at
+            telemetry_available = (
+                state_at is not None and time.monotonic() - state_at < 2.0
+            )
             return RobotState(
                 hardware=True,
                 connected=self.connected,
                 details={
                     "robot_model": "go2",
                     "state_source": "local_client",
-                    "telemetry_available": False,
-                    "completion_feedback_available": False,
+                    "telemetry_available": telemetry_available,
+                    "completion_feedback_available": telemetry_available,
+                    **details,
                     "supported_loco_actions": sorted(_LOCO_ACTIONS),
                     "arm_action_presets": False,
                 },
             )
+
+    def _on_state(self, message: object) -> None:
+        try:
+            imu = getattr(message, "imu_state", None)
+            snapshot = {
+                "mode": getattr(message, "mode", None),
+                "gait_type": getattr(message, "gait_type", None),
+                "position_m": tuple(getattr(message, "position", ())),
+                "velocity_m_s": tuple(getattr(message, "velocity", ())),
+                "rpy_rad": tuple(getattr(imu, "rpy", ())),
+                "error_code": getattr(message, "error_code", None),
+            }
+            with self._state_lock:
+                self._latest_state = snapshot
+                self._latest_state_at = time.monotonic()
+        except Exception:
+            logger.exception("failed to snapshot Go2 sport state")
 
     def _require_sport(self) -> Go2SportClientApi:
         if self._sport is None:
@@ -289,10 +336,14 @@ class UnitreeGo2Adapter:
     def _load_bindings() -> Go2Bindings:
         try:
             channel = importlib.import_module("unitree_sdk2_cpp.channel")
+            idl = importlib.import_module("unitree_sdk2_cpp.idl.go2")
             go2 = importlib.import_module("unitree_sdk2_cpp.robot.go2")
             return Go2Bindings(
                 channel=cast(ChannelApi, channel),
                 create_sport_client=go2.SportClient,
+                create_state_subscriber=lambda callback: channel.ChannelSubscriber(
+                    "rt/sportmodestate", idl.SportModeState, callback, queue_length=1
+                ),
             )
         except (ImportError, AttributeError) as exc:
             raise RobotCommandError(

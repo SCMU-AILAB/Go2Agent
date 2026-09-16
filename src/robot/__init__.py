@@ -1,6 +1,6 @@
 """Robot hardware abstraction and concrete adapters."""
 
-from .base import RobotAdapter, RobotCommandError, RobotState
+from .base import ActionVerification, RobotAdapter, RobotCommandError, RobotState
 from .factory import (
     ROBOT_MODELS,
     HardwareRobot,
@@ -17,6 +17,7 @@ __all__ = [
     "G1_ARM_ACTION_NAMES",
     "G1_ARM_ACTION_SPECS",
     "ROBOT_MODELS",
+    "ActionVerification",
     "G1ArmActionSpec",
     "Go2Bindings",
     "HardwareRobot",

@@ -67,10 +67,11 @@ asyncio.run(main())
 的组件。SDK 调用使用工作线程并串行化；取消等待不会中止原生 RPC，后续
 `stop()` / `close()` 会等在途调用返回，延迟受 SDK 超时和原生调用行为影响。
 
-`get_state().connected` 表示本地客户端已初始化，**不代表已收到 Go2 在线反馈**。
-`details` 显式标记 `state_source="local_client"`、`telemetry_available=False`。
-此版本没有订阅 `rt/sportmodestate`，也不提供物理动作完成验证。SDK 状态码
-为 0 只表示命令被接受；非零、无效状态或调用异常统一转成 `RobotCommandError`。
+`get_state().connected` 表示本地客户端已初始化；Go2 Adapter 同时订阅
+`rt/sportmodestate`，并在 `details` 中提供最新的 `mode`、`gait_type`、位置、速度、
+姿态和 `error_code`。`telemetry_available` 只在最近 2 秒收到状态时为 true。
+SDK 状态码为 0 只表示命令被接受；它仍不等价于动作物理完成，非零、无效状态或
+调用异常统一转成 `RobotCommandError`。
 
 ## 持续移动与后续接入边界
 
@@ -105,7 +106,8 @@ Go2 移动技能会以约 20 ms 间隔刷新 `move` 速度，并在 `finally` / 
 
 `handshake` / `high_five` 在 Go2 目录中不存在，社交视觉会将它们判为
 `gesture skill unavailable`。G1 `AudioClient` TTS 在 Go2 装配时会被禁用并
-写日志；Go2 语音需要单独的 VuiClient 适配，当前版本未提供。
+写日志。当前 bindings 中的 Go2 `VuiClient` 只提供语音开关、音量和灯光亮度设置/读取，
+没有文本播报接口，因此不能作为 TTS 使用；Go2 文本播报需要另外的音频输出方案。
 
 ## 无硬件测试
 

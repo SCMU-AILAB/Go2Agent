@@ -14,6 +14,7 @@ from adapters import (
     UnitreeAudioOutput,
 )
 from agent import AgentError, RobotAgent
+from agent.service import system_prompt_for
 from core.runtime import SkillRuntime
 from robot import (
     ROBOT_MODELS,
@@ -100,7 +101,12 @@ async def run(args: argparse.Namespace) -> None:
         register_go2_skills(runtime, include_operator_only=include_operator_only)
     else:
         register_g1_skills(runtime, include_operator_only=include_operator_only)
-    agent = RobotAgent(runtime, model_name=args.model, base_url=args.ollama_url)
+    agent = RobotAgent(
+        runtime,
+        model_name=args.model,
+        base_url=args.ollama_url,
+        system_prompt=system_prompt_for(robot_model),
+    )
     microphone = (
         MicrophoneASR(
             record_seconds=args.record_seconds,
