@@ -28,6 +28,8 @@ abstract interface class ConsoleApi {
   Future<ConsoleSnapshot> submitTask(
     String instruction, {
     String? cameraSource,
+    String? taskMode,
+    String? waveResponse,
   });
   Future<ConsoleSnapshot> cancelTask(String reason);
   Future<ConsoleSnapshot> setCameraSource(String source);
@@ -47,7 +49,7 @@ class HttpConsoleApi implements ConsoleApi {
 
   static const defaultBaseUrl = String.fromEnvironment(
     'G1_API_BASE_URL',
-    defaultValue: 'http://192.168.31.45:8000',
+    defaultValue: 'http://192.168.31.74:8000',
   );
 
   @override
@@ -80,10 +82,14 @@ class HttpConsoleApi implements ConsoleApi {
   Future<ConsoleSnapshot> submitTask(
     String instruction, {
     String? cameraSource,
+    String? taskMode,
+    String? waveResponse,
   }) async => ConsoleSnapshot.fromJson(
     await _post('/api/v1/tasks', {
       'instruction': instruction,
       'cameraSource': cameraSource,
+      'taskMode': taskMode,
+      'waveResponse': ?waveResponse,
     }),
   );
 

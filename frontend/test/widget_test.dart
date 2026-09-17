@@ -58,6 +58,40 @@ void main() {
     expect(find.text('停止后端'), findsOneWidget);
     expect(find.text('HARDWARE · 真机模式'), findsOneWidget);
     expect(find.text('SESSION  LIVE01'), findsOneWidget);
+    expect(find.text('AGENT OUTPUT'), findsOneWidget);
+    expect(find.text('TOOL CALLS'), findsOneWidget);
+    expect(find.text('SKILL PIPELINE'), findsOneWidget);
+    expect(find.text('ROBOT STATUS'), findsOneWidget);
+    expectNoLayoutException(tester);
+  });
+
+  testWidgets('expands the robot status panel', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1440, 1000);
+    final api = FakeConsoleApi(
+      initialPayload: consolePayload(backend: true, robotConnected: true),
+    );
+    addTearDown(() async {
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPhysicalSize();
+      await api.dispose();
+    });
+
+    await tester.pumpWidget(G1ConsoleApp(api: api));
+    await tester.pump();
+
+    AnimatedCrossFade fade() =>
+        tester.widget<AnimatedCrossFade>(find.byType(AnimatedCrossFade));
+
+    // Collapsed by default: the operator's main job is issuing tasks.
+    expect(fade().crossFadeState, CrossFadeState.showFirst);
+    await tester.ensureVisible(find.text('ROBOT STATUS'));
+    await tester.pump();
+    await tester.tap(find.text('ROBOT STATUS'));
+    await tester.pump();
+    expect(fade().crossFadeState, CrossFadeState.showSecond);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('ONBOARD TELEMETRY'), findsOneWidget);
     expectNoLayoutException(tester);
   });
 
@@ -77,7 +111,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('机器人控制台'), findsOneWidget);
-    expect(find.text('SIMULATION · 模拟模式'), findsOneWidget);
+    expect(find.text('SIM'), findsOneWidget);
     expectNoLayoutException(tester);
   });
 
@@ -95,7 +129,9 @@ void main() {
 
     await tester.pumpWidget(G1ConsoleApp(api: api));
     await tester.pump();
-    await tester.tap(find.text('挥手问好'));
+    await tester.ensureVisible(find.text('打招呼'));
+    await tester.pump();
+    await tester.tap(find.text('打招呼'));
     await tester.pump();
     await tester.ensureVisible(find.text('发送指令'));
     await tester.pump();
@@ -127,7 +163,8 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('已完成'), findsOneWidget);
+    // modelStatus shows both in the execution stream and in the SYSTEM panel.
+    expect(find.text('已完成'), findsWidgets);
     expect(find.text('wave'), findsWidgets);
     expect(find.text('好的，你好！'), findsOneWidget);
     expectNoLayoutException(tester);

@@ -13,10 +13,10 @@ class SkillPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return executionPanel(
       title: coloredTitle(
-        Icons.play_arrow_rounded,
-        'Skill Executor',
-        const Color(0xFFEEF4FF),
-        const Color(0xFF608BEA),
+        Icons.play_circle_outline_rounded,
+        'SKILL PIPELINE',
+        Colors.transparent,
+        ConsoleColors.accent,
       ),
       childPadding: const EdgeInsets.all(14),
       child: SingleChildScrollView(
@@ -29,21 +29,17 @@ class SkillPanel extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        '当前技能',
-                        style: TextStyle(
-                          color: Color(0xFF9AA3B2),
-                          fontSize: 11,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
+                      hudLabel('CURRENT SKILL'),
+                      const SizedBox(height: 4),
                       Text(
                         controller.skillName,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: ConsoleColors.ink,
                           fontSize: 12,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: 'monospace',
+                          fontFamilyFallback: ['PingFang SC'],
                         ),
                       ),
                     ],
@@ -52,36 +48,41 @@ class SkillPanel extends StatelessWidget {
                 statusTag(controller.skillStatus),
               ],
             ),
-            const SizedBox(height: 15),
-            _step(0, '环境感知', '获取摄像头与场景信息'),
-            _step(1, '任务规划', '解析指令并安排执行'),
-            _step(2, '技能执行', '调用技能并反馈结果', last: true),
+            const SizedBox(height: 14),
+            _step(0, '感知', '获取摄像头与场景信息'),
+            _step(1, '规划', '解析指令并安排执行'),
+            _step(2, '执行', '调用技能并反馈结果', last: true),
             const SizedBox(height: 4),
             ClipRRect(
-              borderRadius: BorderRadius.circular(3),
+              borderRadius: BorderRadius.circular(2),
               child: LinearProgressIndicator(
                 value: controller.progress / 100,
                 minHeight: 3,
-                color: ConsoleColors.blue,
-                backgroundColor: const Color(0xFFEDF1F7),
+                color: ConsoleColors.accent,
+                backgroundColor: ConsoleColors.bg2,
               ),
             ),
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  controller.progressText,
-                  style: const TextStyle(
-                    color: Color(0xFFA0AABB),
-                    fontSize: 11,
+                Expanded(
+                  child: Text(
+                    controller.progressText,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: ConsoleColors.dim,
+                      fontSize: 11,
+                    ),
                   ),
                 ),
                 Text(
                   '${controller.progress}%',
                   style: const TextStyle(
-                    color: Color(0xFFA0AABB),
+                    color: ConsoleColors.muted,
                     fontSize: 11,
+                    fontFamily: 'monospace',
+                    fontFamilyFallback: ['PingFang SC'],
                   ),
                 ),
               ],
@@ -96,15 +97,15 @@ class SkillPanel extends StatelessWidget {
     final done = controller.activeStep > index;
     final active = controller.activeStep == index && controller.busy;
     final circleColor = active
-        ? ConsoleColors.blue
+        ? ConsoleColors.accent
         : done
-        ? const Color(0xFFEDF9F4)
-        : const Color(0xFFF4F6FA);
+        ? ConsoleColors.green.withValues(alpha: .15)
+        : ConsoleColors.bg2;
     final borderColor = active
-        ? ConsoleColors.blue
+        ? ConsoleColors.accent
         : done
-        ? const Color(0xFFDBF2E8)
-        : const Color(0xFFE4E9F1);
+        ? ConsoleColors.green.withValues(alpha: .45)
+        : ConsoleColors.line;
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -112,8 +113,8 @@ class SkillPanel extends StatelessWidget {
           Column(
             children: [
               Container(
-                width: 20,
-                height: 20,
+                width: 18,
+                height: 18,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: circleColor,
@@ -123,17 +124,18 @@ class SkillPanel extends StatelessWidget {
                 child: done
                     ? const Icon(
                         Icons.check,
-                        size: 12,
-                        color: Color(0xFF30A57E),
+                        size: 11,
+                        color: ConsoleColors.green,
                       )
                     : Text(
                         '${index + 1}',
                         style: TextStyle(
-                          fontSize: 10,
+                          fontSize: 9,
                           fontFamily: 'monospace',
+                          fontFamilyFallback: const ['PingFang SC'],
                           color: active
-                              ? Colors.white
-                              : const Color(0xFF8694A9),
+                              ? ConsoleColors.bg0
+                              : ConsoleColors.dim,
                         ),
                       ),
               ),
@@ -142,7 +144,7 @@ class SkillPanel extends StatelessWidget {
                   child: Container(
                     width: 1,
                     margin: const EdgeInsets.symmetric(vertical: 2),
-                    color: const Color(0xFFE3E8F1),
+                    color: ConsoleColors.line,
                   ),
                 ),
             ],
@@ -150,7 +152,7 @@ class SkillPanel extends StatelessWidget {
           const SizedBox(width: 9),
           Expanded(
             child: Padding(
-              padding: EdgeInsets.only(bottom: last ? 10 : 14),
+              padding: EdgeInsets.only(bottom: last ? 8 : 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -158,16 +160,17 @@ class SkillPanel extends StatelessWidget {
                     title,
                     style: TextStyle(
                       color: active
-                          ? ConsoleColors.blue
-                          : const Color(0xFF56667B),
+                          ? ConsoleColors.accent
+                          : ConsoleColors.ink,
                       fontSize: 12,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                   const SizedBox(height: 1),
                   Text(
                     caption,
                     style: const TextStyle(
-                      color: Color(0xFFA9B2C0),
+                      color: ConsoleColors.dim,
                       fontSize: 11,
                     ),
                   ),

@@ -42,6 +42,26 @@ void main() {
     await api.dispose();
   });
 
+  testWidgets('task mode is explicit and demo blocks gesture work', (
+    tester,
+  ) async {
+    controller.backend = true;
+    controller.taskController.text = '回应挥手';
+    controller.setTaskMode('gesture');
+    controller.cameraSource = 'demo';
+    await controller.submitTask();
+    expect(api.submitTaskCalls, 0);
+    expect(messages.last, contains('本地相机'));
+    controller.cameraSource = 'local';
+    controller.robotModel = 'GO2';
+    controller.setWaveResponse('heart');
+    await controller.submitTask();
+    expect(api.lastTaskMode, 'gesture');
+    expect(api.lastWaveResponse, 'heart');
+    controller.setTaskMode('text');
+    expect(controller.taskMode, 'gesture');
+  });
+
   testWidgets('initializes from the FastAPI console snapshot', (tester) async {
     await tester.pump();
     await controller.refreshFromBackend();
@@ -88,6 +108,7 @@ void main() {
     expect(api.submitTaskCalls, 1);
     expect(api.lastInstruction, '向我挥手');
     expect(api.lastTaskCameraSource, 'local');
+    expect(api.lastTaskMode, 'text');
     expect(controller.busy, isTrue);
 
     await controller.cancelTask('测试中断');

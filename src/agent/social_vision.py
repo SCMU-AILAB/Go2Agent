@@ -76,19 +76,16 @@ Only select a pair supported by the images. No markdown or explanation.
 class SocialVisionAgent(VisionDecisionAgent):
     minimum_frames = 2
 
-    def __init__(
-        self,
-        *,
-        prompt_profile: str = "legacy",
-        generate_speech: bool = False,
-        task_context: str = "",
-        **kwargs,
-    ):
+    def __init__(self, *, prompt_profile: str = "legacy", generate_speech: bool = False,
+                 task_context: str = "", wave_response: str = "wave", **kwargs):
         if prompt_profile not in ("legacy", "egocentric"):
             raise ValueError("unknown social prompt profile")
         super().__init__(**kwargs)
         self.prompt_profile = prompt_profile
         self.generate_speech = generate_speech
+        if wave_response not in {"wave", "heart"}:
+            raise ValueError("wave_response must be wave or heart")
+        self.wave_response = wave_response
         self.task_context = task_context
 
     @property
@@ -207,20 +204,13 @@ class SocialVisionAgent(VisionDecisionAgent):
                 reason=f"gesture unconfirmed: {gesture} ({', '.join(unmet)})",
             )
         registered = {s.metadata.name: s for s in skill_catalog}
-        skill = registered.get(gesture)
-        if skill is None or {"dangerous", "operator_only"}.intersection(
-            skill.metadata.tags
-        ):
+        response_skill = self.wave_response if gesture == "wave" else gesture
+        skill = registered.get(response_skill)
+        if skill is None or {"dangerous", "operator_only"}.intersection(skill.metadata.tags):
             return AgentDecision(action="ignore", reason="gesture skill unavailable")
-        if (policy_context or {}).get("active_skill") == gesture:
-            return AgentDecision(
-                action="continue", reason=f"gesture ongoing: {gesture}"
-            )
+        if (policy_context or {}).get("active_skill") == response_skill:
+            return AgentDecision(action="continue", reason=f"gesture ongoing: {gesture}")
         speech = getattr(observation, "speech", None)
         speech = speech.strip() if speech else None
-        return AgentDecision(
-            action="execute_and_speak" if speech else "execute_skill",
-            skill=gesture,
-            speech=speech or None,
-            reason=observation.evidence,
-        )
+        return AgentDecision(action="execute_and_speak" if speech else "execute_skill",
+                             skill=response_skill, speech=speech or None, reason=observation.evidence)

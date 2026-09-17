@@ -41,6 +41,8 @@ class SystemPromptUpdate(ApiModel):
 class TaskRequest(ApiModel):
     instruction: str = Field(min_length=1)
     camera_source: Literal["demo", "local"] | None = None
+    task_mode: Literal["text", "gesture"] | None = None
+    wave_response: Literal["wave", "heart"] = "wave"
 
 
 class CancelTaskRequest(ApiModel):
@@ -150,6 +152,8 @@ def create_app(
             return await console.submit_task(
                 body.instruction,
                 camera_source=body.camera_source,
+                task_mode=body.task_mode,
+                wave_response=body.wave_response,
             )
         except TaskConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

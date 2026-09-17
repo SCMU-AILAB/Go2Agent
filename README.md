@@ -1,4 +1,8 @@
-# G1 Agent
+# Go2 Agent
+
+> 任务模式更新：新版控制台默认「文本指令」，开启真实相机也可发送比心、坐下等指令；
+> 「持续手势交互」需单独选择。下文 local 自动进入手势模式的说明仅适用于未传 taskMode 的旧客户端。
+> Go2 手势可选择挥手后打招呼或比心；直接比心请使用文本指令。详见 docs/go2-adapter.md。
 
 Go2 适配已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`，以及 `--robot go2`
 装配路径（CLI / FastAPI / perception）。Go2 使用 `register_go2_skills()` 与

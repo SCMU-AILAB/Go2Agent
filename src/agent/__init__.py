@@ -30,10 +30,10 @@ from .vision_policy import (
 )
 
 __all__ = [
-    "DEFAULT_VISION_GOAL",
-    "DEFAULT_VISION_MODEL",
     "DEFAULT_UNIFOLM_MODEL",
     "DEFAULT_UNIFOLM_URL",
+    "DEFAULT_VISION_GOAL",
+    "DEFAULT_VISION_MODEL",
     "AgentDecision",
     "AgentError",
     "AgentInvoker",

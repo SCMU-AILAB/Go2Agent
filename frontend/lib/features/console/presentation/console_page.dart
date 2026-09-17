@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../../core/theme/console_colors.dart';
 import '../controllers/console_controller.dart';
 import '../services/console_api.dart';
 import 'console_intents.dart';
@@ -10,6 +11,7 @@ import 'widgets/camera_panel.dart';
 import 'widgets/model_panel.dart';
 import 'widgets/tool_panel.dart';
 import 'widgets/skill_panel.dart';
+import 'widgets/robot_status_panel.dart';
 import 'widgets/prompt_panel.dart';
 import 'widgets/backend_panel.dart';
 import 'widgets/task_input_panel.dart';
@@ -31,6 +33,7 @@ class G1ConsolePage extends StatefulWidget {
 
 class _G1ConsolePageState extends State<G1ConsolePage> {
   late final ConsoleController controller;
+  final anchors = ConsoleAnchors();
 
   @override
   void initState() {
@@ -54,11 +57,25 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
           content: Text(message),
           behavior: SnackBarBehavior.floating,
           width: min(MediaQuery.sizeOf(context).width - 32, 420),
-          backgroundColor: const Color(0xFF23344E),
+          backgroundColor: const Color(0xFF1A2030),
           duration: const Duration(seconds: 2),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: const BorderSide(color: ConsoleColors.line),
+          ),
         ),
       );
+  }
+
+  void _scrollToAnchor(GlobalKey key) {
+    final target = key.currentContext;
+    if (target == null) return;
+    Scrollable.ensureVisible(
+      target,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+      alignment: 0.04,
+    );
   }
 
   @override
@@ -91,27 +108,35 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
           child: Focus(
             autofocus: true,
             child: Scaffold(
-              body: LayoutBuilder(
-                builder: (context, constraints) {
-                  final showRail = constraints.maxWidth > 640;
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (showRail)
-                        ConsoleRail(
-                          width: constraints.maxWidth > 930 ? 88 : 66,
+              backgroundColor: ConsoleColors.bg0,
+              // Keeps the status HUD clear of the iOS status bar / dynamic
+              // island and the Android system bars. No-op on desktop.
+              body: SafeArea(
+                bottom: false,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final showRail = constraints.maxWidth > 640;
+                    final double railWidth = constraints.maxWidth > 930
+                        ? 76
+                        : 64;
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (showRail)
+                          ConsoleRail(
+                            width: railWidth,
+                            anchors: anchors,
+                            onNavigate: _scrollToAnchor,
+                          ),
+                        Expanded(
+                          child: _buildApplication(
+                            constraints.maxWidth - (showRail ? railWidth : 0),
+                          ),
                         ),
-                      Expanded(
-                        child: _buildApplication(
-                          constraints.maxWidth -
-                              (showRail
-                                  ? (constraints.maxWidth > 930 ? 88 : 66)
-                                  : 0),
-                        ),
-                      ),
-                    ],
-                  );
-                },
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
           ),
@@ -127,20 +152,20 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
         Expanded(
           child: SingleChildScrollView(
             padding: EdgeInsets.fromLTRB(
-              width <= 640 ? 14 : 32,
-              width <= 640 ? 20 : 28,
-              width <= 640 ? 14 : 32,
+              width <= 640 ? 12 : 24,
+              width <= 640 ? 14 : 20,
+              width <= 640 ? 12 : 24,
               0,
             ),
             child: Center(
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1760),
+                constraints: const BoxConstraints(maxWidth: 1680),
                 child: Column(
                   children: [
                     ConsoleHeading(controller: controller, width: width),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 18),
                     _buildWorkspace(width),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 16),
                     LogPanel(controller: controller, width: width),
                     ConsoleFooter(controller: controller, width: width),
                   ],
@@ -157,8 +182,8 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
     final twoColumns = width > 930;
     final monitor = Column(
       children: [
-        CameraPanel(controller: controller),
-        const SizedBox(height: 18),
+        CameraPanel(controller: controller, anchorKey: anchors.mission),
+        const SizedBox(height: 14),
         _buildExecutionPanels(),
       ],
     );
@@ -168,18 +193,18 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(child: monitor),
-          const SizedBox(width: 20),
-          SizedBox(width: width >= 1500 ? 355 : 322, child: controls),
+          const SizedBox(width: 16),
+          SizedBox(width: width >= 1500 ? 340 : 310, child: controls),
         ],
       );
     }
-    return Column(children: [monitor, const SizedBox(height: 18), controls]);
+    return Column(children: [monitor, const SizedBox(height: 14), controls]);
   }
 
   Widget _buildExecutionPanels() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final panels = [
+        final panels = <Widget>[
           ModelPanel(controller: controller),
           ToolPanel(controller: controller),
           SkillPanel(controller: controller),
@@ -190,7 +215,7 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
             children: [
               for (var i = 0; i < panels.length; i++) ...[
                 Expanded(flex: i == 2 ? 106 : 100, child: panels[i]),
-                if (i < panels.length - 1) const SizedBox(width: 15),
+                if (i < panels.length - 1) const SizedBox(width: 12),
               ],
             ],
           );
@@ -201,11 +226,11 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
               Row(
                 children: [
                   Expanded(child: panels[0]),
-                  const SizedBox(width: 15),
+                  const SizedBox(width: 12),
                   Expanded(child: panels[1]),
                 ],
               ),
-              const SizedBox(height: 15),
+              const SizedBox(height: 12),
               panels[2],
             ],
           );
@@ -213,9 +238,9 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
         return Column(
           children: [
             panels[0],
-            const SizedBox(height: 15),
+            const SizedBox(height: 12),
             panels[1],
-            const SizedBox(height: 15),
+            const SizedBox(height: 12),
             panels[2],
           ],
         );
@@ -225,38 +250,38 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
 
   Widget _buildControls(double width) {
     final items = <Widget>[
-      PromptPanel(controller: controller),
-      BackendPanel(controller: controller),
+      RobotStatusPanel(controller: controller, anchorKey: anchors.robot),
       TaskInputPanel(controller: controller),
       StopTaskButton(controller: controller),
+      BackendPanel(controller: controller, anchorKey: anchors.system),
+      PromptPanel(controller: controller),
     ];
     if (width <= 930 && width > 640) {
       return Column(
         children: [
+          items[0],
+          const SizedBox(height: 12),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: items[0]),
-              const SizedBox(width: 16),
               Expanded(child: items[1]),
+              const SizedBox(width: 12),
+              Expanded(child: items[2]),
             ],
           ),
-          const SizedBox(height: 16),
-          items[2],
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           items[3],
+          const SizedBox(height: 12),
+          items[4],
         ],
       );
     }
     return Column(
       children: [
-        items[0],
-        const SizedBox(height: 16),
-        items[1],
-        const SizedBox(height: 16),
-        items[2],
-        const SizedBox(height: 16),
-        items[3],
+        for (var i = 0; i < items.length; i++) ...[
+          items[i],
+          if (i < items.length - 1) const SizedBox(height: 12),
+        ],
       ],
     );
   }

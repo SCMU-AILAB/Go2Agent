@@ -20,23 +20,28 @@ class LogPanel extends StatelessWidget {
       headerHeight: null,
       header: Wrap(
         crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 14,
+        spacing: 12,
         children: [
-          sectionTitle(Icons.terminal_rounded, '运行日志'),
+          sectionTitle(Icons.terminal_rounded, 'SYSTEM LOG'),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              dot(const Color(0xFF739DFF), glow: true),
+              dot(ConsoleColors.accent, glow: true),
               const SizedBox(width: 6),
               const Text(
-                '实时',
-                style: TextStyle(color: Color(0xFF7891B6), fontSize: 11),
+                'LIVE',
+                style: TextStyle(
+                  color: ConsoleColors.muted,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1,
+                ),
               ),
             ],
           ),
           Text(
             '${controller.logs.length} 条',
-            style: const TextStyle(color: Color(0xFFA0ACBC), fontSize: 11),
+            style: const TextStyle(color: ConsoleColors.dim, fontSize: 11),
           ),
         ],
       ),
@@ -48,18 +53,23 @@ class LogPanel extends StatelessWidget {
         children: [
           SizedBox(
             width: mobile ? 112 : 122,
-            height: 34,
+            height: 32,
             child: DropdownButtonFormField<String>(
               initialValue: controller.logLevel,
               isDense: true,
+              dropdownColor: ConsoleColors.panelElevated,
+              style: const TextStyle(
+                color: ConsoleColors.muted,
+                fontSize: 11,
+                fontFamily: 'PingFang SC',
+              ),
+              iconEnabledColor: ConsoleColors.muted,
               decoration: const InputDecoration(
                 contentPadding: EdgeInsets.symmetric(
                   horizontal: 9,
                   vertical: 6,
                 ),
-                fillColor: Colors.white,
               ),
-              style: const TextStyle(color: Color(0xFF64728A), fontSize: 11),
               items: const [
                 DropdownMenuItem(value: 'ALL', child: Text('全部等级')),
                 DropdownMenuItem(value: 'INFO', child: Text('INFO')),
@@ -72,17 +82,17 @@ class LogPanel extends StatelessWidget {
           ),
           SizedBox(
             width: mobile ? 118 : 145,
-            height: 34,
+            height: 32,
             child: TextField(
               controller: controller.searchController,
-              style: const TextStyle(fontSize: 11),
+              style: const TextStyle(fontSize: 11, color: ConsoleColors.ink),
+              cursorColor: ConsoleColors.accent,
               decoration: const InputDecoration(
                 hintText: '搜索日志…',
                 contentPadding: EdgeInsets.symmetric(
                   horizontal: 9,
                   vertical: 6,
                 ),
-                fillColor: Colors.white,
               ),
             ),
           ),
@@ -100,9 +110,9 @@ class LogPanel extends StatelessWidget {
               controller.onMessage('全部日志已复制到剪贴板');
             },
             icon: const Icon(
-              Icons.download_outlined,
-              size: 18,
-              color: Color(0xFF8B99AD),
+              Icons.copy_all_outlined,
+              size: 17,
+              color: ConsoleColors.muted,
             ),
           ),
         ],
@@ -111,18 +121,18 @@ class LogPanel extends StatelessWidget {
         children: [
           Container(
             height: mobile ? 210 : 180,
-            color: const Color(0xFFFBFCFE),
+            color: ConsoleColors.bg2,
             child: controller.visibleLogs.isEmpty
                 ? const Center(
                     child: Text(
                       '暂无匹配的日志',
-                      style: TextStyle(color: Color(0xFF97A4B9), fontSize: 12),
+                      style: TextStyle(color: ConsoleColors.dim, fontSize: 12),
                     ),
                   )
                 : ListView.builder(
                     controller: controller.logScrollController,
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
+                      horizontal: 14,
                       vertical: 10,
                     ),
                     itemCount: controller.visibleLogs.length,
@@ -131,24 +141,25 @@ class LogPanel extends StatelessWidget {
                   ),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: ConsoleColors.line)),
+              border: Border(top: BorderSide(color: ConsoleColors.lineSoft)),
             ),
             child: Row(
               children: [
                 const Text(
                   '自动滚动至最新日志',
-                  style: TextStyle(color: Color(0xFFA3AEC0), fontSize: 10),
+                  style: TextStyle(color: ConsoleColors.faint, fontSize: 10),
                 ),
                 const Spacer(),
                 if (!mobile)
                   Text(
-                    'G1 CONSOLE / ${controller.isHardware ? 'HARDWARE' : 'SIMULATION'}',
+                    '${controller.robotModelLabel} CONSOLE / ${controller.isHardware ? 'HARDWARE' : 'SIMULATION'}',
                     style: const TextStyle(
-                      color: Color(0xFFA3AEC0),
+                      color: ConsoleColors.faint,
                       fontSize: 10,
                       fontFamily: 'monospace',
+                      fontFamilyFallback: ['PingFang SC'],
                       letterSpacing: .5,
                     ),
                   ),
@@ -162,10 +173,10 @@ class LogPanel extends StatelessWidget {
 
   Widget _logRow(ConsoleLog entry, bool mobile) {
     final levelColor = switch (entry.level) {
-      'INFO' => const Color(0xFF5986D0),
-      'WARN' => const Color(0xFFC28B3C),
-      'ERROR' => const Color(0xFFD46170),
-      _ => const Color(0xFFA18ACB),
+      'INFO' => ConsoleColors.accent,
+      'WARN' => ConsoleColors.amber,
+      'ERROR' => ConsoleColors.red,
+      _ => ConsoleColors.purple,
     };
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -173,13 +184,14 @@ class LogPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: mobile ? 78 : 94,
+            width: mobile ? 72 : 88,
             child: Text(
               entry.time,
               style: const TextStyle(
-                color: Color(0xFFA2AEC0),
+                color: ConsoleColors.faint,
                 fontSize: 11,
                 fontFamily: 'monospace',
+                fontFamilyFallback: ['PingFang SC'],
               ),
             ),
           ),
@@ -190,8 +202,9 @@ class LogPanel extends StatelessWidget {
               style: TextStyle(
                 color: levelColor,
                 fontSize: 10,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
                 fontFamily: 'monospace',
+                fontFamilyFallback: ['PingFang SC'],
               ),
             ),
           ),
@@ -201,9 +214,10 @@ class LogPanel extends StatelessWidget {
               child: Text(
                 entry.source,
                 style: const TextStyle(
-                  color: Color(0xFF899BB8),
+                  color: ConsoleColors.muted,
                   fontSize: 11,
                   fontFamily: 'monospace',
+                  fontFamilyFallback: ['PingFang SC'],
                 ),
               ),
             ),
@@ -211,9 +225,10 @@ class LogPanel extends StatelessWidget {
             child: Text(
               entry.message,
               style: const TextStyle(
-                color: Color(0xFF728099),
+                color: ConsoleColors.ink,
                 fontSize: 11,
                 fontFamily: 'monospace',
+                fontFamilyFallback: ['PingFang SC'],
                 height: 1.5,
               ),
             ),
@@ -227,9 +242,9 @@ class LogPanel extends StatelessWidget {
     return TextButton(
       onPressed: action,
       style: TextButton.styleFrom(
-        foregroundColor: const Color(0xFF8B99AD),
+        foregroundColor: ConsoleColors.muted,
         padding: const EdgeInsets.symmetric(horizontal: 6),
-        minimumSize: const Size(0, 32),
+        minimumSize: const Size(0, 30),
       ),
       child: Text(label, style: const TextStyle(fontSize: 11)),
     );
