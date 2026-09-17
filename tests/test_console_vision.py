@@ -146,6 +146,18 @@ class ConsoleVisionTests(unittest.TestCase):
         self.assertIn("简短回应", agent.task_context)
         self.assertIn("观察挥手", agent.task_context)
         self.assertIs(agent._invoker.think, False)
+        self.assertEqual(backend.config.vision_frame_count, 3)
+        self.assertEqual(backend.config.vision_window_s, 0.8)
+
+    def test_default_camera_applies_rotation_before_jpeg_encoding(self):
+        backend = ConsoleBackend(
+            BackendConfig(audio_enabled=False, vision_rotation_deg=180),
+            agent_factory=fake_agent_factory,
+        )
+
+        camera = backend._build_camera()
+
+        self.assertEqual(camera.rgb_rotation_deg, 180)
 
     def build(self):
         camera = Camera()

@@ -34,9 +34,12 @@ class RealSenseBridge:
         frame_timeout_ms: int,
         min_score: float,
         max_distance_m: float | None,
+        rgb_rotation_deg: int = 0,
         python_executable: str | None = None,
         worker_path: Path | None = None,
     ) -> None:
+        if rgb_rotation_deg not in (0, 90, 180, 270):
+            raise ValueError("RGB rotation must be 0, 90, 180 or 270")
         self.serial = serial
         self.width = width
         self.height = height
@@ -45,6 +48,7 @@ class RealSenseBridge:
         self.frame_timeout_ms = frame_timeout_ms
         self.min_score = min_score
         self.max_distance_m = max_distance_m
+        self.rgb_rotation_deg = rgb_rotation_deg
         self.python_executable = python_executable or os.getenv(
             "G1_REALSENSE_PYTHON", "/usr/bin/python3"
         )
@@ -80,6 +84,8 @@ class RealSenseBridge:
             str(self.frame_timeout_ms),
             "--min-score",
             str(self.min_score),
+            "--rgb-rotation-deg",
+            str(self.rgb_rotation_deg),
         ]
         if self.serial:
             command.extend(("--serial", self.serial))

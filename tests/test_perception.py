@@ -220,8 +220,15 @@ class FakeHog:
 
 
 class FakeNumpy:
+    def __init__(self) -> None:
+        self.rotations: list[int] = []
+
     def asanyarray(self, value: object) -> object:
         return value
+
+    def rot90(self, image: object, k: int) -> object:
+        self.rotations.append(k)
+        return image
 
 
 def make_bindings(
@@ -320,6 +327,25 @@ class RealSensePersonDetectorTests(unittest.TestCase):
         self.assertIsNotNone(frame.depth)
         self.assertEqual(frame.nearest_obstacle_distance_m, 2.0)
         self.assertEqual(frame.observation.person_count, 0)
+
+    def test_capture_frame_applies_output_rotation_before_encoding(self) -> None:
+        depth = FakeDepthFrame({})
+        bindings = make_bindings(
+            pipeline=FakePipeline(FakeFrames(depth)),
+            config=FakeConfig(),
+            align=FakeAlign(),
+            hog=FakeHog([], []),
+        )
+        detector = RealSensePersonDetector(
+            rgb_rotation_deg=180,
+            bindings=bindings,
+        )
+
+        detector.open()
+        detector.capture_frame()
+        detector.close()
+
+        self.assertEqual(bindings.numpy.rotations, [2])
 
     def test_capture_throttles_expensive_detection_without_throttling_frames(
         self,

@@ -78,6 +78,8 @@ class _RealSenseApi(Protocol):
 class _NumpyApi(Protocol):
     def asanyarray(self, value: object) -> object: ...
 
+    def rot90(self, image: object, k: int) -> object: ...
+
 
 class _HogDescriptor(Protocol):
     def setSVMDetector(self, detector: object) -> None: ...
@@ -118,6 +120,7 @@ class RealSensePersonDetector:
         frame_timeout_ms: int = 5000,
         min_score: float = 0.5,
         max_distance_m: float | None = 4.0,
+        rgb_rotation_deg: int = 0,
         bindings: RealSenseBindings | None = None,
         bridge_python: str | None = None,
     ) -> None:
@@ -129,6 +132,8 @@ class RealSensePersonDetector:
             raise ValueError("frame_timeout_ms must be positive")
         if max_distance_m is not None and max_distance_m <= 0:
             raise ValueError("max_distance_m must be positive")
+        if rgb_rotation_deg not in (0, 90, 180, 270):
+            raise ValueError("RGB rotation must be 0, 90, 180 or 270")
 
         self.serial = serial
         self.width = width
@@ -138,6 +143,7 @@ class RealSensePersonDetector:
         self.frame_timeout_ms = frame_timeout_ms
         self.min_score = min_score
         self.max_distance_m = max_distance_m
+        self.rgb_rotation_deg = rgb_rotation_deg
         self._bindings = bindings
         self._bridge_python = bridge_python
         self._bridge: RealSenseBridge | None = None
@@ -217,6 +223,7 @@ class RealSensePersonDetector:
             frame_timeout_ms=self.frame_timeout_ms,
             min_score=self.min_score,
             max_distance_m=self.max_distance_m,
+            rgb_rotation_deg=self.rgb_rotation_deg,
             python_executable=self._bridge_python,
         )
         try:
@@ -306,9 +313,18 @@ class RealSensePersonDetector:
                     scores,
                     observed_at_s=observed_at_s,
                 )
+                rgb_image = None
+                if include_rgb:
+                    output_image = image
+                    if self.rgb_rotation_deg:
+                        rotations = {90: 3, 180: 2, 270: 1}
+                        output_image = bindings.numpy.rot90(
+                            image, rotations[self.rgb_rotation_deg]
+                        )
+                    rgb_image = self._to_rgb_image(output_image)
                 return CameraFrame(
                     observed_at_s=observed_at_s,
-                    rgb=(self._to_rgb_image(image) if include_rgb else None),
+                    rgb=rgb_image,
                     depth=(
                         self._copy_image(
                             bindings.numpy.asanyarray(depth_frame.get_data())

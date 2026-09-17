@@ -4,7 +4,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
+from perception._realsense_worker import rotate_bgr_image
 from perception.realsense_bridge import RealSenseBridge
 
 FAKE_WORKER = """
@@ -34,6 +36,25 @@ for line in sys.stdin:
 
 
 class RealSenseBridgeTests(unittest.TestCase):
+    def test_worker_rotates_before_jpeg_encoding(self) -> None:
+        calls: list[tuple[object, object]] = []
+        cv2 = SimpleNamespace(
+            ROTATE_90_CLOCKWISE="cw",
+            ROTATE_180="half",
+            ROTATE_90_COUNTERCLOCKWISE="ccw",
+            rotate=lambda image, code: calls.append((image, code)) or code,
+        )
+        image = object()
+
+        self.assertIs(rotate_bgr_image(cv2, image, 0), image)
+        self.assertEqual(rotate_bgr_image(cv2, image, 90), "cw")
+        self.assertEqual(rotate_bgr_image(cv2, image, 180), "half")
+        self.assertEqual(rotate_bgr_image(cv2, image, 270), "ccw")
+        self.assertEqual(
+            calls,
+            [(image, "cw"), (image, "half"), (image, "ccw")],
+        )
+
     def test_persistent_worker_returns_observation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             worker = Path(directory, "fake_worker.py")
@@ -46,6 +67,7 @@ class RealSenseBridgeTests(unittest.TestCase):
                 frame_timeout_ms=1000,
                 min_score=0.5,
                 max_distance_m=4.0,
+                rgb_rotation_deg=180,
                 python_executable=sys.executable,
                 worker_path=worker,
             )
@@ -63,6 +85,7 @@ class RealSenseBridgeTests(unittest.TestCase):
         self.assertEqual(frame.rgb, b"jpeg")
         self.assertEqual(frame.nearest_obstacle_distance_m, 0.75)
         self.assertEqual(frame.observation, first)
+        self.assertEqual(bridge.rgb_rotation_deg, 180)
         self.assertFalse(bridge.opened)
 
 

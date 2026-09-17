@@ -91,7 +91,7 @@ class OllamaVisionInvoker:
     ) -> None:
         ollama = importlib.import_module("ollama")
         self.model_name = model_name
-        self._client = ollama.AsyncClient(host=base_url)
+        self._client = ollama.AsyncClient(host=base_url, trust_env=False)
         self.last_metrics: dict[str, object] = {}
         self._request_id = 0
         self.output_schema = output_schema or AgentDecision.model_json_schema()
@@ -101,12 +101,16 @@ class OllamaVisionInvoker:
 
     async def warmup(self) -> None:
         await self._client.show(self.model_name)
+        # Metadata lookup does not load model weights. Empty generation preloads
+        # the same model without producing a decision or invoking any skill.
+        await self._client.generate(model=self.model_name, prompt="", keep_alive="30m")
 
     async def ainvoke(self, frames: Sequence[object], prompt: str) -> object:
         self._request_id += 1
         remote_request_id = self._request_id
         started = time.monotonic()
         encoded_frames = [self._as_bytes(frame) for frame in frames]
+        request_started = time.monotonic()
         response = await self._client.chat(
             model=self.model_name,
             messages=[
@@ -130,9 +134,14 @@ class OllamaVisionInvoker:
         if payload.get("done_reason") == "length":
             raise DecisionAgentError("Ollama exhausted the output token budget; refusing truncated decision")
         finished = time.monotonic()
+        client_encode_s = max(0.0, request_started - started)
+        http_round_trip_s = max(0.0, finished - request_started)
         self.last_metrics = {
             "remote_request_id": remote_request_id,
             "round_trip_s": round(finished - started, 3),
+            "client_encode_s": round(client_encode_s, 3),
+            "http_round_trip_s": round(http_round_trip_s, 3),
+            "image_bytes": sum(len(frame) for frame in encoded_frames),
             "frame_count": len(frames),
             "input_tokens": payload.get("prompt_eval_count"),
             "generated_tokens": payload.get("eval_count"),
@@ -142,12 +151,15 @@ class OllamaVisionInvoker:
             if isinstance(value, (int, float)):
                 self.last_metrics[field.replace("_duration", "_s")] = round(value / 1e9, 3)
         total_s = self.last_metrics.get("total_s")
-        round_trip_s = self.last_metrics.get("round_trip_s")
-        if isinstance(total_s, (int, float)) and isinstance(round_trip_s, (int, float)):
-            self.last_metrics["network_rtt_s"] = round(
-                max(0.0, round_trip_s - total_s),
-                3,
+        if isinstance(total_s, (int, float)):
+            # Ollama exposes no separate upload/download clocks. This residual
+            # is therefore an upper bound containing HTTP serialization plus
+            # network transfer, retained as network_rtt_s for log compatibility.
+            transport_residual_s = max(0.0, http_round_trip_s - total_s)
+            self.last_metrics["transport_residual_s"] = round(
+                transport_residual_s, 3
             )
+            self.last_metrics["network_rtt_s"] = round(transport_residual_s, 3)
         prompt_eval_s = self.last_metrics.get("prompt_eval_s")
         eval_s = self.last_metrics.get("eval_s")
         if isinstance(prompt_eval_s, (int, float)) or isinstance(eval_s, (int, float)):
@@ -1314,9 +1326,9 @@ class VisionPolicyWorker:
     ) -> dict[str, object]:
         """Combine backend timings with local end-to-end timing.
 
-        The Ollama API exposes server-side generation timings and one wall-clock
-        round trip. It does not expose separate upload/download timings, so we
-        intentionally report only the measurable network and inference values.
+        The Ollama API exposes server-side generation timings and one client
+        HTTP duration. It does not expose separate upload/download clocks, so
+        transport residual is only an upper bound for network transfer.
         """
 
         raw_metrics = getattr(self.decision_agent, "last_metrics", {})
@@ -1339,6 +1351,14 @@ class VisionPolicyWorker:
         round_trip_s = metrics.get("round_trip_s")
         if isinstance(round_trip_s, (int, float)):
             metrics["round_trip_ms"] = round(float(round_trip_s) * 1000.0, 1)
+        for source, target in (
+            ("client_encode_s", "client_encode_ms"),
+            ("http_round_trip_s", "http_round_trip_ms"),
+            ("transport_residual_s", "transport_residual_ms"),
+        ):
+            value = metrics.get(source)
+            if isinstance(value, (int, float)):
+                metrics[target] = round(float(value) * 1000.0, 1)
         network_rtt_s = metrics.get("network_rtt_s")
         if isinstance(network_rtt_s, (int, float)):
             metrics["network_rtt_ms"] = round(float(network_rtt_s) * 1000.0, 1)

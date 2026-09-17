@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDiscon
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import Field
 
+from agent import DEFAULT_UNIFOLM_MODEL
 from perception import PerceptionError
 
 from .backend import (
@@ -266,8 +267,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=5.0,
         help="person detection rate; RGB preview continues at --camera-fps",
     )
-    parser.add_argument("--vision-model", default="qwen3.5:9b")
+    parser.add_argument(
+        "--vision-backend", choices=("ollama", "unifolm"), default="ollama"
+    )
+    parser.add_argument("--vision-model")
     parser.add_argument("--vision-url", default="http://127.0.0.1:11435")
+    parser.add_argument("--vision-window-s", type=float, default=0.8)
+    parser.add_argument("--vision-frame-count", type=int, default=3)
     parser.add_argument(
         "--vision-rotation-deg", type=int, choices=(0, 90, 180, 270), default=180
     )
@@ -293,8 +299,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         camera_height=args.camera_height,
         camera_fps=args.camera_fps,
         camera_detection_fps=args.camera_detection_fps,
-        vision_model=args.vision_model,
+        vision_model=(
+            args.vision_model
+            or (
+                DEFAULT_UNIFOLM_MODEL
+                if args.vision_backend == "unifolm"
+                else "qwen3.5:9b"
+            )
+        ),
+        vision_backend=args.vision_backend,
         vision_url=args.vision_url,
+        vision_window_s=args.vision_window_s,
+        vision_frame_count=args.vision_frame_count,
         vision_rotation_deg=args.vision_rotation_deg,
     )
     uvicorn.run(create_app(config), host=args.host, port=args.port)

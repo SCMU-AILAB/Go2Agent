@@ -18,6 +18,7 @@ from adapters.langchain import SkillToolObserver
 from agent import AgentError, RobotAgent
 from agent.service import system_prompt_for
 from agent.social_vision import SocialVisionAgent
+from agent.unifolm_vision import UnifolmVisionInvoker
 from agent.vision_policy import OllamaVisionInvoker, VisionPolicyWorker
 from core.runtime import SkillRuntime
 from perception import (
@@ -149,13 +150,13 @@ class BackendConfig:
     camera_fps: int = 30
     camera_detection_fps: float = 5.0
     vision_model: str = "qwen3.5:9b"
+    vision_backend: Literal["ollama", "unifolm"] = "ollama"
     vision_url: str = "http://127.0.0.1:11435"
     vision_rotation_deg: int = 180
     vision_max_age_s: float = 5.0
-    # Keep the console's remote visual policy aligned with the CLI policy:
-    # retain a two-second rolling window and sample eight chronological frames.
-    vision_window_s: float = 2.0
-    vision_frame_count: int = 8
+    # Match run-remote-vision.sh; configurable for recognition/latency replay.
+    vision_window_s: float = 0.8
+    vision_frame_count: int = 3
 
     def __post_init__(self) -> None:
         if self.vision_rotation_deg not in (0, 90, 180, 270):
@@ -295,19 +296,28 @@ class ConsoleBackend(SkillToolObserver):
         )
 
     def _build_vision_agent(self, instruction: str) -> SocialVisionAgent:
+        if self.config.vision_backend == "unifolm":
+            invoker = UnifolmVisionInvoker(
+                self.config.vision_model,
+                base_url=self.config.vision_url,
+                max_new_tokens=96,
+                timeout_s=120,
+            )
+        else:
+            invoker = OllamaVisionInvoker(
+                self.config.vision_model,
+                base_url=self.config.vision_url,
+                constrain_json=False,
+                max_new_tokens=256,
+                think=False,
+            )
         return SocialVisionAgent(
             model_name=self.config.vision_model,
             prompt_profile="egocentric",
             generate_speech=True,
             task_context=f"{self.system_prompt}\nCurrent task: {instruction}",
             timeout_s=120,
-            invoker=OllamaVisionInvoker(
-                self.config.vision_model,
-                base_url=self.config.vision_url,
-                constrain_json=False,
-                max_new_tokens=256,
-                think=False,
-            ),
+            invoker=invoker,
         )
 
     def _build_agent(
@@ -331,6 +341,7 @@ class ConsoleBackend(SkillToolObserver):
             height=self.config.camera_height,
             fps=self.config.camera_fps,
             detection_fps=self.config.camera_detection_fps,
+            rgb_rotation_deg=self.config.vision_rotation_deg,
         )
 
     async def start(self) -> ConsoleSnapshot:
@@ -344,10 +355,7 @@ class ConsoleBackend(SkillToolObserver):
                 if self.hardware_robot is not None:
                     await self.hardware_robot.connect()
                     self.robot_connected = True
-                    if (
-                        self.config.audio_enabled
-                        and self.config.robot_model != "go2"
-                    ):
+                    if self.config.audio_enabled and self.config.robot_model != "go2":
                         self._audio = UnitreeAudioOutput(
                             self.hardware_robot,
                             speaker_id=self.config.speaker_id,
@@ -520,9 +528,15 @@ class ConsoleBackend(SkillToolObserver):
         try:
             while True:
                 frame = await asyncio.to_thread(camera.capture_frame)
-                self.latest_frame = await asyncio.to_thread(
-                    self._vision_frame_jpeg, frame
-                )
+                if (
+                    getattr(camera, "rgb_rotation_deg", 0)
+                    == self.config.vision_rotation_deg
+                ):
+                    self.latest_frame = self._frame_jpeg(frame)
+                else:
+                    self.latest_frame = await asyncio.to_thread(
+                        self._vision_frame_jpeg, frame
+                    )
                 # The preview and model receive the same oriented JPEG bytes.
                 frame = replace(frame, rgb=self.latest_frame)
                 self._video_buffer.push(frame)
@@ -576,9 +590,7 @@ class ConsoleBackend(SkillToolObserver):
                 "perception.safety",
                 "深度安全停止：仅限制底盘，非手臂安全保证。",
             )
-            await worker.stop_locomotion_for_safety(
-                "console depth safety stop"
-            )
+            await worker.stop_locomotion_for_safety("console depth safety stop")
         except Exception as exc:  # noqa: BLE001 - isolate the camera producer
             await self._log(
                 "ERROR",

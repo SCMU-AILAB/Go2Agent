@@ -11,6 +11,11 @@ from .decision import (
     build_decision_system_prompt,
 )
 from .service import AgentError, AgentInvoker, RobotAgent
+from .unifolm_vision import (
+    DEFAULT_UNIFOLM_MODEL,
+    DEFAULT_UNIFOLM_URL,
+    UnifolmVisionInvoker,
+)
 from .vision_policy import (
     DEFAULT_VISION_GOAL,
     DEFAULT_VISION_MODEL,
@@ -27,6 +32,8 @@ from .vision_policy import (
 __all__ = [
     "DEFAULT_VISION_GOAL",
     "DEFAULT_VISION_MODEL",
+    "DEFAULT_UNIFOLM_MODEL",
+    "DEFAULT_UNIFOLM_URL",
     "AgentDecision",
     "AgentError",
     "AgentInvoker",
@@ -41,6 +48,7 @@ __all__ = [
     "OllamaVisionInvoker",
     "RobotAgent",
     "TransformersVisionInvoker",
+    "UnifolmVisionInvoker",
     "VisionDecisionAgent",
     "VisionModelInvoker",
     "VisionPolicyDecision",

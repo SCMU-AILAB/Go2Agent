@@ -253,6 +253,9 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
         invoker = FakeVisionInvoker([{"action": "ignore"}])
         invoker.last_metrics = {
             "round_trip_s": 0.475,
+            "client_encode_s": 0.005,
+            "http_round_trip_s": 0.47,
+            "transport_residual_s": 0.044,
             "network_rtt_s": 0.08,
             "inference_s": 0.426,
         }
@@ -274,6 +277,9 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metrics["frame_count"], 8)
         self.assertEqual(metrics["frame_age_ms"], 525.0)
         self.assertEqual(metrics["end_to_end_latency_ms"], 525.0)
+        self.assertEqual(metrics["client_encode_ms"], 5.0)
+        self.assertEqual(metrics["http_round_trip_ms"], 470.0)
+        self.assertEqual(metrics["transport_residual_ms"], 44.0)
         self.assertEqual(metrics["network_rtt_ms"], 80.0)
         self.assertEqual(metrics["inference_latency_ms"], 426.0)
 

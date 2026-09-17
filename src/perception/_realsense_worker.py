@@ -18,6 +18,9 @@ def parse_args():
     parser.add_argument("--frame-timeout-ms", type=int, required=True)
     parser.add_argument("--min-score", type=float, required=True)
     parser.add_argument("--max-distance-m", type=float)
+    parser.add_argument(
+        "--rgb-rotation-deg", type=int, choices=(0, 90, 180, 270), default=0
+    )
     return parser.parse_args()
 
 
@@ -30,6 +33,17 @@ def confidence(score):
         return 1.0 / (1.0 + math.exp(-score))
     exp_score = math.exp(score)
     return exp_score / (1.0 + exp_score)
+
+
+def rotate_bgr_image(cv2, image, degrees):
+    if degrees == 0:
+        return image
+    rotation_codes = {
+        90: cv2.ROTATE_90_CLOCKWISE,
+        180: cv2.ROTATE_180,
+        270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+    }
+    return cv2.rotate(image, rotation_codes[degrees])
 
 
 class Detector:
@@ -151,9 +165,12 @@ class Detector:
             "nearest_obstacle_distance_m": nearest_obstacle_distance_m,
         }
         if include_rgb:
+            output_image = rotate_bgr_image(
+                self.cv2, image, self.args.rgb_rotation_deg
+            )
             success, encoded = self.cv2.imencode(
                 ".jpg",
-                image,
+                output_image,
                 [int(self.cv2.IMWRITE_JPEG_QUALITY), 80],
             )
             if not success:

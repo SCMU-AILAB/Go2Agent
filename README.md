@@ -261,6 +261,45 @@ Agent 的最终文字回复通过 `AudioClient.tts_maker(text, speaker_id)` 播�
 
 ### 4090D 远程推理
 
+#### 宇树 UnifoLM-ER-1（Go2，可选）
+
+仓库保留原 Ollama/Qwen 链路，并新增 `--vision-backend unifolm`。4090 上的
+`UnifoLM-ER-1-4B` 常驻服务只监听 `127.0.0.1:8011`；机器人端通过 SSH 隧道访问，
+模型输出仍由本地严格 Pydantic Schema、Skill catalog、决策时效和深度安全共同拦截。
+服务不会补造缺失的动作字段，只允许客户端剥离包裹完整 JSON 的单个 Markdown 代码块。
+
+4090 端（模型已下载到 `/home/qwq/models/UnifoLM-ER-1`）：
+
+```bash
+source /home/qwq/venvs/unifolm-er/bin/activate
+python /home/qwq/unifolm-vision-server.py --host 127.0.0.1 --port 8011
+```
+
+Go2 端先保持隧道：
+
+```bash
+sh scripts/remote-unifolm-tunnel.sh
+```
+
+另一终端先只测相机和模型，不驱动机器人：
+
+```bash
+sh scripts/run-unifolm-vision.sh --once
+```
+
+现场安全检查并准备急停后再连接 Go2：
+
+```bash
+sh scripts/run-unifolm-vision.sh --hardware --network eth0
+```
+
+2026-09-17 实测三帧 448px、生产六字段提示词：热态服务器推理约
+0.88–0.91 秒，SSH HTTP 往返约 0.93–1.01 秒；模型常驻约占 8.8 GiB。
+合成空场景连续 4/4 通过严格 Schema 并被判定为 `ignore`。这只验证传输、格式和
+安全拒绝链路，不代表真实挥手/比心识别准确率；真机动作前仍需现场回放验证。
+Go2 当前可直接映射 `wave` 和 `heart`。`handshake`、`high_five` 若不在 Go2
+SkillRegistry 中会被拒绝，不会绕过 Runtime 调用不存在的动作。
+
 远程脚本现在默认 `--vision-generate-speech`：模型在同一次视觉判断中生成手势字段与
 简短中文 `speech`，本地校验后组合成 `execute_and_speak`。不是固定话术，也没有新增
 语音输入。实机通过 Unitree AudioClient TTS 播报，模拟模式仅在日志显示文字。
@@ -362,6 +401,8 @@ sh scripts/run-remote-vision.sh --model qwen2.5vl:3b \
 日志 `model_metrics.round_trip_s` 包括网络耗时；`prompt_eval_s`、`eval_s` 是服务端
 输入处理与生成耗时。首次加载及相同图片的缓存命中耗时不能代表连续视频性能。
 脚本没有保存 SSH 密码；隧道断开时需重新连接，服务不会自动切回本地推理。
+远端推理的基准方法、当前 3 帧默认值和单/双并发对照见
+[`docs/vision-latency.md`](docs/vision-latency.md)。
 
 D435i 通过 USB 直接连接运行本程序的 Linux 主机。相机取流使用
 `pyrealsense2`，不经过 Unitree SDK；Unitree bindings 仍只负责 G1 动作。

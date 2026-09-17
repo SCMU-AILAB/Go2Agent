@@ -8,7 +8,7 @@ from typing import cast
 from fastapi.testclient import TestClient
 
 from adapters.langchain import SkillToolObserver
-from app.api import create_app
+from app.api import _build_parser, create_app
 from app.backend import AgentFactory, BackendConfig, ConsoleBackend
 from core.runtime import SkillRuntime
 from robot import SimulatedRobotAdapter
@@ -92,8 +92,31 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(registered, expected)
         self.assertIn("hello", registered)
         self.assertNotIn("handshake", registered)
-        self.assertTrue(backend.system_prompt.startswith("You are the conversational controller for a Unitree Go2"))
+        self.assertTrue(
+            backend.system_prompt.startswith(
+                "You are the conversational controller for a Unitree Go2"
+            )
+        )
         self.assertEqual(backend.config.robot_model, "go2")
+
+    def test_vision_window_cli_defaults_and_overrides(self) -> None:
+        parser = _build_parser()
+        defaults = parser.parse_args([])
+        overridden = parser.parse_args(
+            ["--vision-window-s", "2.0", "--vision-frame-count", "8"]
+        )
+
+        self.assertEqual(defaults.vision_window_s, 0.8)
+        self.assertEqual(defaults.vision_frame_count, 3)
+        self.assertEqual(overridden.vision_window_s, 2.0)
+        self.assertEqual(overridden.vision_frame_count, 8)
+
+    def test_unifolm_cli_selects_unitree_model_by_default(self) -> None:
+        parser = _build_parser()
+        args = parser.parse_args(["--vision-backend", "unifolm"])
+
+        self.assertEqual(args.vision_backend, "unifolm")
+        self.assertIsNone(args.vision_model)
 
     def test_console_schema_matches_flutter_field_names(self) -> None:
         with TestClient(create_app(backend=self.build_backend())) as client:

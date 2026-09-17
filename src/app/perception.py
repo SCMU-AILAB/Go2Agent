@@ -13,6 +13,8 @@ from pathlib import Path
 
 from adapters import AudioOutputError, UnitreeAudioOutput
 from agent import (
+    DEFAULT_UNIFOLM_MODEL,
+    DEFAULT_UNIFOLM_URL,
     DEFAULT_VISION_GOAL,
     DEFAULT_VISION_MODEL,
     AutonomousDecisionLoop,
@@ -21,6 +23,7 @@ from agent import (
     DecisionOutcome,
     EventDecisionAgent,
     OllamaVisionInvoker,
+    UnifolmVisionInvoker,
     VisionDecisionAgent,
     VisionPolicyOutcome,
     VisionPolicyWorker,
@@ -89,26 +92,51 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("G1_ROBOT_MODEL", "g1"),
         help="robot model to assemble; go2 uses SportClient and a reduced skill catalog",
     )
-    parser.add_argument("--vision-generate-speech", action="store_true",
-                        help="generate a short contextual utterance with each confirmed social gesture")
-    parser.add_argument("--vision-rotation-deg", type=int, choices=(0, 90, 180, 270), default=0,
-                        help="clockwise RGB rotation for VLM only; depth safety remains native")
-    parser.add_argument("--vision-capture-dir", type=Path, help="opt-in local model input capture (Ollama only)")
-    parser.add_argument("--vision-capture-limit", type=int, default=20, help="maximum captured windows per run; stops saving at limit")
     parser.add_argument(
-        "--vision-json-mode", choices=("schema", "json", "prompt"), default="schema",
+        "--vision-generate-speech",
+        action="store_true",
+        help="generate a short contextual utterance with each confirmed social gesture",
+    )
+    parser.add_argument(
+        "--vision-rotation-deg",
+        type=int,
+        choices=(0, 90, 180, 270),
+        default=0,
+        help="clockwise RGB rotation for VLM only; depth safety remains native",
+    )
+    parser.add_argument(
+        "--vision-capture-dir",
+        type=Path,
+        help="opt-in local model input capture (Ollama only)",
+    )
+    parser.add_argument(
+        "--vision-capture-limit",
+        type=int,
+        default=20,
+        help="maximum captured windows per run; stops saving at limit",
+    )
+    parser.add_argument(
+        "--vision-json-mode",
+        choices=("schema", "json", "prompt"),
+        default="schema",
         help="Ollama schema or generic JSON constraints (prompt is a legacy alias for json)",
     )
     parser.add_argument(
-        "--vision-task", choices=("general", "social"), default="general",
+        "--vision-task",
+        choices=("general", "social"),
+        default="general",
         help="social classifies gestures only; general exposes the skill catalog",
     )
     parser.add_argument(
-        "--vision-social-profile", choices=("legacy", "egocentric"), default="legacy",
+        "--vision-social-profile",
+        choices=("legacy", "egocentric"),
+        default="legacy",
         help="social prompt profile; egocentric makes camera-relative gesture intent explicit",
     )
     parser.add_argument(
-        "--vision-disable-thinking", action=argparse.BooleanOptionalAction, default=False,
+        "--vision-disable-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help="disable Ollama thinking output for supported models such as Qwen3.5",
     )
     parser.add_argument(
@@ -131,6 +159,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_HOST"))
     parser.add_argument(
+        "--vision-url",
+        default=os.getenv("UNIFOLM_VISION_URL", DEFAULT_UNIFOLM_URL),
+        help="remote UnifoLM HTTP endpoint (normally an SSH tunnel)",
+    )
+    parser.add_argument(
         "--decision-timeout-s",
         type=float,
         default=8.0,
@@ -144,9 +177,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--vision-backend",
-        choices=("cuda", "transformers", "ollama"),
+        choices=("cuda", "transformers", "ollama", "unifolm"),
         default="cuda",
-        help="Jetson CUDA worker (default), in-process Transformers, or Ollama",
+        help=(
+            "Jetson CUDA worker (default), in-process Transformers, Ollama, "
+            "or remote Unitree UnifoLM"
+        ),
     )
     parser.add_argument(
         "--vision-python",
@@ -281,9 +317,8 @@ class _ObservationLogGate:
         state_changed = (
             previous.person_detected != observation.person_detected
             or previous.person_count != observation.person_count
-            or (
-                previous.nearest_person_distance_m is None
-            ) != (observation.nearest_person_distance_m is None)
+            or (previous.nearest_person_distance_m is None)
+            != (observation.nearest_person_distance_m is None)
         )
         interval_elapsed = (
             self._last_printed_at_s is None
@@ -509,9 +544,7 @@ async def run_vision_perception_loop(
             policy_worker.observe_frame(frame)
             _print_observation(frame.observation, log_gate=log_gate)
 
-            safety_transition = safety_gate.update(
-                frame.nearest_obstacle_distance_m
-            )
+            safety_transition = safety_gate.update(frame.nearest_obstacle_distance_m)
             if safety_transition == "triggered":
                 policy_worker.set_safety_latched(True)
                 interrupted = await policy_worker.stop_locomotion_for_safety(
@@ -634,7 +667,9 @@ async def _run(args: argparse.Namespace) -> int:
     )
 
     selected_model = args.model or (
-        DEFAULT_VISION_MODEL
+        DEFAULT_UNIFOLM_MODEL
+        if args.policy == "vision" and args.vision_backend == "unifolm"
+        else DEFAULT_VISION_MODEL
         if args.policy == "vision"
         else os.getenv("OLLAMA_MODEL", "qwen3:1.7b")
     )
@@ -651,7 +686,9 @@ async def _run(args: argparse.Namespace) -> int:
             "camera_serial": args.camera_serial,
             "hardware": args.hardware,
             "robot_model": robot_model,
-            "vision_social_profile": args.vision_social_profile if args.vision_task == "social" else None,
+            "vision_social_profile": args.vision_social_profile
+            if args.vision_task == "social"
+            else None,
             "vision_thinking_disabled": args.vision_disable_thinking,
             "vision_frame_count": (
                 args.vision_frame_count if args.policy == "vision" else None
@@ -693,8 +730,13 @@ async def _run(args: argparse.Namespace) -> int:
                     selected_model,
                     base_url=args.ollama_url,
                     output_schema=(
-                        (SpeakingGestureObservation if args.vision_generate_speech else GestureObservation).model_json_schema()
-                        if args.vision_task == "social" else None
+                        (
+                            SpeakingGestureObservation
+                            if args.vision_generate_speech
+                            else GestureObservation
+                        ).model_json_schema()
+                        if args.vision_task == "social"
+                        else None
                     ),
                     max_new_tokens=args.vision_max_new_tokens,
                     constrain_json=args.vision_json_mode == "schema",
@@ -706,39 +748,55 @@ async def _run(args: argparse.Namespace) -> int:
                     max_new_tokens=args.vision_max_new_tokens,
                     python_executable=args.vision_python,
                     packages_path=(
-                        Path(args.vision_packages)
-                        if args.vision_packages
-                        else None
+                        Path(args.vision_packages) if args.vision_packages else None
                     ),
                     startup_timeout_s=max(120.0, args.vision_timeout_s),
                     inference_timeout_s=args.vision_timeout_s,
                 )
+            elif args.vision_backend == "unifolm":
+                vision_invoker = UnifolmVisionInvoker(
+                    selected_model,
+                    base_url=args.vision_url,
+                    max_new_tokens=args.vision_max_new_tokens,
+                    timeout_s=args.vision_timeout_s,
+                )
             else:
                 vision_invoker = None
             agent_class = (
-                SocialVisionAgent if args.vision_task == "social" else VisionDecisionAgent
+                SocialVisionAgent
+                if args.vision_task == "social"
+                else VisionDecisionAgent
             )
             vision_agent = agent_class(
                 model_name=selected_model,
                 invoker=vision_invoker,
                 timeout_s=args.vision_timeout_s,
                 goal=args.vision_goal,
-                **({"prompt_profile": args.vision_social_profile,
-                    "generate_speech": args.vision_generate_speech} if args.vision_task == "social" else {}),
+                **(
+                    {
+                        "prompt_profile": args.vision_social_profile,
+                        "generate_speech": args.vision_generate_speech,
+                    }
+                    if args.vision_task == "social"
+                    else {}
+                ),
             )
 
         if vision_agent is not None:
             emit_log(
                 owner="agent.vision_policy",
                 event_type="model_loading",
-                data={"model": vision_agent.model_name, "vision_task": args.vision_task},
+                data={
+                    "model": vision_agent.model_name,
+                    "vision_task": args.vision_task,
+                },
             )
             await vision_agent.warmup()
             ready_data: dict[str, object] = {
                 "model": vision_agent.model_name,
                 "backend": args.vision_backend,
             }
-            if isinstance(vision_invoker, CudaVisionInvoker):
+            if isinstance(vision_invoker, (CudaVisionInvoker, UnifolmVisionInvoker)):
                 ready_data.update(vision_invoker.backend_info)
             emit_log(
                 owner="agent.vision_policy",
@@ -772,8 +830,11 @@ async def _run(args: argparse.Namespace) -> int:
                     speaker_id=args.speaker_id,
                 )
                 await audio.connect()
-                emit_log(owner="robot.audio", event_type="audio_ready",
-                         data={"speaker_id": args.speaker_id})
+                emit_log(
+                    owner="robot.audio",
+                    event_type="audio_ready",
+                    data={"speaker_id": args.speaker_id},
+                )
         if decision_agent is not None:
             decision_loop = AutonomousDecisionLoop(
                 runtime,
@@ -794,7 +855,9 @@ async def _run(args: argparse.Namespace) -> int:
         if vision_agent is None:
             raise RuntimeError("vision policy was not initialized")
         if args.vision_capture_dir and args.vision_backend != "ollama":
-            raise ValueError("vision capture currently requires --vision-backend ollama")
+            raise ValueError(
+                "vision capture currently requires --vision-backend ollama"
+            )
         video_buffer = VideoBuffer(
             window_s=args.video_window_s,
             max_frames=max(1, math.ceil(args.fps * args.video_window_s)),
@@ -808,8 +871,11 @@ async def _run(args: argparse.Namespace) -> int:
             frame_count=args.vision_frame_count,
             action_cooldown_s=args.action_cooldown_s,
             max_decision_age_s=args.max_decision_age_s,
-            capture=(VisionCapture(args.vision_capture_dir, args.vision_capture_limit)
-                     if args.vision_capture_dir else None),
+            capture=(
+                VisionCapture(args.vision_capture_dir, args.vision_capture_limit)
+                if args.vision_capture_dir
+                else None
+            ),
             rotation_deg=args.vision_rotation_deg,
         )
         return await run_vision_perception_loop(
