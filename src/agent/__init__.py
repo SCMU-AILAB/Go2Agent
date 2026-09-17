@@ -10,6 +10,11 @@ from .decision import (
     EventDecisionAgent,
     build_decision_system_prompt,
 )
+from .llamacpp_vision import (
+    DEFAULT_LLAMA_CPP_MODEL,
+    DEFAULT_LLAMA_CPP_URL,
+    LlamaCppVisionInvoker,
+)
 from .service import AgentError, AgentInvoker, RobotAgent
 from .unifolm_vision import (
     DEFAULT_UNIFOLM_MODEL,
@@ -30,6 +35,8 @@ from .vision_policy import (
 )
 
 __all__ = [
+    "DEFAULT_LLAMA_CPP_MODEL",
+    "DEFAULT_LLAMA_CPP_URL",
     "DEFAULT_UNIFOLM_MODEL",
     "DEFAULT_UNIFOLM_URL",
     "DEFAULT_VISION_GOAL",
@@ -45,6 +52,7 @@ __all__ = [
     "DecisionInvoker",
     "DecisionOutcome",
     "EventDecisionAgent",
+    "LlamaCppVisionInvoker",
     "OllamaVisionInvoker",
     "RobotAgent",
     "TransformersVisionInvoker",

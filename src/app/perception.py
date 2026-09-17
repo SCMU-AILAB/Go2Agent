@@ -13,6 +13,8 @@ from pathlib import Path
 
 from adapters import AudioOutputError, UnitreeAudioOutput
 from agent import (
+    DEFAULT_LLAMA_CPP_MODEL,
+    DEFAULT_LLAMA_CPP_URL,
     DEFAULT_UNIFOLM_MODEL,
     DEFAULT_UNIFOLM_URL,
     DEFAULT_VISION_GOAL,
@@ -22,6 +24,7 @@ from agent import (
     DecisionAgentError,
     DecisionOutcome,
     EventDecisionAgent,
+    LlamaCppVisionInvoker,
     OllamaVisionInvoker,
     UnifolmVisionInvoker,
     VisionDecisionAgent,
@@ -160,8 +163,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_HOST"))
     parser.add_argument(
         "--vision-url",
-        default=os.getenv("UNIFOLM_VISION_URL", DEFAULT_UNIFOLM_URL),
-        help="remote UnifoLM HTTP endpoint (normally an SSH tunnel)",
+        default=os.getenv("VISION_URL") or os.getenv("UNIFOLM_VISION_URL"),
+        help="vision HTTP endpoint for UnifoLM or llama.cpp",
     )
     parser.add_argument(
         "--decision-timeout-s",
@@ -177,11 +180,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--vision-backend",
-        choices=("cuda", "transformers", "ollama", "unifolm"),
+        choices=("cuda", "transformers", "ollama", "unifolm", "llamacpp"),
         default="cuda",
         help=(
             "Jetson CUDA worker (default), in-process Transformers, Ollama, "
-            "or remote Unitree UnifoLM"
+            "remote Unitree UnifoLM, or local llama.cpp INT4"
         ),
     )
     parser.add_argument(
@@ -669,6 +672,8 @@ async def _run(args: argparse.Namespace) -> int:
     selected_model = args.model or (
         DEFAULT_UNIFOLM_MODEL
         if args.policy == "vision" and args.vision_backend == "unifolm"
+        else DEFAULT_LLAMA_CPP_MODEL
+        if args.policy == "vision" and args.vision_backend == "llamacpp"
         else DEFAULT_VISION_MODEL
         if args.policy == "vision"
         else os.getenv("OLLAMA_MODEL", "qwen3:1.7b")
@@ -756,9 +761,17 @@ async def _run(args: argparse.Namespace) -> int:
             elif args.vision_backend == "unifolm":
                 vision_invoker = UnifolmVisionInvoker(
                     selected_model,
-                    base_url=args.vision_url,
+                    base_url=args.vision_url or DEFAULT_UNIFOLM_URL,
                     max_new_tokens=args.vision_max_new_tokens,
                     timeout_s=args.vision_timeout_s,
+                )
+            elif args.vision_backend == "llamacpp":
+                vision_invoker = LlamaCppVisionInvoker(
+                    selected_model,
+                    base_url=args.vision_url or DEFAULT_LLAMA_CPP_URL,
+                    max_new_tokens=args.vision_max_new_tokens,
+                    timeout_s=args.vision_timeout_s,
+                    constrain_json=args.vision_json_mode != "prompt",
                 )
             else:
                 vision_invoker = None
@@ -796,7 +809,10 @@ async def _run(args: argparse.Namespace) -> int:
                 "model": vision_agent.model_name,
                 "backend": args.vision_backend,
             }
-            if isinstance(vision_invoker, (CudaVisionInvoker, UnifolmVisionInvoker)):
+            if isinstance(
+                vision_invoker,
+                (CudaVisionInvoker, UnifolmVisionInvoker, LlamaCppVisionInvoker),
+            ):
                 ready_data.update(vision_invoker.backend_info)
             emit_log(
                 owner="agent.vision_policy",

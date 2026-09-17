@@ -117,6 +117,15 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(args.vision_backend, "unifolm")
         self.assertIsNone(args.vision_model)
+        self.assertIsNone(args.vision_url)
+
+    def test_llamacpp_cli_selects_local_quantized_backend(self) -> None:
+        parser = _build_parser()
+        args = parser.parse_args(["--vision-backend", "llamacpp"])
+
+        self.assertEqual(args.vision_backend, "llamacpp")
+        self.assertIsNone(args.vision_model)
+        self.assertIsNone(args.vision_url)
 
     def test_console_schema_matches_flutter_field_names(self) -> None:
         with TestClient(create_app(backend=self.build_backend())) as client:

@@ -13,7 +13,12 @@ from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDiscon
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import Field
 
-from agent import DEFAULT_UNIFOLM_MODEL
+from agent import (
+    DEFAULT_LLAMA_CPP_MODEL,
+    DEFAULT_LLAMA_CPP_URL,
+    DEFAULT_UNIFOLM_MODEL,
+    DEFAULT_UNIFOLM_URL,
+)
 from perception import PerceptionError
 
 from .backend import (
@@ -272,10 +277,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="person detection rate; RGB preview continues at --camera-fps",
     )
     parser.add_argument(
-        "--vision-backend", choices=("ollama", "unifolm"), default="ollama"
+        "--vision-backend",
+        choices=("ollama", "unifolm", "llamacpp"),
+        default="ollama",
     )
     parser.add_argument("--vision-model")
-    parser.add_argument("--vision-url", default="http://127.0.0.1:11435")
+    parser.add_argument("--vision-url")
     parser.add_argument("--vision-window-s", type=float, default=0.8)
     parser.add_argument("--vision-frame-count", type=int, default=3)
     parser.add_argument(
@@ -308,11 +315,22 @@ def main(argv: Sequence[str] | None = None) -> None:
             or (
                 DEFAULT_UNIFOLM_MODEL
                 if args.vision_backend == "unifolm"
+                else DEFAULT_LLAMA_CPP_MODEL
+                if args.vision_backend == "llamacpp"
                 else "qwen3.5:9b"
             )
         ),
         vision_backend=args.vision_backend,
-        vision_url=args.vision_url,
+        vision_url=(
+            args.vision_url
+            or (
+                DEFAULT_UNIFOLM_URL
+                if args.vision_backend == "unifolm"
+                else DEFAULT_LLAMA_CPP_URL
+                if args.vision_backend == "llamacpp"
+                else "http://127.0.0.1:11435"
+            )
+        ),
         vision_window_s=args.vision_window_s,
         vision_frame_count=args.vision_frame_count,
         vision_rotation_deg=args.vision_rotation_deg,

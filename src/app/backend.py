@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from adapters import AudioOutputError, UnitreeAudioOutput
 from adapters.langchain import SkillToolObserver
 from agent import AgentError, RobotAgent
+from agent.llamacpp_vision import LlamaCppVisionInvoker
 from agent.service import system_prompt_for
 from agent.social_vision import SocialVisionAgent
 from agent.unifolm_vision import UnifolmVisionInvoker
@@ -150,7 +151,7 @@ class BackendConfig:
     camera_fps: int = 30
     camera_detection_fps: float = 5.0
     vision_model: str = "qwen3.5:9b"
-    vision_backend: Literal["ollama", "unifolm"] = "ollama"
+    vision_backend: Literal["ollama", "unifolm", "llamacpp"] = "ollama"
     vision_url: str = "http://127.0.0.1:11435"
     vision_rotation_deg: int = 180
     vision_max_age_s: float = 5.0
@@ -298,6 +299,13 @@ class ConsoleBackend(SkillToolObserver):
     def _build_vision_agent(self, instruction: str) -> SocialVisionAgent:
         if self.config.vision_backend == "unifolm":
             invoker = UnifolmVisionInvoker(
+                self.config.vision_model,
+                base_url=self.config.vision_url,
+                max_new_tokens=96,
+                timeout_s=120,
+            )
+        elif self.config.vision_backend == "llamacpp":
+            invoker = LlamaCppVisionInvoker(
                 self.config.vision_model,
                 base_url=self.config.vision_url,
                 max_new_tokens=96,

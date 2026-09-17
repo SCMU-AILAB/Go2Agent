@@ -265,6 +265,36 @@ Agent 的最终文字回复通过 `AudioClient.tts_maker(text, speaker_id)` 播�
 
 ### 4090D 远程推理
 
+#### Jetson Orin NX 8GB 本地 INT4（实验）
+
+官方 BF16 checkpoint 实测常驻约 8.8 GiB，无法稳定放入 8GB 统一内存。`test`
+分支提供 `--vision-backend llamacpp`，用于运行量化后的 UnifoLM GGUF；视觉输出仍经过
+原有 Pydantic Schema、SkillRegistry、时效门和深度安全，不能直接调用 SDK。
+
+先准备支持 Qwen3-VL 多模态的 `llama-server`、Q4_K_M 主模型和 mmproj，然后启动：
+
+```bash
+export UNIFOLM_MODEL_GGUF=/path/to/UnifoLM-ER-1-Q4_K_M.gguf
+export UNIFOLM_MMPROJ_GGUF=/path/to/mmproj-UnifoLM-ER-1-Q8_0.gguf
+sh scripts/run-jetson-unifolm-server.sh
+```
+
+另一终端先用模拟机器人验收 Schema 和时延：
+
+```bash
+sh scripts/run-jetson-unifolm-vision.sh --once
+```
+
+现场检查后再连接 Go2：
+
+```bash
+sh scripts/run-jetson-unifolm-vision.sh --hardware --network eth0
+```
+
+这是 8GB PoC，不承诺准确率或实时性。运行时用 `tegrastats` 检查统一内存；不要同时
+常驻大型 Whisper、检测器和另一套 VLM。若出现 OOM，先缩短上下文、减少视觉帧数，
+不能通过放宽决策时效来掩盖慢推理。
+
 #### 宇树 UnifoLM-ER-1（Go2，可选）
 
 仓库保留原 Ollama/Qwen 链路，并新增 `--vision-backend unifolm`。4090 上的
