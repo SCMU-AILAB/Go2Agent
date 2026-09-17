@@ -28,7 +28,7 @@ class Go2AdapterTests(unittest.IsolatedAsyncioTestCase):
         await self.robot.connect()
         await self.robot.connect()
         self.channel.initialize.assert_called_once_with(3, "eth0")
-        self.sport.set_timeout.assert_called_once_with(1.0)
+        self.sport.set_timeout.assert_called_once_with(2.0)
         self.sport.init.assert_called_once_with()
         state = await self.robot.get_state()
         self.assertTrue(state.hardware and state.connected)

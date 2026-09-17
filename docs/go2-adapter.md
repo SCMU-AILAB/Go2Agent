@@ -184,8 +184,9 @@ SDK 接受命令不等于真机动作完成；固件不支持时应显示返回�
 
 必须确认文本模型地址与型号可用；只配置 `--vision-url` 不会自动配置文本 Agent。
 
-挥手后比心示例：`{"instruction":"有人挥手时比心回应","cameraSource":"local","taskMode":"gesture","waveResponse":"heart"}`。
-`waveResponse` 仅接受 `wave` 和 `heart`；heart 仅适用于 Go2 手势模式，仍要求可见、朝向机器人、最新帧存在的挥手证据。
+手势任务示例：`{"instruction":"有人打招呼就打招呼，有人比心就比心","cameraSource":"local","taskMode":"gesture"}`。
+已确认手势按 1:1 映射技能（`wave`→`wave`/`hello`，`heart`→`heart`）；任务文字只影响视觉偏好，
+不会执行未注册技能。旧字段 `waveResponse` 已忽略。
 
 本机可用 `sh scripts/run-go2-console.sh` 重启同样配置的控制台。
 脚本连接真机但不会提交动作任务；网卡默认 eth0，可用 GO2_NETWORK 覆盖。

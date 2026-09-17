@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -42,7 +43,8 @@ class TaskRequest(ApiModel):
     instruction: str = Field(min_length=1)
     camera_source: Literal["demo", "local"] | None = None
     task_mode: Literal["text", "gesture"] | None = None
-    wave_response: Literal["wave", "heart"] = "wave"
+    # Accepted for older clients; ignored. Gesture skills map 1:1 from vision.
+    wave_response: Literal["wave", "heart"] | None = None
 
 
 class CancelTaskRequest(ApiModel):
@@ -257,6 +259,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-audio", action="store_true")
     parser.add_argument("--speaker-id", type=int, default=0)
     parser.add_argument(
+        "--host-audio-device",
+        default=os.getenv("G1_AUDIO_DEVICE"),
+        help="ALSA/Pulse device for Go2 host speaker TTS (external speaker)",
+    )
+    parser.add_argument(
+        "--host-tts-voice",
+        default="cmn",
+        help="espeak-ng voice for host speaker TTS (cmn=普通话)",
+    )
+    parser.add_argument(
         "--camera-source",
         choices=("demo", "local"),
         default="demo",
@@ -279,7 +291,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vision-window-s", type=float, default=0.8)
     parser.add_argument("--vision-frame-count", type=int, default=3)
     parser.add_argument(
-        "--vision-rotation-deg", type=int, choices=(0, 90, 180, 270), default=180
+        "--vision-rotation-deg",
+        type=int,
+        choices=(0, 90, 180, 270),
+        default=0,
+        help="rotate RGB for preview and VLM; use 180 if the camera is mounted upside-down",
     )
     parser.add_argument("--include-operator-only-skills", action="store_true")
     return parser
@@ -297,6 +313,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         ollama_url=args.ollama_url,
         audio_enabled=not args.no_audio,
         speaker_id=args.speaker_id,
+        host_audio_device=args.host_audio_device,
+        host_tts_voice=args.host_tts_voice,
         camera_source=args.camera_source,
         camera_serial=args.camera_serial,
         camera_width=args.camera_width,

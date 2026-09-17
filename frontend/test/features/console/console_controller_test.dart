@@ -54,10 +54,8 @@ void main() {
     expect(messages.last, contains('本地相机'));
     controller.cameraSource = 'local';
     controller.robotModel = 'GO2';
-    controller.setWaveResponse('heart');
     await controller.submitTask();
     expect(api.lastTaskMode, 'gesture');
-    expect(api.lastWaveResponse, 'heart');
     controller.setTaskMode('text');
     expect(controller.taskMode, 'gesture');
   });

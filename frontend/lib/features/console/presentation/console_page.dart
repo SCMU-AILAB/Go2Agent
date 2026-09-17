@@ -7,6 +7,7 @@ import '../../../../core/theme/console_colors.dart';
 import '../controllers/console_controller.dart';
 import '../services/console_api.dart';
 import 'console_intents.dart';
+import 'dialog_page.dart';
 import 'widgets/camera_panel.dart';
 import 'widgets/model_panel.dart';
 import 'widgets/tool_panel.dart';
@@ -15,7 +16,6 @@ import 'widgets/robot_status_panel.dart';
 import 'widgets/prompt_panel.dart';
 import 'widgets/backend_panel.dart';
 import 'widgets/task_input_panel.dart';
-import 'widgets/stop_task_button.dart';
 import 'widgets/log_panel.dart';
 import 'widgets/console_rail.dart';
 import 'widgets/console_header.dart';
@@ -33,7 +33,7 @@ class G1ConsolePage extends StatefulWidget {
 
 class _G1ConsolePageState extends State<G1ConsolePage> {
   late final ConsoleController controller;
-  final anchors = ConsoleAnchors();
+  ConsoleView _view = ConsoleView.vision;
 
   @override
   void initState() {
@@ -67,76 +67,63 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
       );
   }
 
-  void _scrollToAnchor(GlobalKey key) {
-    final target = key.currentContext;
-    if (target == null) return;
-    Scrollable.ensureVisible(
-      target,
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOut,
-      alignment: 0.04,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: controller,
-      builder: (context, child) => Shortcuts(
-        shortcuts: const {
-          SingleActivator(LogicalKeyboardKey.enter, control: true):
-              SubmitTaskIntent(),
-          SingleActivator(LogicalKeyboardKey.enter, meta: true):
-              SubmitTaskIntent(),
-          SingleActivator(LogicalKeyboardKey.escape): StopTaskIntent(),
+    return Shortcuts(
+      shortcuts: const {
+        SingleActivator(LogicalKeyboardKey.enter, control: true):
+            SubmitTaskIntent(),
+        SingleActivator(LogicalKeyboardKey.enter, meta: true):
+            SubmitTaskIntent(),
+        SingleActivator(LogicalKeyboardKey.escape): StopTaskIntent(),
+      },
+      child: Actions(
+        actions: {
+          SubmitTaskIntent: CallbackAction<SubmitTaskIntent>(
+            onInvoke: (_) {
+              controller.submitTask();
+              return null;
+            },
+          ),
+          StopTaskIntent: CallbackAction<StopTaskIntent>(
+            onInvoke: (_) {
+              controller.cancelTask();
+              return null;
+            },
+          ),
         },
-        child: Actions(
-          actions: {
-            SubmitTaskIntent: CallbackAction<SubmitTaskIntent>(
-              onInvoke: (_) {
-                controller.submitTask();
-                return null;
-              },
-            ),
-            StopTaskIntent: CallbackAction<StopTaskIntent>(
-              onInvoke: (_) {
-                controller.cancelTask();
-                return null;
-              },
-            ),
-          },
-          child: Focus(
-            autofocus: true,
-            child: Scaffold(
-              backgroundColor: ConsoleColors.bg0,
-              // Keeps the status HUD clear of the iOS status bar / dynamic
-              // island and the Android system bars. No-op on desktop.
-              body: SafeArea(
-                bottom: false,
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final showRail = constraints.maxWidth > 640;
-                    final double railWidth = constraints.maxWidth > 930
-                        ? 76
-                        : 64;
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (showRail)
-                          ConsoleRail(
-                            width: railWidth,
-                            anchors: anchors,
-                            onNavigate: _scrollToAnchor,
-                          ),
-                        Expanded(
-                          child: _buildApplication(
-                            constraints.maxWidth - (showRail ? railWidth : 0),
-                          ),
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
+            backgroundColor: ConsoleColors.bg0,
+            body: SafeArea(
+              bottom: false,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final showRail = constraints.maxWidth > 480;
+                  final double railWidth = constraints.maxWidth > 930
+                      ? 76
+                      : 64;
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (showRail)
+                        ConsoleRail(
+                          width: railWidth,
+                          selected: _view,
+                          onSelect: (view) => setState(() => _view = view),
                         ),
-                      ],
-                    );
-                  },
-                ),
+                      Expanded(
+                        child: _view == ConsoleView.dialog
+                            ? DialogPage(controller: controller)
+                            : _buildVisionApp(
+                                constraints.maxWidth -
+                                    (showRail ? railWidth : 0),
+                              ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ),
@@ -145,36 +132,41 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
     );
   }
 
-  Widget _buildApplication(double width) {
-    return Column(
-      children: [
-        ConsoleHeader(controller: controller, width: width),
-        Expanded(
-          child: SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(
-              width <= 640 ? 12 : 24,
-              width <= 640 ? 14 : 20,
-              width <= 640 ? 12 : 24,
-              0,
-            ),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1680),
-                child: Column(
-                  children: [
-                    ConsoleHeading(controller: controller, width: width),
-                    const SizedBox(height: 18),
-                    _buildWorkspace(width),
-                    const SizedBox(height: 16),
-                    LogPanel(controller: controller, width: width),
-                    ConsoleFooter(controller: controller, width: width),
-                  ],
+  Widget _buildVisionApp(double width) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        return Column(
+          children: [
+            ConsoleHeader(controller: controller, width: width),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  width <= 640 ? 12 : 24,
+                  width <= 640 ? 14 : 20,
+                  width <= 640 ? 12 : 24,
+                  0,
+                ),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1680),
+                    child: Column(
+                      children: [
+                        ConsoleHeading(controller: controller, width: width),
+                        const SizedBox(height: 18),
+                        _buildWorkspace(width),
+                        const SizedBox(height: 16),
+                        LogPanel(controller: controller, width: width),
+                        ConsoleFooter(controller: controller, width: width),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 
@@ -182,7 +174,7 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
     final twoColumns = width > 930;
     final monitor = Column(
       children: [
-        CameraPanel(controller: controller, anchorKey: anchors.mission),
+        CameraPanel(controller: controller),
         const SizedBox(height: 14),
         _buildExecutionPanels(),
       ],
@@ -250,10 +242,9 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
 
   Widget _buildControls(double width) {
     final items = <Widget>[
-      RobotStatusPanel(controller: controller, anchorKey: anchors.robot),
+      RobotStatusPanel(controller: controller),
       TaskInputPanel(controller: controller),
-      StopTaskButton(controller: controller),
-      BackendPanel(controller: controller, anchorKey: anchors.system),
+      BackendPanel(controller: controller),
       PromptPanel(controller: controller),
     ];
     if (width <= 930 && width > 640) {
@@ -271,8 +262,6 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
           ),
           const SizedBox(height: 12),
           items[3],
-          const SizedBox(height: 12),
-          items[4],
         ],
       );
     }

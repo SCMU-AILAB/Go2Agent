@@ -29,9 +29,8 @@ from agent import (
     VisionPolicyWorker,
 )
 from agent.social_vision import (
-    GestureObservation,
     SocialVisionAgent,
-    SpeakingGestureObservation,
+    TaskDrivenObservation,
 )
 from agent.vision_capture import VisionCapture
 from core.runtime import SkillRuntime
@@ -730,11 +729,7 @@ async def _run(args: argparse.Namespace) -> int:
                     selected_model,
                     base_url=args.ollama_url,
                     output_schema=(
-                        (
-                            SpeakingGestureObservation
-                            if args.vision_generate_speech
-                            else GestureObservation
-                        ).model_json_schema()
+                        TaskDrivenObservation.model_json_schema()
                         if args.vision_task == "social"
                         else None
                     ),

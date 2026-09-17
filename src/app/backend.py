@@ -13,7 +13,13 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from adapters import AudioOutputError, UnitreeAudioOutput
+from adapters import (
+    AudioOutputError,
+    HostSpeakerError,
+    HostSpeakerOutput,
+    SpeechOutput,
+    UnitreeAudioOutput,
+)
 from adapters.langchain import SkillToolObserver
 from agent import AgentError, RobotAgent
 from agent.service import system_prompt_for
@@ -143,6 +149,8 @@ class BackendConfig:
     ollama_url: str | None = None
     audio_enabled: bool = True
     speaker_id: int = 0
+    host_audio_device: str | None = None
+    host_tts_voice: str = "cmn"
     camera_source: Literal["demo", "local"] = "demo"
     camera_serial: str | None = None
     camera_width: int = 640
@@ -152,7 +160,7 @@ class BackendConfig:
     vision_model: str = "qwen3.5:9b"
     vision_backend: Literal["ollama", "unifolm"] = "ollama"
     vision_url: str = "http://127.0.0.1:11435"
-    vision_rotation_deg: int = 180
+    vision_rotation_deg: int = 0
     vision_max_age_s: float = 5.0
     # Match run-remote-vision.sh; configurable for recognition/latency replay.
     vision_window_s: float = 0.8
@@ -245,7 +253,7 @@ class ConsoleBackend(SkillToolObserver):
         self._video_buffer = self._new_video_buffer()
         self._safety_gate = _DepthSafetyGate()
         self._agent: ChatAgent | None = None
-        self._audio: UnitreeAudioOutput | None = None
+        self._audio: SpeechOutput | None = None
         self._camera: RealSensePersonDetector | None = None
         self._camera_task: asyncio.Task[None] | None = None
         self._safety_stop_task: asyncio.Task[None] | None = None
@@ -355,22 +363,41 @@ class ConsoleBackend(SkillToolObserver):
                 if self.hardware_robot is not None:
                     await self.hardware_robot.connect()
                     self.robot_connected = True
-                    if self.config.audio_enabled and self.config.robot_model != "go2":
+                else:
+                    state = await self.robot.get_state()
+                    self.robot_connected = state.connected
+                    self.robot_details = dict(state.details)
+
+                if self.config.audio_enabled:
+                    if self.config.robot_model == "go2":
+                        speaker = HostSpeakerOutput(
+                            voice=self.config.host_tts_voice,
+                            audio_device=self.config.host_audio_device,
+                        )
+                        if speaker.available:
+                            self._audio = speaker
+                            await self._log(
+                                "INFO",
+                                "audio",
+                                "Go2 使用主机外接扬声器 TTS（espeak-ng）。"
+                                + (
+                                    f" device={self.config.host_audio_device}"
+                                    if self.config.host_audio_device
+                                    else ""
+                                ),
+                            )
+                        else:
+                            await self._log(
+                                "WARN",
+                                "audio",
+                                "未找到 espeak-ng/espeak，外接扬声器不可用。请安装 espeak-ng。",
+                            )
+                    elif self.hardware_robot is not None:
                         self._audio = UnitreeAudioOutput(
                             self.hardware_robot,
                             speaker_id=self.config.speaker_id,
                         )
                         await self._audio.connect()
-                    elif self.config.audio_enabled:
-                        await self._log(
-                            "WARN",
-                            "audio",
-                            "Go2 不使用 G1 AudioClient TTS，语音输出已禁用。",
-                        )
-                else:
-                    state = await self.robot.get_state()
-                    self.robot_connected = state.connected
-                    self.robot_details = dict(state.details)
 
                 self._agent = self._agent_factory(
                     self.runtime,
@@ -640,7 +667,7 @@ class ConsoleBackend(SkillToolObserver):
         *,
         camera_source: str | None = None,
         task_mode: Literal["text", "gesture"] | None = None,
-        wave_response: Literal["wave", "heart"] = "wave",
+        wave_response: Literal["wave", "heart"] | None = None,
     ) -> ConsoleSnapshot:
         instruction = instruction.strip()
         if not instruction:
@@ -657,12 +684,6 @@ class ConsoleBackend(SkillToolObserver):
                 raise ValueError("task_mode must be text or gesture")
             if mode == "gesture" and source != "local":
                 raise ValueError("手势交互需要真实相机；模拟画面不能用于手势识别")
-            if wave_response not in {"wave", "heart"}:
-                raise ValueError("unsupported wave response")
-            if wave_response == "heart" and (
-                mode != "gesture" or self.config.robot_model != "go2"
-            ):
-                raise ValueError("挥手后比心只适用于 Go2 手势模式")
             if camera_source is not None:
                 await self.set_camera_source(camera_source)
             if mode == "gesture" and self.camera_status != "ready":
@@ -680,7 +701,7 @@ class ConsoleBackend(SkillToolObserver):
             self.model_duration_s = 0.0
             self.tools.clear()
             self._active_task = asyncio.create_task(
-                self._run_task(self.task_id, instruction, mode, wave_response),
+                self._run_task(self.task_id, instruction, mode),
                 name=f"g1-console-task-{self.task_id[:8]}",
             )
         await self._log(
@@ -691,13 +712,11 @@ class ConsoleBackend(SkillToolObserver):
         self._emit_state()
         return self.snapshot()
 
-    async def _run_task(
-        self, task_id: str, instruction: str, mode: str, wave_response: str = "wave"
-    ) -> None:
+    async def _run_task(self, task_id: str, instruction: str, mode: str) -> None:
         started = time.monotonic()
         try:
             if mode == "gesture":
-                await self._run_vision_task(instruction, wave_response)
+                await self._run_vision_task(instruction)
                 return
             # Text tasks do not supply images to RobotAgent. Keep preview running,
             # but do not advertise a fictitious camera tool or visual navigation.
@@ -718,7 +737,7 @@ class ConsoleBackend(SkillToolObserver):
             if self._audio is not None:
                 try:
                     await self._audio.speak(reply)
-                except AudioOutputError as exc:
+                except (AudioOutputError, HostSpeakerError) as exc:
                     await self._log("WARN", "audio", f"语音播报失败：{exc}")
 
             if self.task_id != task_id:
@@ -771,13 +790,14 @@ class ConsoleBackend(SkillToolObserver):
                 self._active_task = None
             self._emit_state()
 
-    async def _run_vision_task(
-        self, instruction: str, wave_response: str = "wave"
-    ) -> None:
+    async def _run_vision_task(self, instruction: str) -> None:
         """Continuous, cancellable vision task, reusing the CLI execution boundary."""
         agent = self._vision_agent_factory(instruction)
-        agent.wave_response = wave_response
-        await self._log("INFO", "vision", f"确认挥手后的回应技能：{wave_response}")
+        await self._log(
+            "INFO",
+            "vision",
+            f"手势任务按指令与已确认手势执行：{instruction}",
+        )
         worker = VisionPolicyWorker(
             self.runtime,
             agent,
@@ -809,9 +829,10 @@ class ConsoleBackend(SkillToolObserver):
                 "INFO",
                 "vision",
                 (
-                    f"Go2 手势模式：挥手 → {'heart' if wave_response == 'heart' else 'hello'}；握手/击掌忽略。直接动作请选文本指令。"
+                    "Go2 手势任务：VLM 按任务提示词从技能目录自主选择；"
+                    "未注册/operator-only 技能会被拒绝。"
                     if self.config.robot_model == "go2"
-                    else "手势模式：握手/挥手/击掌；其他动作请选文本指令。"
+                    else "手势模式：VLM 按任务与技能目录决策；其他动作请选文本指令。"
                 ),
             )
             while True:

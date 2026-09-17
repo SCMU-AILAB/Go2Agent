@@ -133,9 +133,9 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('打招呼'));
     await tester.pump();
-    await tester.ensureVisible(find.text('发送指令'));
+    await tester.ensureVisible(find.text('开始文本对话'));
     await tester.pump();
-    await tester.tap(find.text('发送指令'));
+    await tester.tap(find.text('开始文本对话'));
     await tester.pump();
 
     expect(api.submitTaskCalls, 1);

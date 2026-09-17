@@ -74,11 +74,12 @@ class VisionInvoker:
         if self.bad:
             return "bad json"
         return {
-            "gesture": "wave",
+            "action": "execute_skill",
+            "skill": "wave",
+            "observation": "person waving side to side",
             "hand_visible": True,
             "directed_at_robot": True,
             "present_in_latest": True,
-            "evidence": "side_to_side",
             "speech": "你好呀！",
         }
 

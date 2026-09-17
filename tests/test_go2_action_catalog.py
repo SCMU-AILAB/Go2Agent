@@ -36,6 +36,8 @@ FLAG_ACTIONS = {
     "classic_walk",
     "walk_upright",
     "cross_step",
+    "switch_joystick",
+    "auto_recover_set",
 }
 DEFAULT_ACTIONS = {"stretch", "content", "heart", "scrape", "dance1", "dance2", "pose"}
 

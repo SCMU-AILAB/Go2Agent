@@ -2,27 +2,20 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/console_colors.dart';
 
-/// Section anchors of the single mission control page. The rail has no routes:
-/// it scrolls the operator to the section that already exists on the page.
-class ConsoleAnchors {
-  ConsoleAnchors();
-
-  final GlobalKey mission = GlobalKey(debugLabel: 'mission');
-  final GlobalKey robot = GlobalKey(debugLabel: 'robot');
-  final GlobalKey system = GlobalKey(debugLabel: 'system');
-}
+/// Left rail: two top-level views only.
+enum ConsoleView { vision, dialog }
 
 class ConsoleRail extends StatelessWidget {
   const ConsoleRail({
     super.key,
     required this.width,
-    required this.anchors,
-    required this.onNavigate,
+    required this.selected,
+    required this.onSelect,
   });
 
   final double width;
-  final ConsoleAnchors anchors;
-  final void Function(GlobalKey key) onNavigate;
+  final ConsoleView selected;
+  final void Function(ConsoleView view) onSelect;
 
   @override
   Widget build(BuildContext context) {
@@ -56,16 +49,20 @@ class ConsoleRail extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 26),
+          const SizedBox(height: 28),
           _railItem(
-            Icons.precision_manufacturing_outlined,
-            'ROBOT',
-            anchors.robot,
+            icon: Icons.videocam_outlined,
+            label: '视觉',
+            selected: selected == ConsoleView.vision,
+            onTap: () => onSelect(ConsoleView.vision),
           ),
-          const SizedBox(height: 8),
-          _railItem(Icons.flag_outlined, 'MISSION', anchors.mission),
-          const SizedBox(height: 8),
-          _railItem(Icons.dns_outlined, 'SYSTEM', anchors.system),
+          const SizedBox(height: 10),
+          _railItem(
+            icon: Icons.forum_outlined,
+            label: '文字',
+            selected: selected == ConsoleView.dialog,
+            onTap: () => onSelect(ConsoleView.dialog),
+          ),
           const Spacer(),
           const Text(
             'v0.1',
@@ -82,34 +79,49 @@ class ConsoleRail extends StatelessWidget {
     );
   }
 
-  Widget _railItem(IconData icon, String label, GlobalKey target) {
+  Widget _railItem({
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final color = selected ? ConsoleColors.accent : ConsoleColors.muted;
     return Tooltip(
-      message: label,
+      message: label == '视觉' ? '视觉交互' : '文字交互',
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => onNavigate(target),
+          onTap: onTap,
           borderRadius: BorderRadius.circular(8),
           hoverColor: ConsoleColors.bg2,
-          child: SizedBox(
+          child: Container(
             width: 56,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 11),
-              child: Column(
-                children: [
-                  Icon(icon, size: 19, color: ConsoleColors.muted),
-                  const SizedBox(width: 0, height: 5),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: .6,
-                      color: ConsoleColors.dim,
-                    ),
-                  ),
-                ],
+            padding: const EdgeInsets.symmetric(vertical: 11),
+            decoration: BoxDecoration(
+              color: selected
+                  ? ConsoleColors.accent.withValues(alpha: .08)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: selected
+                    ? ConsoleColors.accent.withValues(alpha: .35)
+                    : Colors.transparent,
               ),
+            ),
+            child: Column(
+              children: [
+                Icon(icon, size: 19, color: color),
+                const SizedBox(height: 5),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: .4,
+                    color: selected ? ConsoleColors.accent : ConsoleColors.dim,
+                  ),
+                ),
+              ],
             ),
           ),
         ),

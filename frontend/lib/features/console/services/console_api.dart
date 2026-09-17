@@ -29,7 +29,6 @@ abstract interface class ConsoleApi {
     String instruction, {
     String? cameraSource,
     String? taskMode,
-    String? waveResponse,
   });
   Future<ConsoleSnapshot> cancelTask(String reason);
   Future<ConsoleSnapshot> setCameraSource(String source);
@@ -83,13 +82,11 @@ class HttpConsoleApi implements ConsoleApi {
     String instruction, {
     String? cameraSource,
     String? taskMode,
-    String? waveResponse,
   }) async => ConsoleSnapshot.fromJson(
     await _post('/api/v1/tasks', {
       'instruction': instruction,
       'cameraSource': cameraSource,
       'taskMode': taskMode,
-      'waveResponse': ?waveResponse,
     }),
   );
 

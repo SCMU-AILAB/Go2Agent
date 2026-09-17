@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/console_log.dart';
 import '../models/console_snapshot.dart';
+import '../models/dialog_turn.dart';
 import '../models/tool_call.dart';
 import '../services/console_api.dart';
 
@@ -49,12 +50,6 @@ class ConsoleController extends ChangeNotifier {
   String sessionId = '—';
   String cameraSource = 'demo';
   String taskMode = 'text';
-  String waveResponse = 'wave';
-  void setWaveResponse(String value) {
-    if (busy || !['wave', 'heart'].contains(value)) return;
-    waveResponse = value;
-    refresh();
-  }
 
   bool get gestureMode => taskMode == 'gesture';
 
@@ -79,6 +74,12 @@ class ConsoleController extends ChangeNotifier {
   String progressText = '等待执行';
   String modelOutput = '';
   String currentTask = '';
+
+  /// Local chat history for the dialog page (frontend-only; no backend field).
+  final List<DialogTurn> dialog = [];
+  bool _dialogPendingReply = false;
+  String _dialogLastTask = '';
+
   Duration modelDuration = Duration.zero;
 
   bool _initialized = false;
@@ -260,8 +261,72 @@ class ConsoleController extends ChangeNotifier {
     logs
       ..clear()
       ..addAll(snapshot.logs.take(500));
+    _recordDialogFromSnapshot(wasBusy: wasBusy);
     notifyListeners();
     _scheduleLogScroll();
+  }
+
+  void _recordDialogFromSnapshot({required bool wasBusy}) {
+    if (gestureMode) {
+      return;
+    }
+    final task = currentTask.trim();
+    if (busy && !wasBusy && task.isNotEmpty && task != _dialogLastTask) {
+      _dialogLastTask = task;
+      _dialogPendingReply = true;
+      dialog.add(
+        DialogTurn(
+          role: 'user',
+          text: task,
+          time: DateTime.now().toString().substring(11, 19),
+        ),
+      );
+      if (dialog.length > 200) {
+        dialog.removeRange(0, dialog.length - 200);
+      }
+    }
+    if (!busy && wasBusy && _dialogPendingReply) {
+      _dialogPendingReply = false;
+      final reply = _extractAssistantReply(modelOutput);
+      if (reply.isNotEmpty) {
+        dialog.add(
+          DialogTurn(
+            role: 'assistant',
+            text: reply,
+            time: DateTime.now().toString().substring(11, 19),
+          ),
+        );
+        if (dialog.length > 200) {
+          dialog.removeRange(0, dialog.length - 200);
+        }
+      }
+    }
+  }
+
+  static String _extractAssistantReply(String modelOutput) {
+    final lines = modelOutput
+        .split('\n')
+        .map((line) => line.trimRight())
+        .where((line) {
+          if (line.trim().isEmpty) return false;
+          if (line.startsWith('文本指令模式')) return false;
+          if (line.startsWith('已收到指令')) return false;
+          if (line.startsWith('视觉交互')) return false;
+          if (line.startsWith('执行失败')) return true;
+          if (line.startsWith('执行已中断')) return true;
+          return true;
+        })
+        .toList();
+    if (lines.isEmpty) return '';
+    // Drop the mode banner if it was the only first line.
+    return lines.join('\n').trim();
+  }
+
+  void clearDialog() {
+    dialog.clear();
+    _dialogPendingReply = false;
+    _dialogLastTask = '';
+    refresh();
   }
 
   @override
@@ -384,9 +449,6 @@ class ConsoleController extends ChangeNotifier {
         prompt,
         cameraSource: cameraSource,
         taskMode: taskMode,
-        waveResponse: gestureMode && robotModel == 'GO2'
-            ? waveResponse
-            : 'wave',
       );
       _applySnapshot(snapshot);
     } catch (error) {

@@ -1,33 +1,102 @@
 # Go2 Agent
 
-> 任务模式更新：新版控制台默认「文本指令」，开启真实相机也可发送比心、坐下等指令；
-> 「持续手势交互」需单独选择。下文 local 自动进入手势模式的说明仅适用于未传 taskMode 的旧客户端。
-> Go2 手势可选择挥手后打招呼或比心；直接比心请使用文本指令。详见 docs/go2-adapter.md。
+以 **Robot Skill Runtime** 为唯一动作执行边界。文本、麦克风和视觉都不能直接分发
+机器人动作。支持 `--robot g1|go2`（默认仍是 G1）。
 
-Go2 适配已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`，以及 `--robot go2`
-装配路径（CLI / FastAPI / perception）。Go2 使用 `register_go2_skills()` 与
-周期性刷新的移动技能；G1 `AudioClient` TTS 不会挂到 Go2。详见
-[Go2 Adapter 说明](docs/go2-adapter.md)。默认仍为 G1。
+Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、`--robot go2` 装配路径
+（CLI / FastAPI / perception）、`register_go2_skills()`、周期刷新的移动技能、
+原生动作目录（比心/跳舞等）以及文本/手势任务模式。G1 `AudioClient` TTS 不会挂到
+Go2。详见 [Go2 Adapter 说明](docs/go2-adapter.md)。
 
-## 控制台视觉接入（2026-09-12）
+## 控制台任务模式（文本 / 手势）
 
-Flutter控制台已接入原有滑动视频策略。后端选择本地相机时，提交任务启动持续视觉
-交互（握手/挥手/击掌），而不是仅把任务文字送给文本Agent。相机预览与模型共享
-旋转后的JPEG，决策、Skill结果与TTS状态通过现有REST/WebSocket快照展示。
-模拟视频源仍为原文本任务。详见 [前端运行说明](frontend/README.md)。
+新版控制台任务面板显式选择任务模式：
+
+| 模式 | 行为 |
+| --- | --- |
+| **文本指令**（默认） | 把指令交给文本 Agent 调工具；开启真实相机也可发送「比心」「坐下」「跳舞」 |
+| **持续手势交互** | 启动视觉 worker；必须 `cameraSource=local` |
+
+- 旧客户端省略 `taskMode` 时保持历史行为：`local` → 手势，`demo` → 文本。
+- 手势模式按**已确认手势 1:1** 映射技能：`wave`→`wave`（Go2 底层 `hello`）、`heart`→`heart`；
+  握手/击掌未注册则忽略。任务框文字只作视觉偏好上下文，**不会**发明未注册技能。
+- 文本 Agent **不接收图像**，即使预览开着也不会“看见”人或障碍。
+- 相机预览正常 ≠ 已选择文本模式。
+
+```json
+{"instruction":"给我比个心","cameraSource":"local","taskMode":"text"}
+{"instruction":"有人打招呼就打招呼，有人比心就比心","cameraSource":"local","taskMode":"gesture"}
+```
+
+## Go2 原生动作目录（`register_go2_skills`）
+
+与 G1 手臂动作隔离；只注册与 SportClient 语义一致的 Skill。SDK `status=0` 仅表示
+命令被接受，**不代表物理动作完成**；是否支持取决于真机固件。
+
+**默认自主目录（文本 Agent / API 可见）**
+
+| 类别 | Skills |
+| --- | --- |
+| 姿态 | `stand_up` / `stand_down` / `sit` / `rise_sit` / `balance_stand` |
+| 原生表演 | `hello` / `stretch` / `content` / `heart`（比心） / `scrape` / `dance1` / `dance2` |
+| 视觉别名 | `wave` → 底层 `hello`（不是人形手臂挥手） |
+| 开关（布尔 `flag`） | `pose`（`{"flag":true\|false}`） |
+| 短距移动 | `move_forward` / `move_backward` / `move_left` / `move_right` / `turn_left` / `turn_right` / `move` |
+| 停止 | `stop` / `stop_move` |
+
+**Operator-only（需 `--include-operator-only-skills`）**
+
+- 危险动作：`damp`、`front_flip`、`front_jump`、`front_pounce`、`left_flip`、`back_flip`，以及 flag 类 `hand_stand` / `free_bound` / `free_jump` / `walk_upright` / `switch_joystick`
+- 步态/模式：`recovery_stand`、`free_walk`、`static_walk`、`trot_run`、`economic_gait`、`switch_avoid_mode`，以及 `free_avoid` / `classic_walk` / `cross_step` / `auto_recover_set`
+
+该开关会把这些工具同时暴露给文本 Agent 和 API；operator-only 是**启动时目录划分**，
+不是额外的运行时权限检查。正常视觉自治不要打开。
+
+文本 Agent 对中文指令有固定映射（站起来→`stand_up`，比心→`heart`，跳舞→`dance1` 等），
+且禁止用 `hello`/`wave` 替代比心、跳舞、坐下、趴下或移动。完整说明见
+`src/agent/service.py` 的 `GO2_SYSTEM_PROMPT` 与 [Go2 Adapter](docs/go2-adapter.md)。
+
+**遥测**：Go2 Adapter 订阅 `rt/sportmodestate`，`get_state().details` 含 `mode`、
+`gait_type`、位置/速度/姿态、`error_code`；`telemetry_available` 仅在最近 2 秒有数据时为 true。
+
+**语音**：Go2 无 G1 `AudioClient` TTS；`VuiClient` 只有开关/音量/亮度，不能当 TTS。
+
+## 一键启动 Go2 控制台
+
+云端 Ollama / SSH 隧道需先就绪。此脚本连真机但**不会**自动提交动作任务：
 
 ```bash
-# 原云端Ollama服务和SSH隧道需保持运行；此命令不驱动机器人
+sh scripts/run-go2-console.sh
+# 默认：--robot go2 --hardware --network eth0 --camera-source local --no-audio
+# 网卡可用 GO2_NETWORK 覆盖；文本模型用 OLLAMA_MODEL / OLLAMA_HOST
+```
+
+## 控制台视觉接入
+
+Flutter 控制台已接入滑动视频策略。选择「持续手势交互」并使用本地相机时，才会启动
+持续视觉决策；选择「文本指令」时只把文字交给 Agent。相机预览与模型共享旋转后的
+JPEG，决策、Skill 结果与状态通过 REST/WebSocket 快照展示。详见
+[前端运行说明](frontend/README.md)。
+
+```bash
+# 原云端 Ollama 服务和 SSH 隧道需保持运行；此命令不驱动机器人
 .venv/bin/python -m app.api --camera-source local \
   --vision-model qwen3.5:9b --vision-url http://127.0.0.1:11435 --no-audio
 ```
 
-不要同时启动占用同一相机的 `run-remote-vision.sh`。前端点击“开始持续视觉交互”才会
-启动决策；停止任务会结束worker。连接真机由后端 `--hardware --network eth0` 决定，
-软件停止不是物理急停，API仅用于可信网络。
+不要同时启动占用同一相机的 `run-remote-vision.sh`。前端选择手势模式并开始任务才会
+启动视觉决策；停止任务会结束 worker。连接真机由后端 `--hardware --network eth0` 决定，
+软件停止不是物理急停，API 仅用于可信网络。
 
-一个以 Robot Skill Runtime 为执行边界的 Unitree G1 Agent。文本、麦克风和视觉
-事件都不能直接分发机器人动作；所有动作最终只能通过 SkillRuntime 执行。
+Go2 真机控制台示例（文本与视觉共用现有 Ollama 隧道；只配 `--vision-url` 不会自动配置文本模型）：
+
+```bash
+.venv/bin/python -m app.api --robot go2 --hardware --network eth0 \
+  --camera-source local --vision-rotation-deg 0 --no-audio \
+  --model qwen3.5:9b --ollama-url http://127.0.0.1:11435
+```
+
+架构上文本/麦克风路径示意如下（Go2 时 TTS 段会禁用；Adapter 换成 Go2）：
 
 ```text
 文本输入 ──────────────────────┐
@@ -42,7 +111,7 @@ Flutter控制台已接入原有滑动视频策略。后端选择本地相机时�
                               |
                          RobotSkill
                               |
-                    UnitreeG1Adapter
+                UnitreeG1Adapter / UnitreeGo2Adapter
                               |
                unitree_sdk2_cpp bindings
 ```
@@ -55,7 +124,7 @@ Flutter控制台已接入原有滑动视频策略。后端选择本地相机时�
 RealSense -> CameraFrame -----|
                               └-> HOG/depth safety
                                       |
-                 AgentDecision -> SkillRuntime -> G1
+                 AgentDecision -> SkillRuntime -> G1 / Go2
 ```
 
 相机持续采集 30 FPS，环形缓冲只保留最近 2 秒；视频策略默认以 500 ms 为目标间隔，
@@ -73,10 +142,10 @@ src/
 ├── adapters/    # LangChain tools、Whisper 输入、Unitree AudioClient
 ├── core/        # Skill Runtime 核心协议与执行器
 ├── perception/  # D435i 取流、人员检测、最小状态和事件检测
-├── robot/       # RobotAdapter、G1 SDK 适配器、模拟适配器
-└── skills/      # 具体 Robot Skill
+├── robot/       # RobotAdapter、G1/Go2 SDK 适配器、模拟适配器、factory
+└── skills/      # 具体 Robot Skill（g1_catalog / go2_catalog）
 
-frontend/        # Flutter G1 控制台
+frontend/        # Flutter 控制台（暗色 Mission Control UI）
 ```
 
 ## Wave 闭环验收
@@ -558,7 +627,8 @@ uv run --extra perception g1-perception \
 Decision Agent 的技能目录由当前 `SkillRegistry` 动态生成，新增 Skill 后不需要再
 维护另一份硬编码的技能白名单；每个动作的参数仍由对应 Skill 的 `SkillArgs` 校验。
 
-当前 G1 动作 Skill 由 `skills.register_g1_skills()` 统一注册。安全自治目录包括：
+当前 **G1** 动作 Skill 由 `skills.register_g1_skills()` 统一注册（Go2 请用上文
+`register_go2_skills()` 与原生动作目录，二者不会混用）。G1 安全自治目录包括：
 
 ```text
 手臂预设：wave / wave_hand / handshake / shake_hand / two_hand_kiss / left_kiss /

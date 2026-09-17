@@ -95,7 +95,6 @@ class FakeConsoleApi implements ConsoleApi {
   int updatePromptCalls = 0;
   int submitTaskCalls = 0;
   String? lastTaskMode;
-  String? lastWaveResponse;
   int cancelTaskCalls = 0;
   int setCameraSourceCalls = 0;
   int clearLogsCalls = 0;
@@ -168,13 +167,11 @@ class FakeConsoleApi implements ConsoleApi {
     String instruction, {
     String? cameraSource,
     String? taskMode,
-    String? waveResponse,
   }) async {
     submitTaskCalls += 1;
     lastInstruction = instruction;
     lastTaskCameraSource = cameraSource;
     lastTaskMode = taskMode;
-    lastWaveResponse = waveResponse;
     _payload = {
       ..._payload,
       'busy': true,

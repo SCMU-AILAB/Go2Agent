@@ -52,7 +52,7 @@ class Go2Bindings:
 class UnitreeGo2Config:
     network_interface: str = ""
     domain_id: int = 0
-    timeout_s: float = 1.0
+    timeout_s: float = 2.0
     # Application limits, not the hardware's maximum capabilities.
     max_forward_m_s: float = 0.3
     max_lateral_m_s: float = 0.3
@@ -115,6 +115,7 @@ _LOCO_ACTIONS = frozenset(
 _FLAG_ACTIONS = frozenset({
     "pose", "hand_stand", "free_bound", "free_jump", "free_avoid",
     "classic_walk", "walk_upright", "cross_step",
+    "switch_joystick", "auto_recover_set",
 })
 
 

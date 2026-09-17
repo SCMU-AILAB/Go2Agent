@@ -1,33 +1,75 @@
 import unittest
 
-from fastapi.testclient import TestClient
-
 from agent.social_vision import SocialVisionAgent
-from app.api import create_app
 from robot import RobotState
 from skills.go2_catalog import build_go2_autonomy_skills
-from tests import test_task_modes
-from tests.test_console_vision import VisionInvoker, wait_for
 from tests.test_vision_policy import FakeVisionInvoker, camera_frame
 
 
-class GestureResponseTests(unittest.IsolatedAsyncioTestCase):
-    async def test_heart_mapping_keeps_evidence_and_active_skill_checks(self):
-        for visible, active, action in [
-            (True, None, "execute_skill"),
-            (False, None, "ignore"),
-            (True, "heart", "continue"),
-        ]:
+class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_model_selected_heart_is_executed(self):
+        agent = SocialVisionAgent(
+            task_context="用户打招呼就打招呼，比耶或比心就比心",
+            generate_speech=True,
+            invoker=FakeVisionInvoker(
+                [
+                    {
+                        "action": "execute_skill",
+                        "skill": "heart",
+                        "observation": "peace sign near face",
+                        "hand_visible": True,
+                        "directed_at_robot": True,
+                        "present_in_latest": True,
+                        "speech": "给你比心",
+                    }
+                ]
+            ),
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(decision.action, "execute_and_speak")
+        self.assertEqual(decision.skill, "heart")
+        self.assertEqual(decision.speech, "给你比心")
+
+    async def test_model_selected_wave_is_executed(self):
+        agent = SocialVisionAgent(
+            task_context="有人打招呼就打招呼",
+            invoker=FakeVisionInvoker(
+                [
+                    {
+                        "action": "execute_skill",
+                        "skill": "wave",
+                        "observation": "person waving hand",
+                        "hand_visible": True,
+                        "directed_at_robot": True,
+                        "present_in_latest": True,
+                    }
+                ]
+            ),
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(decision.action, "execute_skill")
+        self.assertEqual(decision.skill, "wave")
+
+    async def test_unregistered_or_operator_skill_is_ignored(self):
+        for skill in ("damp", "front_flip", "not_a_skill"):
             agent = SocialVisionAgent(
-                wave_response="heart",
                 invoker=FakeVisionInvoker(
                     [
                         {
-                            "gesture": "wave",
-                            "hand_visible": visible,
+                            "action": "execute_skill",
+                            "skill": skill,
+                            "observation": "something",
+                            "hand_visible": True,
                             "directed_at_robot": True,
                             "present_in_latest": True,
-                            "evidence": "side_to_side",
                         }
                     ]
                 ),
@@ -36,23 +78,20 @@ class GestureResponseTests(unittest.IsolatedAsyncioTestCase):
                 [camera_frame(1), camera_frame(2)],
                 RobotState(hardware=False, connected=True),
                 build_go2_autonomy_skills(),
-                policy_context={"active_skill": active},
             )
-            self.assertEqual(decision.action, action)
-            if action == "execute_skill":
-                self.assertEqual(decision.skill, "heart")
+            self.assertEqual(decision.action, "ignore")
 
-    async def test_mapping_does_not_enable_unregistered_handshake(self):
+    async def test_unconfirmed_directed_at_robot_is_ignored(self):
         agent = SocialVisionAgent(
-            wave_response="heart",
             invoker=FakeVisionInvoker(
                 [
                     {
-                        "gesture": "handshake",
+                        "action": "execute_skill",
+                        "skill": "heart",
+                        "observation": "two-hand heart",
                         "hand_visible": True,
-                        "directed_at_robot": True,
+                        "directed_at_robot": False,
                         "present_in_latest": True,
-                        "evidence": "offered_hand",
                     }
                 ]
             ),
@@ -64,32 +103,52 @@ class GestureResponseTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(decision.action, "ignore")
 
-    def test_other_skills_cannot_be_selected_as_wave_response(self):
-        for skill in ["damp", "front_flip", "move_forward"]:
-            with self.assertRaises(ValueError):
-                SocialVisionAgent(wave_response=skill, invoker=FakeVisionInvoker([]))
-
-
-class GestureResponseApiTests(unittest.TestCase):
-    def test_local_wave_executes_selected_heart_and_reports_it(self):
-        backend = test_task_modes.TaskModeTests().build()
-        invoker = VisionInvoker()
-        backend._vision_agent_factory = lambda _: SocialVisionAgent(
-            invoker=invoker, generate_speech=True
+    async def test_ignore_with_no_skill_stays_silent(self):
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker(
+                [
+                    {
+                        "action": "ignore",
+                        "skill": None,
+                        "observation": "person walking by",
+                        "hand_visible": False,
+                        "directed_at_robot": False,
+                        "present_in_latest": False,
+                    }
+                ]
+            ),
         )
-        with TestClient(create_app(backend=backend)) as client:
-            wait_for(client, lambda s: s["camera"]["frameAvailable"])
-            response = client.post(
-                "/api/v1/tasks",
-                json={
-                    "instruction": "用户挥手时比心",
-                    "taskMode": "gesture",
-                    "waveResponse": "heart",
-                },
-            )
-            self.assertEqual(response.status_code, 202)
-            state = wait_for(
-                client, lambda s: any(t["name"] == "heart" for t in s["tools"])
-            )
-            self.assertNotIn("hello", [t["name"] for t in state["tools"]])
-            client.post("/api/v1/tasks/current/cancel", json={})
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(decision.action, "ignore")
+        self.assertIsNone(decision.skill)
+
+    async def test_active_skill_returns_continue(self):
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker(
+                [
+                    {
+                        "action": "execute_skill",
+                        "skill": "heart",
+                        "observation": "heart still held",
+                        "hand_visible": True,
+                        "directed_at_robot": True,
+                        "present_in_latest": True,
+                    }
+                ]
+            ),
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+            policy_context={"active_skill": "heart"},
+        )
+        self.assertEqual(decision.action, "continue")
+
+
+if __name__ == "__main__":
+    unittest.main()

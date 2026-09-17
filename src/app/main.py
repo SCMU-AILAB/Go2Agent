@@ -9,6 +9,8 @@ import os
 from adapters import (
     ASRError,
     AudioOutputError,
+    HostSpeakerError,
+    HostSpeakerOutput,
     MicrophoneASR,
     SpeechOutput,
     UnitreeAudioOutput,
@@ -50,8 +52,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="register low-level and dangerous SDK controls for explicit operator use",
     )
-    parser.add_argument("--no-audio", action="store_true", help="disable G1 AudioClient TTS")
+    parser.add_argument("--no-audio", action="store_true", help="disable speech output")
     parser.add_argument("--speaker-id", type=int, default=0)
+    parser.add_argument(
+        "--host-audio-device",
+        default=os.getenv("G1_AUDIO_DEVICE"),
+        help="ALSA/Pulse device for Go2 external speaker TTS",
+    )
+    parser.add_argument("--host-tts-voice", default="cmn")
     parser.add_argument("--record-seconds", type=float, default=5.0)
     parser.add_argument("--whisper-bin", default=None)
     parser.add_argument("--whisper-model", default=None)
@@ -81,7 +89,7 @@ async def _run_turn(
 
 async def run(args: argparse.Namespace) -> None:
     hardware_robot: HardwareRobot | None = None
-    audio: UnitreeAudioOutput | None = None
+    audio: SpeechOutput | None = None
     robot: RobotAdapter
     robot_model: RobotModel = args.robot
 
@@ -122,15 +130,23 @@ async def run(args: argparse.Namespace) -> None:
     try:
         if hardware_robot is not None:
             await hardware_robot.connect()
-            if robot_model == "go2":
-                if not args.no_audio:
-                    print("[audio] Go2 does not use G1 AudioClient TTS; audio disabled.")
-            elif not args.no_audio:
-                audio = UnitreeAudioOutput(
-                    hardware_robot,
-                    speaker_id=args.speaker_id,
+        if robot_model == "go2":
+            if not args.no_audio:
+                speaker = HostSpeakerOutput(
+                    voice=args.host_tts_voice,
+                    audio_device=args.host_audio_device,
                 )
-                await audio.connect()
+                if speaker.available:
+                    audio = speaker
+                    print("[audio] Go2 使用主机外接扬声器 TTS（espeak-ng）。")
+                else:
+                    print("[audio] 未找到 espeak-ng，外接扬声器不可用。")
+        elif hardware_robot is not None and not args.no_audio:
+            audio = UnitreeAudioOutput(
+                hardware_robot,
+                speaker_id=args.speaker_id,
+            )
+            await audio.connect()
 
         if microphone is None:
             print("文本模式：输入消息，输入 quit/exit 退出。")
@@ -154,7 +170,7 @@ async def run(args: argparse.Namespace) -> None:
 
             try:
                 await _run_turn(text, agent, audio)
-            except (AgentError, AudioOutputError) as exc:
+            except (AgentError, AudioOutputError, HostSpeakerError) as exc:
                 print(f"错误: {exc}")
             if args.once:
                 break
