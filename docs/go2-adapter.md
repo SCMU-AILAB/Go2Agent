@@ -149,3 +149,43 @@ ruff check src/robot/go2_adapter.py src/robot/__init__.py tests/test_go2_adapter
 ```
 
 测试注入 `Go2Bindings` 替身，不会导入原生 SDK、初始化真实 DDS 或连接机器人。
+
+## 文本指令与真实相机独立（2026-09-17）
+
+控制台任务面板现在显式选择「文本指令」或「持续手势交互」，默认文本指令。
+相机来源只控制预览输入，真实相机开启时也可以发送「比心」「坐下」「跳舞」。
+Go2 已注册原生 `heart`、`sit`、`dance1/dance2`，无需替换成 `hello`。
+文本 Agent 不接收图像，不提供视觉导航或避障保证；移动维持原有短距限制。
+Go2 手势模式可明确选择挥手后 `wave → hello` 或 `heart` 比心回应，握手/击掌安全忽略，
+文字仅作为交互偏好，回应动作由选项指定；不会执行任意文本动作或移动命令。
+
+API 提交文本任务并保留相机预览：
+
+```json
+{"instruction":"给我比个心","cameraSource":"local","taskMode":"text"}
+```
+
+持续手势任务用 `taskMode: "gesture"`，必须选择 `local`。
+旧客户端省略 `taskMode` 时保持历史行为（local=手势，demo=文本），需要更新前端
+才能看到模式选项。相机预览正常不代表已经选择了文本模式。
+
+现场排查：检查 `/api/v1/console` 的 `robot.details.robot_model` 为 `go2`，
+`/api/v1/skills` 含 `heart`；日志 `收到任务 [text/gesture]` 表示选用路径，
+`tool_count=0` 表示未选工具，具体工具的 `success=false` 表示执行失败。
+SDK 接受命令不等于真机动作完成；固件不支持时应显示返回错误，不替换为打招呼。
+
+本机 Jetson 现有模型服务部署示例（文本和视觉共用现有 Ollama 隧道）：
+
+```sh
+.venv/bin/python -m app.api --robot go2 --hardware --network eth0 \
+  --camera-source local --vision-rotation-deg 0 --no-audio \
+  --model qwen3.5:9b --ollama-url http://127.0.0.1:11435
+```
+
+必须确认文本模型地址与型号可用；只配置 `--vision-url` 不会自动配置文本 Agent。
+
+挥手后比心示例：`{"instruction":"有人挥手时比心回应","cameraSource":"local","taskMode":"gesture","waveResponse":"heart"}`。
+`waveResponse` 仅接受 `wave` 和 `heart`；heart 仅适用于 Go2 手势模式，仍要求可见、朝向机器人、最新帧存在的挥手证据。
+
+本机可用 `sh scripts/run-go2-console.sh` 重启同样配置的控制台。
+脚本连接真机但不会提交动作任务；网卡默认 eth0，可用 GO2_NETWORK 覆盖。

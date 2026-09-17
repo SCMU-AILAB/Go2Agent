@@ -12,70 +12,129 @@ class TaskInputPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return panel(
-      header: sectionTitle(Icons.send_outlined, '输入提示词'),
+      header: sectionTitle(Icons.terminal_outlined, 'TASK'),
       trailing: const Text(
         'Ctrl ↵',
-        style: TextStyle(color: Color(0xFFA4AFBD), fontSize: 12),
+        style: TextStyle(
+          color: ConsoleColors.faint,
+          fontSize: 11,
+          fontFamily: 'monospace',
+        ),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Wrap(
+              spacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('文本指令'),
+                  selected: !controller.gestureMode,
+                  onSelected: controller.busy
+                      ? null
+                      : (_) => controller.setTaskMode('text'),
+                ),
+                ChoiceChip(
+                  label: const Text('持续手势交互'),
+                  selected: controller.gestureMode,
+                  onSelected: controller.busy
+                      ? null
+                      : (_) => controller.setTaskMode('gesture'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (controller.gestureMode && controller.robotModel == 'GO2') ...[
+              Wrap(
+                spacing: 6,
+                children: [
+                  ChoiceChip(
+                    label: const Text('挥手后打招呼'),
+                    selected: controller.waveResponse == 'wave',
+                    onSelected: controller.busy
+                        ? null
+                        : (_) => controller.setWaveResponse('wave'),
+                  ),
+                  ChoiceChip(
+                    label: const Text('挥手后比心'),
+                    selected: controller.waveResponse == 'heart',
+                    onSelected: controller.busy
+                        ? null
+                        : (_) => controller.setWaveResponse('heart'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+            ],
             TextField(
               controller: controller.taskController,
               minLines: 3,
               maxLines: 5,
               style: const TextStyle(
-                color: Color(0xFF405069),
+                color: ConsoleColors.ink,
                 fontSize: 13,
-                height: 1.5,
+                height: 1.45,
               ),
+              cursorColor: ConsoleColors.accent,
               decoration: InputDecoration(
-                hintText: controller.cameraSource == 'local'
-                    ? '持续观察真实画面，回应握手、挥手或击掌。\n例如：有人向我挥手时，用中文回应。'
-                    : '输入文本任务（模拟视频不会发送给视觉模型）。',
-                fillColor: Colors.white,
+                hintText: controller.gestureMode
+                    ? (controller.robotModel == 'GO2'
+                          ? '持续观察挥手，按上方选定动作回应。握手/击掌不执行。'
+                          : '持续观察握手、挥手、击掌；不执行文字动作命令。')
+                    : '告诉机器人要做什么…',
+                fillColor: ConsoleColors.field,
               ),
             ),
-            const SizedBox(height: 13),
-            const Text(
-              '试试这些指令',
-              style: TextStyle(color: Color(0xFFA4AFBD), fontSize: 11),
-            ),
+            const SizedBox(height: 12),
+            hudLabel('SUGGESTED TASKS'),
             const SizedBox(height: 7),
             Wrap(
               spacing: 6,
               runSpacing: 6,
               children: [
-                if (controller.cameraSource == 'local')
-                  _suggestion('视觉交互', '持续观察手势，确认握手、挥手或击掌后回应，并简短说话。')
+                if (controller.gestureMode)
+                  _suggestion('回应挥手', '持续观察画面，只在确认有人向我挥手时按选定动作回应。')
                 else ...[
-                  _suggestion('观察环境', '观察前方环境，识别障碍物。'),
-                  _suggestion('向前移动', '向前移动 1 米，遇到障碍物停止。'),
+                  _suggestion('比心', '给我比个心。'),
+                  _suggestion('站起来', '站起来。'),
+                  _suggestion('坐下', '坐下。'),
+                  _suggestion('向前移动', '站稳后向前移动 0.2 米，然后停止。'),
+                  if (controller.robotModel == 'GO2')
+                    _suggestion('跳舞', '跳一段舞蹈一。'),
                 ],
-                _suggestion('挥手问好', '向我挥手打个招呼。'),
+                if (!controller.gestureMode) _suggestion('打招呼', '打个招呼。'),
               ],
             ),
-            const SizedBox(height: 17),
+            const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
-              height: 44,
+              height: 42,
               child: FilledButton.icon(
                 onPressed:
                     controller.backend &&
                         !controller.busy &&
+                        (!controller.gestureMode ||
+                            controller.cameraSource == 'local') &&
                         controller.taskController.text.trim().isNotEmpty
                     ? controller.submitTask
                     : null,
                 iconAlignment: IconAlignment.end,
-                icon: const Icon(Icons.send_outlined, size: 16),
-                label: Text(controller.cameraSource == 'local' ? '开始持续视觉交互' : '发送指令'),
+                icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                label: Text(controller.gestureMode ? '开始持续视觉交互' : '发送指令'),
                 style: FilledButton.styleFrom(
-                  backgroundColor: ConsoleColors.blue,
-                  disabledBackgroundColor: const Color(0xFFA5BAE8),
+                  backgroundColor: ConsoleColors.accent,
+                  foregroundColor: ConsoleColors.bg0,
+                  disabledBackgroundColor: ConsoleColors.bg2,
+                  disabledForegroundColor: ConsoleColors.faint,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(7),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'PingFang SC',
                   ),
                 ),
               ),
@@ -87,11 +146,15 @@ class TaskInputPanel extends StatelessWidget {
                     ? '请先启动后端服务'
                     : controller.busy
                     ? '任务执行中，可按 Esc 停止'
-                    : controller.cameraSource == 'local'
-                    ? '仅握手 / 挥手 / 击掌；持续运行至停止，不支持自由导航'
-                    : 'Ctrl / ⌘ + Enter 发送指令',
+                    : controller.gestureMode
+                    ? (controller.cameraSource != 'local'
+                          ? '请先选择本地相机；模拟画面不能识别手势'
+                          : controller.robotModel == 'GO2'
+                          ? '确认挥手后按所选动作回应；直接执行动作请选文本指令'
+                          : '仅握手 / 挥手 / 击掌；持续运行至停止')
+                    : '可保留真实相机预览；文本模式不看图、不提供视觉避障',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFFA5AFBE), fontSize: 11),
+                style: const TextStyle(color: ConsoleColors.dim, fontSize: 11),
               ),
             ),
           ],
@@ -109,13 +172,13 @@ class TaskInputPanel extends StatelessWidget {
         );
       },
       style: OutlinedButton.styleFrom(
-        foregroundColor: const Color(0xFF7B8BA3),
-        backgroundColor: const Color(0xFFF5F7FA),
-        side: const BorderSide(color: Color(0xFFE9EDF3)),
+        foregroundColor: ConsoleColors.muted,
+        backgroundColor: ConsoleColors.field,
+        side: const BorderSide(color: ConsoleColors.line),
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-        minimumSize: const Size(0, 30),
+        minimumSize: const Size(0, 28),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-        textStyle: const TextStyle(fontSize: 11),
+        textStyle: const TextStyle(fontSize: 11, fontFamily: 'PingFang SC'),
       ),
       child: Text(label),
     );

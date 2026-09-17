@@ -344,10 +344,7 @@ class ConsoleBackend(SkillToolObserver):
                 if self.hardware_robot is not None:
                     await self.hardware_robot.connect()
                     self.robot_connected = True
-                    if (
-                        self.config.audio_enabled
-                        and self.config.robot_model != "go2"
-                    ):
+                    if self.config.audio_enabled and self.config.robot_model != "go2":
                         self._audio = UnitreeAudioOutput(
                             self.hardware_robot,
                             speaker_id=self.config.speaker_id,
@@ -390,7 +387,7 @@ class ConsoleBackend(SkillToolObserver):
                 await self._log(
                     "INFO",
                     "backend",
-                    f"后端已启动 · {model_label} · {mode}模式。",
+                    f"后端已启动 · {model_label} · {mode}模式 · skill_count={len(self.runtime.registry.list())}。",
                 )
                 await self._log("INFO", "agent", "Agent 与 SkillRuntime 已就绪。")
                 self._emit_state()
@@ -576,9 +573,7 @@ class ConsoleBackend(SkillToolObserver):
                 "perception.safety",
                 "深度安全停止：仅限制底盘，非手臂安全保证。",
             )
-            await worker.stop_locomotion_for_safety(
-                "console depth safety stop"
-            )
+            await worker.stop_locomotion_for_safety("console depth safety stop")
         except Exception as exc:  # noqa: BLE001 - isolate the camera producer
             await self._log(
                 "ERROR",
@@ -627,6 +622,8 @@ class ConsoleBackend(SkillToolObserver):
         instruction: str,
         *,
         camera_source: str | None = None,
+        task_mode: Literal["text", "gesture"] | None = None,
+        wave_response: Literal["wave", "heart"] = "wave",
     ) -> ConsoleSnapshot:
         instruction = instruction.strip()
         if not instruction:
@@ -636,9 +633,22 @@ class ConsoleBackend(SkillToolObserver):
         async with self._task_lock:
             if self.busy:
                 raise TaskConflict("another task is already running")
+            # Omitted mode preserves legacy clients; new clients choose explicitly.
+            source = camera_source or self.camera_source
+            mode = task_mode or ("gesture" if source == "local" else "text")
+            if mode not in {"text", "gesture"}:
+                raise ValueError("task_mode must be text or gesture")
+            if mode == "gesture" and source != "local":
+                raise ValueError("手势交互需要真实相机；模拟画面不能用于手势识别")
+            if wave_response not in {"wave", "heart"}:
+                raise ValueError("unsupported wave response")
+            if wave_response == "heart" and (
+                mode != "gesture" or self.config.robot_model != "go2"
+            ):
+                raise ValueError("挥手后比心只适用于 Go2 手势模式")
             if camera_source is not None:
                 await self.set_camera_source(camera_source)
-            if self.camera_source == "local" and self.camera_status != "ready":
+            if mode == "gesture" and self.camera_status != "ready":
                 raise PerceptionError("本地相机未就绪，不能启动视觉任务")
             self.task_id = uuid.uuid4().hex
             self.busy = True
@@ -653,33 +663,31 @@ class ConsoleBackend(SkillToolObserver):
             self.model_duration_s = 0.0
             self.tools.clear()
             self._active_task = asyncio.create_task(
-                self._run_task(self.task_id, instruction),
+                self._run_task(self.task_id, instruction, mode, wave_response),
                 name=f"g1-console-task-{self.task_id[:8]}",
             )
-        await self._log("INFO", "agent", f"收到任务：{instruction}")
+        await self._log(
+            "INFO",
+            "agent",
+            f"收到任务 [{mode}] · robot={self.config.robot_model} · camera={self.camera_source}：{instruction}",
+        )
         self._emit_state()
         return self.snapshot()
 
-    async def _run_task(self, task_id: str, instruction: str) -> None:
+    async def _run_task(
+        self, task_id: str, instruction: str, mode: str, wave_response: str = "wave"
+    ) -> None:
         started = time.monotonic()
         try:
-            if self.camera_source == "local":
-                await self._run_vision_task(instruction)
+            if mode == "gesture":
+                await self._run_vision_task(instruction, wave_response)
                 return
-            camera_result = {
-                "source": self.camera_source,
-                "mode": "d435i" if self.camera_source == "local" else "simulated",
-                "frame_available": (
-                    self.latest_frame is not None
-                    if self.camera_source == "local"
-                    else True
-                ),
-                "observation": self.latest_observation,
-            }
-            self._record_tool(
-                "camera.get_frame", {"source": self.camera_source}, camera_result
+            # Text tasks do not supply images to RobotAgent. Keep preview running,
+            # but do not advertise a fictitious camera tool or visual navigation.
+            self.model_output = (
+                "文本指令模式：根据指令调用已注册技能；相机仅预览，不提供视觉导航。\n"
             )
-            await self._log("INFO", "tools", "camera.get_frame → 返回成功")
+            await self._log("INFO", "agent", "文本任务路由 → RobotAgent → SkillRuntime")
             self.progress = 40
             self.progress_text = "正在规划任务"
             self.active_step = 1
@@ -699,11 +707,21 @@ class ConsoleBackend(SkillToolObserver):
             if self.task_id != task_id:
                 return
             self.progress = 100
-            self.progress_text = "执行完成"
+            tool_count = len(self.tools)
+            self.progress_text = (
+                "执行失败"
+                if self.skill_status == "FAILED"
+                else ("指令处理完成" if tool_count else "已回复，未调用技能")
+            )
             self.active_step = 3
             self.model_status = "已完成"
             if self.skill_status == "RUNNING":
-                self.skill_status = "DONE"
+                self.skill_status = "DONE" if tool_count else "IDLE"
+            await self._log(
+                "INFO",
+                "agent",
+                f"文本任务结束 · tool_count={tool_count} · skill_status={self.skill_status}",
+            )
             self.busy = False
             self.task_count += 1
             await self._log("INFO", "agent", "任务执行完成。")
@@ -736,9 +754,13 @@ class ConsoleBackend(SkillToolObserver):
                 self._active_task = None
             self._emit_state()
 
-    async def _run_vision_task(self, instruction: str) -> None:
+    async def _run_vision_task(
+        self, instruction: str, wave_response: str = "wave"
+    ) -> None:
         """Continuous, cancellable vision task, reusing the CLI execution boundary."""
         agent = self._vision_agent_factory(instruction)
+        agent.wave_response = wave_response
+        await self._log("INFO", "vision", f"确认挥手后的回应技能：{wave_response}")
         worker = VisionPolicyWorker(
             self.runtime,
             agent,
@@ -769,7 +791,11 @@ class ConsoleBackend(SkillToolObserver):
             await self._log(
                 "INFO",
                 "vision",
-                "已接入实时RGB窗口与SkillRuntime；范围：握手/挥手/击掌。",
+                (
+                    f"Go2 手势模式：挥手 → {'heart' if wave_response == 'heart' else 'hello'}；握手/击掌忽略。直接动作请选文本指令。"
+                    if self.config.robot_model == "go2"
+                    else "手势模式：握手/挥手/击掌；其他动作请选文本指令。"
+                ),
             )
             while True:
                 await self._check_vision_camera()

@@ -48,12 +48,30 @@ class ConsoleController extends ChangeNotifier {
   int cameraFps = 30;
   String sessionId = '—';
   String cameraSource = 'demo';
+  String taskMode = 'text';
+  String waveResponse = 'wave';
+  void setWaveResponse(String value) {
+    if (busy || !['wave', 'heart'].contains(value)) return;
+    waveResponse = value;
+    refresh();
+  }
+
+  bool get gestureMode => taskMode == 'gesture';
+
+  void setTaskMode(String mode) {
+    if (busy || (mode != 'text' && mode != 'gesture')) return;
+    taskMode = mode;
+    refresh();
+  }
+
   String cameraLabel = '模拟视频源';
   String cameraStatus = 'idle';
   String cameraFramePath = '/api/v1/camera/frame.jpg';
   String? cameraError;
   bool cameraFrameAvailable = false;
   String robotMode = 'simulation';
+  String? robotModel;
+  bool? telemetryAvailable;
   String logLevel = 'ALL';
   String modelStatus = '待命';
   String skillStatus = 'IDLE';
@@ -71,6 +89,8 @@ class ConsoleController extends ChangeNotifier {
 
   bool get isActive => !_disposed;
   bool get isHardware => robotMode == 'hardware';
+  String get robotModelLabel => robotModel ?? 'ROBOT';
+  bool get telemetryUnavailable => telemetryAvailable == false;
   String get apiBaseUrl => api.baseUri.toString();
   String get cameraFrameUrl =>
       api.cameraFrameUri(cameraFramePath, cameraFrameVersion).toString();
@@ -201,6 +221,8 @@ class ConsoleController extends ChangeNotifier {
     taskCount = snapshot.taskCount;
     latency = snapshot.latency;
     robotMode = snapshot.robotMode;
+    robotModel = snapshot.robotModel;
+    telemetryAvailable = snapshot.telemetryAvailable;
     robotConnected = snapshot.robotConnected;
     cameraLabel = snapshot.cameraLabel;
     cameraStatus = snapshot.cameraStatus;
@@ -353,8 +375,19 @@ class ConsoleController extends ChangeNotifier {
       onMessage('请先保存修改后的系统提示词');
       return;
     }
+    if (gestureMode && cameraSource != 'local') {
+      onMessage('手势交互需要先选择本地相机');
+      return;
+    }
     try {
-      final snapshot = await api.submitTask(prompt, cameraSource: cameraSource);
+      final snapshot = await api.submitTask(
+        prompt,
+        cameraSource: cameraSource,
+        taskMode: taskMode,
+        waveResponse: gestureMode && robotModel == 'GO2'
+            ? waveResponse
+            : 'wave',
+      );
       _applySnapshot(snapshot);
     } catch (error) {
       addLog('ERROR', 'agent', '任务提交失败：$error');

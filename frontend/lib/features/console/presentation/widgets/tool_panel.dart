@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/console_colors.dart';
 import '../../controllers/console_controller.dart';
 import 'console_widgets.dart';
 
@@ -11,17 +12,22 @@ class ToolPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final child = controller.tools.isEmpty
-        ? emptyState(Icons.code_rounded, '暂无工具调用', '查看调用参数与返回结果')
+        ? emptyState(
+            Icons.handyman_outlined,
+            '暂无工具调用',
+            'Agent 调用 Skill 时会显示参数与结果',
+          )
         : ListView.separated(
             padding: EdgeInsets.zero,
             itemCount: controller.tools.length,
             separatorBuilder: (context, index) => const SizedBox(height: 8),
             itemBuilder: (context, index) {
               final tool = controller.tools[index];
-              return Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFFE8EDF4)),
+              return Material(
+                color: ConsoleColors.field,
+                shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(6),
+                  side: const BorderSide(color: ConsoleColors.lineSoft),
                 ),
                 child: Theme(
                   data: Theme.of(
@@ -31,31 +37,35 @@ class ToolPanel extends StatelessWidget {
                     tilePadding: const EdgeInsets.symmetric(horizontal: 9),
                     childrenPadding: EdgeInsets.zero,
                     dense: true,
+                    iconColor: ConsoleColors.muted,
+                    collapsedIconColor: ConsoleColors.dim,
                     title: Text(
                       tool.name,
                       style: const TextStyle(
-                        color: Color(0xFF62799B),
+                        color: ConsoleColors.accent,
                         fontSize: 12,
                         fontFamily: 'monospace',
+                        fontFamilyFallback: ['PingFang SC'],
                       ),
                     ),
                     trailing: const Icon(
                       Icons.check_rounded,
-                      size: 17,
-                      color: Color(0xFF28A57D),
+                      size: 16,
+                      color: ConsoleColors.green,
                     ),
                     children: [
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(9),
-                        color: const Color(0xFFF8FAFF),
+                        color: ConsoleColors.bg2,
                         child: Text(
                           tool.payload,
                           style: const TextStyle(
-                            color: Color(0xFF8798AE),
+                            color: ConsoleColors.muted,
                             fontSize: 11,
-                            height: 1.65,
+                            height: 1.55,
                             fontFamily: 'monospace',
+                            fontFamilyFallback: ['PingFang SC'],
                           ),
                         ),
                       ),
@@ -67,14 +77,14 @@ class ToolPanel extends StatelessWidget {
           );
     return executionPanel(
       title: coloredTitle(
-        Icons.code_rounded,
-        '工具调用',
-        const Color(0xFFFFF5E6),
-        const Color(0xFFCC9C4C),
+        Icons.handyman_outlined,
+        'TOOL CALLS',
+        Colors.transparent,
+        ConsoleColors.amber,
       ),
       trailing: tag(
         '${controller.tools.length}',
-        foreground: const Color(0xFF7D8DA4),
+        foreground: ConsoleColors.muted,
       ),
       child: child,
       footer: Row(

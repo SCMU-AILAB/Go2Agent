@@ -17,4 +17,7 @@ typings/
 
 .codex/
 .agents/
+.workbuddy/
 debug/vision/
+.DS_Store
+**/.DS_Store

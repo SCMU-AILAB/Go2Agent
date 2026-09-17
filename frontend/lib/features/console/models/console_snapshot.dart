@@ -23,6 +23,8 @@ class ConsoleSnapshot {
     required this.taskCount,
     required this.robotMode,
     required this.robotConnected,
+    required this.robotModel,
+    required this.telemetryAvailable,
     required this.cameraLabel,
     required this.cameraStatus,
     required this.cameraFrameAvailable,
@@ -39,6 +41,13 @@ class ConsoleSnapshot {
   factory ConsoleSnapshot.fromJson(Map<String, dynamic> json) {
     final robot = _asMap(json['robot']);
     final camera = _asMap(json['camera']);
+    final robotDetails = _asMap(robot['details']);
+    final rawModel = (robotDetails['robot_model'] as String?)?.toLowerCase();
+    final robotModel = switch (rawModel) {
+      'g1' => 'G1',
+      'go2' => 'GO2',
+      _ => null,
+    };
     return ConsoleSnapshot(
       backend: json['backend'] as bool? ?? false,
       starting: json['starting'] as bool? ?? false,
@@ -60,6 +69,8 @@ class ConsoleSnapshot {
       taskCount: (json['taskCount'] as num?)?.toInt() ?? 0,
       robotMode: robot['mode'] as String? ?? 'simulation',
       robotConnected: robot['connected'] as bool? ?? false,
+      robotModel: robotModel,
+      telemetryAvailable: robotDetails['telemetry_available'] as bool?,
       cameraLabel: camera['label'] as String? ?? '模拟视频源',
       cameraStatus: camera['status'] as String? ?? 'idle',
       cameraFrameAvailable: camera['frameAvailable'] as bool? ?? false,
@@ -99,6 +110,8 @@ class ConsoleSnapshot {
   final int taskCount;
   final String robotMode;
   final bool robotConnected;
+  final String? robotModel;
+  final bool? telemetryAvailable;
   final String cameraLabel;
   final String cameraStatus;
   final bool cameraFrameAvailable;

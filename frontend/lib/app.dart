@@ -12,9 +12,11 @@ class G1ConsoleApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'G1 · 机器人控制台',
+      title: 'AI Robotics Mission Control',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
+      theme: AppTheme.dark,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.dark,
       home: G1ConsolePage(api: api),
     );
   }

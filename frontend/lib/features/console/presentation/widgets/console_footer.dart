@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/theme/console_colors.dart';
 import '../../controllers/console_controller.dart';
 
 class ConsoleFooter extends StatelessWidget {
@@ -15,46 +16,46 @@ class ConsoleFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mobile = width <= 640;
+    final text = Text(
+      _statusText,
+      style: const TextStyle(
+        color: ConsoleColors.faint,
+        fontSize: 10,
+        fontFamily: 'monospace',
+        fontFamilyFallback: ['PingFang SC'],
+      ),
+    );
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 20),
+      padding: const EdgeInsets.symmetric(vertical: 16),
       child: mobile
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'G1 · Robot Control Console',
-                  style: TextStyle(color: Color(0xFFA9B2C0), fontSize: 10),
+                  'AI Robotics Mission Control',
+                  style: TextStyle(color: ConsoleColors.faint, fontSize: 10),
                 ),
-                SizedBox(height: 5),
-                Text(
-                  _statusText,
-                  style: const TextStyle(
-                    color: Color(0xFFA9B2C0),
-                    fontSize: 10,
-                  ),
-                ),
+                const SizedBox(height: 4),
+                text,
               ],
             )
           : Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
-                  'G1 · Robot Control Console',
-                  style: TextStyle(color: Color(0xFFA9B2C0), fontSize: 10),
+                  'AI Robotics Mission Control · G1 / Go2',
+                  style: TextStyle(color: ConsoleColors.faint, fontSize: 10),
                 ),
-                Text(
-                  _statusText,
-                  style: const TextStyle(
-                    color: Color(0xFFA9B2C0),
-                    fontSize: 10,
-                  ),
-                ),
+                text,
               ],
             ),
     );
   }
 
-  String get _statusText => controller.isHardware
-      ? 'FastAPI → SkillRuntime → Unitree G1'
-      : 'FastAPI → SkillRuntime → SimulatedRobotAdapter';
+  String get _statusText {
+    final robot = controller.robotModelLabel;
+    return controller.isHardware
+        ? 'FastAPI → SkillRuntime → Unitree $robot'
+        : 'FastAPI → SkillRuntime → SimulatedRobotAdapter';
+  }
 }
