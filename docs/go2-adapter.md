@@ -109,6 +109,38 @@ Go2 移动技能会以约 20 ms 间隔刷新 `move` 速度，并在 `finally` / 
 写日志。当前 bindings 中的 Go2 `VuiClient` 只提供语音开关、音量和灯光亮度设置/读取，
 没有文本播报接口，因此不能作为 TTS 使用；Go2 文本播报需要另外的音频输出方案。
 
+## 扩展动作目录
+
+新增的默认 Skills：`stretch`、`content`、`heart`（比心）、`scrape`、
+`dance1`、`dance2`、`pose`。
+
+以下 Skills 通过 `--include-operator-only-skills` 注册：
+`front_flip`、`front_jump`、`front_pounce`、`left_flip`、`back_flip`、
+`hand_stand`、`free_walk`、`free_bound`、`free_jump`、`free_avoid`、
+`classic_walk`、`walk_upright`、`cross_step`、`static_walk`、`trot_run`、
+`economic_gait`、`switch_avoid_mode`，以及原有的 `damp` / `recovery_stand`。
+该选项会把这些工具同时暴露给文本 Agent 和 API；operator-only 是启动时目录划分，
+并非额外的运行时权限检查。
+
+`pose`、`hand_stand`、`free_bound`、`free_jump`、`free_avoid`、`classic_walk`、
+`walk_upright`、`cross_step` 必须显式传入 JSON 布尔值 `flag`，不接受字符串或整数。
+其余上述动作不需要参数。动作资源统一为 `mobile_base`，避免命令并发争用。
+
+```python
+await runtime.execute("heart")
+await runtime.execute("dance1")
+await runtime.execute("pose", flag=True)
+await runtime.execute("pose", flag=False)
+```
+
+比心也可通过 `POST /api/v1/skills/heart/execute`、请求体 `{"arguments":{}}` 调用。
+文本 Agent 的工具目录从 Registry 自动生成；原有社交视觉分类器仍只映射其支持的
+手势，注册新 Skill 不会自动扩展视觉手势识别类别。
+
+本次补齐的是上述原生动作，不含 `euler`、`speed_level`、`switch_joystick`、
+`auto_recover_set/get` 等控制/查询接口。返回成功表示 SDK 接受命令，
+不代表物理动作已完成；是否支持具体动作仍取决于真机固件。
+
 ## 无硬件测试
 
 ```bash

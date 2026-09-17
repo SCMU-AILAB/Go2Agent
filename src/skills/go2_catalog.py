@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from typing import cast
 
-from core.models import SkillArgs
+from pydantic import Field, StrictBool
+
+from core.context import SkillContext
+from core.models import SkillArgs, SkillResult
 from core.runtime import SkillRuntime
 from core.skill import RobotSkill
 
@@ -57,6 +60,12 @@ GO2_AUTONOMY_POSTURES = (
         "hello",
         "Play the Go2 native greeting action (hello).",
     ),
+    PostureSpec("stretch", "stretch", "Play Go2's native stretch action (伸懒腰)."),
+    PostureSpec("content", "content", "Play Go2's native content action."),
+    PostureSpec("heart", "heart", "Play Go2's native heart gesture (比心)."),
+    PostureSpec("scrape", "scrape", "Play Go2's native scrape action."),
+    PostureSpec("dance1", "dance1", "Play Go2's first native dance (舞蹈一)."),
+    PostureSpec("dance2", "dance2", "Play Go2's second native dance (舞蹈二)."),
 )
 
 GO2_OPERATOR_POSTURES = (
@@ -73,7 +82,77 @@ GO2_OPERATOR_POSTURES = (
         "Request Go2 recovery stand.",
         operator_only=True,
     ),
+    *(
+        PostureSpec(name, name, description, operator_only=True, dangerous=True)
+        for name, description in (
+            ("front_flip", "Perform Go2's front flip (前空翻)."),
+            ("front_jump", "Perform Go2's front jump (前跳)."),
+            ("front_pounce", "Perform Go2's front pounce (前扑)."),
+            ("left_flip", "Perform Go2's left flip (左侧翻)."),
+            ("back_flip", "Perform Go2's back flip (后空翻)."),
+        )
+    ),
+    *(
+        PostureSpec(name, name, description, operator_only=True)
+        for name, description in (
+            ("free_walk", "Select Go2's free walk mode."),
+            ("static_walk", "Select Go2's static walk gait."),
+            ("trot_run", "Select Go2's trot/run gait."),
+            ("economic_gait", "Select Go2's economic gait."),
+            (
+                "switch_avoid_mode",
+                "Invoke Go2's native obstacle-avoidance mode switch.",
+            ),
+        )
+    ),
 )
+
+GO2_FLAG_SPECS = (
+    PostureSpec("pose", "pose", "Enable/disable Go2 pose mode with flag."),
+    *(
+        PostureSpec(name, name, description, operator_only=True, dangerous=dangerous)
+        for name, description, dangerous in (
+            ("hand_stand", "Enable/disable Go2 hand stand (倒立).", True),
+            ("free_bound", "Enable/disable Go2 free bound mode.", True),
+            ("free_jump", "Enable/disable Go2 free jump mode.", True),
+            ("free_avoid", "Enable/disable Go2 free avoidance mode.", False),
+            ("classic_walk", "Enable/disable Go2 classic walk mode.", False),
+            ("walk_upright", "Enable/disable Go2 upright walking.", True),
+            ("cross_step", "Enable/disable Go2 cross step mode.", False),
+        )
+    ),
+)
+
+
+class Go2FlagArgs(SkillArgs):
+    flag: StrictBool = Field(description="Explicit true to enable, false to disable.")
+
+
+class Go2FlagSkill(RobotSkill[Go2FlagArgs]):
+    args_model = Go2FlagArgs
+
+    def __init__(self, spec: PostureSpec) -> None:
+        self.spec = spec
+        self.metadata = PostureSkill(spec).metadata
+
+    async def check_preconditions(
+        self,
+        ctx: SkillContext,
+        args: Go2FlagArgs,
+    ) -> tuple[bool, str]:
+        state = await ctx.robot.get_state()
+        if state.hardware and not state.connected:
+            return False, "robot is not connected"
+        return True, ""
+
+    async def execute(self, ctx: SkillContext, args: Go2FlagArgs) -> SkillResult:
+        await ctx.robot.execute_loco_action(self.spec.sdk_action, {"flag": args.flag})
+        return SkillResult.ok(
+            f"{self.spec.sdk_action} command accepted",
+            sdk_action=self.spec.sdk_action,
+            flag=args.flag,
+            completion_verified=False,
+        )
 
 
 def _go2_wave_hello_skill() -> PostureSkill:
@@ -98,6 +177,7 @@ def _go2_wave_hello_skill() -> PostureSkill:
 def build_go2_autonomy_skills() -> tuple[RobotSkill[SkillArgs], ...]:
     skills = (
         *(PostureSkill(spec) for spec in GO2_AUTONOMY_POSTURES),
+        *(Go2FlagSkill(spec) for spec in GO2_FLAG_SPECS if not spec.operator_only),
         _go2_wave_hello_skill(),
         Go2MoveForwardSkill(),
         Go2MoveBackwardSkill(),
@@ -113,7 +193,10 @@ def build_go2_autonomy_skills() -> tuple[RobotSkill[SkillArgs], ...]:
 
 
 def build_go2_operator_skills() -> tuple[RobotSkill[SkillArgs], ...]:
-    skills = (PostureSkill(spec) for spec in GO2_OPERATOR_POSTURES)
+    skills = (
+        *(PostureSkill(spec) for spec in GO2_OPERATOR_POSTURES),
+        *(Go2FlagSkill(spec) for spec in GO2_FLAG_SPECS if spec.operator_only),
+    )
     return cast(tuple[RobotSkill[SkillArgs], ...], tuple(skills))
 
 

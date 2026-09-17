@@ -94,8 +94,28 @@ _LOCO_ACTIONS = frozenset(
         "recovery_stand",
         "hello",
         "stretch",
+        "content",
+        "heart",
+        "scrape",
+        "dance1",
+        "dance2",
+        "front_flip",
+        "front_jump",
+        "front_pounce",
+        "left_flip",
+        "back_flip",
+        "free_walk",
+        "static_walk",
+        "trot_run",
+        "economic_gait",
+        "switch_avoid_mode",
     }
 )
+
+_FLAG_ACTIONS = frozenset({
+    "pose", "hand_stand", "free_bound", "free_jump", "free_avoid",
+    "classic_walk", "walk_upright", "cross_step",
+})
 
 
 class UnitreeGo2Adapter:
@@ -210,7 +230,7 @@ class UnitreeGo2Adapter:
                     "telemetry_available": telemetry_available,
                     "completion_feedback_available": telemetry_available,
                     **details,
-                    "supported_loco_actions": sorted(_LOCO_ACTIONS),
+                    "supported_loco_actions": sorted(_LOCO_ACTIONS | _FLAG_ACTIONS),
                     "arm_action_presets": False,
                 },
             )
@@ -285,16 +305,21 @@ class UnitreeGo2Adapter:
     async def execute_loco_action(
         self, action: str, arguments: Mapping[str, object] | None = None
     ) -> None:
-        if action not in _LOCO_ACTIONS:
+        if action not in _LOCO_ACTIONS | _FLAG_ACTIONS:
             raise RobotCommandError(f"unsupported Go2 loco action: {action}")
-        if arguments:
+        parameters = dict(arguments or {})
+        if action in _FLAG_ACTIONS:
+            if set(parameters) != {"flag"} or type(parameters["flag"]) is not bool:
+                raise RobotCommandError(f"Go2 {action} requires exactly one boolean flag")
+        elif parameters:
             raise RobotCommandError(f"Go2 {action} does not accept arguments")
 
         def execute() -> None:
             method = getattr(self._require_sport(), action, None)
             if not callable(method):
                 raise RobotCommandError(f"Go2 bindings do not provide {action}")
-            self._require_success(action, method())
+            status = method(parameters["flag"]) if action in _FLAG_ACTIONS else method()
+            self._require_success(action, status)
 
         await self._run_native(action, execute)
 
