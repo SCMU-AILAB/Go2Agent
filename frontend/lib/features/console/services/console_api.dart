@@ -34,6 +34,9 @@ abstract interface class ConsoleApi {
   Future<ConsoleSnapshot> cancelTask(String reason);
   Future<ConsoleSnapshot> setCameraSource(String source);
   Future<ConsoleSnapshot> clearLogs();
+  Future<ConsoleSnapshot> startVoice();
+  Future<ConsoleSnapshot> stopVoice();
+  Future<ConsoleSnapshot> speak(String text);
   Future<Uint8List> fetchCameraFrame(String path);
   Stream<Map<String, dynamic>> events();
   Uri cameraFrameUri(String path, int version);
@@ -108,6 +111,19 @@ class HttpConsoleApi implements ConsoleApi {
   @override
   Future<ConsoleSnapshot> clearLogs() async =>
       ConsoleSnapshot.fromJson(await _delete('/api/v1/logs'));
+
+  @override
+  Future<ConsoleSnapshot> startVoice() async =>
+      ConsoleSnapshot.fromJson(await _post('/api/v1/voice/start'));
+
+  @override
+  Future<ConsoleSnapshot> stopVoice() async =>
+      ConsoleSnapshot.fromJson(await _post('/api/v1/voice/stop'));
+
+  @override
+  Future<ConsoleSnapshot> speak(String text) async => ConsoleSnapshot.fromJson(
+    await _post('/api/v1/voice/speak', {'text': text}),
+  );
 
   @override
   Future<Uint8List> fetchCameraFrame(String path) async {

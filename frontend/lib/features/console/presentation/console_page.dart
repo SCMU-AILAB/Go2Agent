@@ -14,6 +14,7 @@ import 'widgets/skill_panel.dart';
 import 'widgets/robot_status_panel.dart';
 import 'widgets/prompt_panel.dart';
 import 'widgets/backend_panel.dart';
+import 'widgets/voice_panel.dart';
 import 'widgets/task_input_panel.dart';
 import 'widgets/stop_task_button.dart';
 import 'widgets/log_panel.dart';
@@ -254,6 +255,7 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
       TaskInputPanel(controller: controller),
       StopTaskButton(controller: controller),
       BackendPanel(controller: controller, anchorKey: anchors.system),
+      VoicePanel(controller: controller),
       PromptPanel(controller: controller),
     ];
     if (width <= 930 && width > 640) {

@@ -86,7 +86,9 @@ TTS成功返回不等于麦克风确认播报完成。模拟后端不连接真�
 错误显示在界面，可排除故障后重新提交。停止任务会取消worker，但不是物理急停。
 
 实机须先完成现场检查、备好急停，再在后端命令增加 `--hardware --network eth0`，
-需要发声则去掉 `--no-audio`。不要同时运行独立视觉CLI和控制台后端。
+Go2 外接麦克风和扬声器时增加 `--voice --audio-input-device pulse
+--audio-output-device pulse`；若提供 Piper 中文模型，再增加 `--piper-model PATH`。
+前端 VOICE 面板可查看最新转写/回复并启停监听。不要同时运行独立视觉CLI和控制台后端。
 API目前无身份认证，仅限可信网络，不能开放到公网。
 
 ### 原文本/模拟流程

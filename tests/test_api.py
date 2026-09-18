@@ -7,6 +7,7 @@ from typing import cast
 
 from fastapi.testclient import TestClient
 
+from adapters import SpeechOutput, SpeechRecognizer
 from adapters.langchain import SkillToolObserver
 from app.api import _build_parser, create_app
 from app.backend import AgentFactory, BackendConfig, ConsoleBackend
@@ -34,6 +35,44 @@ class SlowAgent(FakeAgent):
         self.inputs.append(text)
         await asyncio.sleep(60)
         return self.reply
+
+
+class FakeRecognizer(SpeechRecognizer):
+    def __init__(self, transcript: str = "给我比个心") -> None:
+        self.transcript = transcript
+        self.calls = 0
+        self.closed = False
+        self._after_first = asyncio.Event()
+
+    async def warmup(self) -> None:
+        return None
+
+    async def transcribe_once(self) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            return self.transcript
+        await self._after_first.wait()
+        return ""
+
+    async def close(self) -> None:
+        self.closed = True
+        self._after_first.set()
+
+
+class FakeSpeechOutput(SpeechOutput):
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+        self.connected = False
+        self.closed = False
+
+    async def connect(self) -> None:
+        self.connected = True
+
+    async def speak(self, text: str) -> None:
+        self.messages.append(text)
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 def fake_agent_factory(
@@ -222,6 +261,40 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(event["type"], "state")
             self.assertTrue(event["data"]["backend"])
             self.assertIn("sessionId", event["data"])
+
+    def test_local_voice_routes_transcript_through_agent_and_speaker(self) -> None:
+        recognizer = FakeRecognizer()
+        speaker = FakeSpeechOutput()
+        backend = ConsoleBackend(
+            BackendConfig(robot_model="go2", audio_enabled=True),
+            agent_factory=fake_agent_factory,
+            asr_factory=lambda: recognizer,
+            speech_factory=lambda lock: speaker,
+        )
+        with TestClient(create_app(backend=backend)) as client:
+            started = client.post("/api/v1/voice/start")
+            self.assertEqual(started.status_code, 200)
+            deadline = time.monotonic() + 2
+            payload = started.json()
+            while not payload["voice"]["reply"] and time.monotonic() < deadline:
+                time.sleep(0.01)
+                payload = client.get("/api/v1/console").json()
+
+            self.assertEqual(payload["voice"]["transcript"], "给我比个心")
+            self.assertEqual(payload["voice"]["reply"], "好的，任务已完成。")
+            self.assertEqual(speaker.messages, ["好的，任务已完成。"])
+
+            spoken = client.post(
+                "/api/v1/voice/speak",
+                json={"text": "扬声器测试"},
+            )
+            stopped = client.post("/api/v1/voice/stop")
+            self.assertEqual(spoken.status_code, 200)
+            self.assertEqual(speaker.messages[-1], "扬声器测试")
+            self.assertFalse(stopped.json()["voice"]["enabled"])
+
+        self.assertTrue(recognizer.closed)
+        self.assertTrue(speaker.closed)
 
 
 if __name__ == "__main__":

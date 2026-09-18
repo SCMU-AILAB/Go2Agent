@@ -6,7 +6,8 @@
 
 Go2 适配已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`，以及 `--robot go2`
 装配路径（CLI / FastAPI / perception）。Go2 使用 `register_go2_skills()` 与
-周期性刷新的移动技能；G1 `AudioClient` TTS 不会挂到 Go2。详见
+周期性刷新的移动技能；Go2 的语音使用主机外接麦克风/扬声器，不依赖 G1
+`AudioClient`。详见
 [Go2 Adapter 说明](docs/go2-adapter.md)。默认仍为 G1。
 
 ## 控制台视觉接入（2026-09-12）
@@ -181,13 +182,17 @@ POST   /api/v1/skills/{name}/execute
 PUT    /api/v1/camera/source
 GET    /api/v1/camera/frame.jpg
 DELETE /api/v1/logs
+POST   /api/v1/voice/start
+POST   /api/v1/voice/stop
+POST   /api/v1/voice/speak
 WS     /api/v1/events
 ```
 
 API JSON 使用 camelCase，核心状态可直接映射前端的 `backend`、`starting`、
 `busy`、`promptSaved`、`sessionId`、`cameraSource`、`modelStatus`、
 `skillStatus`、`skillName`、`progressText`、`modelOutput`、`modelDuration`、
-`latency`、`tools` 和 `logs`。WebSocket 连接后首先返回完整 `state`，之后持续发送
+`latency`、`voice`、`tools` 和 `logs`。`voice` 包含监听状态、最新转写、最新回复和
+STT/TTS 错误。WebSocket 连接后首先返回完整 `state`，之后持续发送
 `state`、`log`、`heartbeat` 和 `camera` 事件。
 
 例如提交任务：
@@ -218,7 +223,53 @@ uv run g1agent --input text
 工具，工具只调用 `SkillRuntime.execute()`，不会生成或解析 action 字符串。
 模拟模式只打印 Agent 回复，不调用任何本机系统 TTS。
 
-## 麦克风入口
+## 狗端本地语音对话
+
+Go2 使用连接到狗端电脑的外接麦克风和扬声器：Faster Whisper 模型常驻进程完成
+STT，Piper 完成本地 TTS；未提供 Piper 模型时回退 `espeak-ng`。录音与播放共享
+半双工锁，机器人发声时不会同时录音。
+
+在狗端现有虚拟环境中安装，不要执行会覆盖硬件依赖的普通 `uv sync`：
+
+```bash
+sudo apt install alsa-utils espeak-ng
+.venv/bin/python -m pip install faster-whisper piper-tts
+```
+
+第一次运行 Faster Whisper 会下载模型。可提前预热：
+
+```bash
+.venv/bin/python -c \
+  "from faster_whisper import WhisperModel; WhisperModel('small', device='auto', compute_type='default')"
+```
+
+FastAPI 与前端一起使用：
+
+```bash
+.venv/bin/python -m app.api \
+  --robot go2 --hardware --network eth0 \
+  --camera-source local --vision-rotation-deg 0 \
+  --voice --record-seconds 3 \
+  --audio-input-device pulse --audio-output-device pulse \
+  --piper-model /home/cf/models/piper/zh_CN-huayan-medium.onnx \
+  --host 0.0.0.0 --port 8000
+```
+
+如果尚未放置 Piper 中文 `.onnx` 和同名 `.onnx.json`，去掉 `--piper-model`，系统会
+使用 `espeak-ng`。不加 `--voice` 时也可以在前端的 VOICE 面板手动启动监听。
+
+语音路径固定为：
+
+```text
+外接麦克风 -> Faster Whisper -> RobotAgent -> SkillRuntime -> Go2
+                                      |
+                                      -> Agent 回复 -> Piper -> 外接扬声器
+```
+
+TTS 内容不是硬编码：它是 Agent 当前轮次的最终文字回复。机器人动作仍然只能通过
+`SkillRuntime` 执行。
+
+### 旧 Whisper CLI 入口
 
 麦克风输入通过 `arecord` 或 `ffmpeg` 录音，再交给本地 Whisper CLI：
 

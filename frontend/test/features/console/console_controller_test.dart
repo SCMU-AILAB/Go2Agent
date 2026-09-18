@@ -170,6 +170,21 @@ void main() {
     expect(controller.logs, isEmpty);
   });
 
+  testWidgets('starts and stops local voice through REST', (tester) async {
+    await tester.pump();
+    await controller.refreshFromBackend();
+    await controller.toggleBackend();
+
+    await controller.toggleVoice();
+    expect(api.startVoiceCalls, 1);
+    expect(controller.voiceEnabled, isTrue);
+    expect(controller.voiceListening, isTrue);
+
+    await controller.toggleVoice();
+    expect(api.stopVoiceCalls, 1);
+    expect(controller.voiceEnabled, isFalse);
+  });
+
   testWidgets('keeps the running log view pinned to the newest entry', (
     tester,
   ) async {

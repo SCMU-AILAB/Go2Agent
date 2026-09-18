@@ -34,6 +34,15 @@ class ConsoleSnapshot {
     required this.cameraHeight,
     required this.cameraFps,
     required this.cameraError,
+    required this.voiceEnabled,
+    required this.voiceListening,
+    required this.voiceStatus,
+    required this.voiceTranscript,
+    required this.voiceReply,
+    required this.voiceError,
+    required this.voiceInputDevice,
+    required this.voiceOutputDevice,
+    required this.voiceTtsEngine,
     required this.tools,
     required this.logs,
   });
@@ -41,6 +50,7 @@ class ConsoleSnapshot {
   factory ConsoleSnapshot.fromJson(Map<String, dynamic> json) {
     final robot = _asMap(json['robot']);
     final camera = _asMap(json['camera']);
+    final voice = _asMap(json['voice']);
     final robotDetails = _asMap(robot['details']);
     final rawModel = (robotDetails['robot_model'] as String?)?.toLowerCase();
     final robotModel = switch (rawModel) {
@@ -81,6 +91,15 @@ class ConsoleSnapshot {
       cameraHeight: (camera['height'] as num?)?.toInt() ?? 480,
       cameraFps: (camera['fps'] as num?)?.toInt() ?? 30,
       cameraError: camera['error'] as String?,
+      voiceEnabled: voice['enabled'] as bool? ?? false,
+      voiceListening: voice['listening'] as bool? ?? false,
+      voiceStatus: voice['status'] as String? ?? 'disabled',
+      voiceTranscript: voice['transcript'] as String? ?? '',
+      voiceReply: voice['reply'] as String? ?? '',
+      voiceError: voice['error'] as String?,
+      voiceInputDevice: voice['inputDevice'] as String? ?? 'pulse',
+      voiceOutputDevice: voice['outputDevice'] as String? ?? 'pulse',
+      voiceTtsEngine: voice['ttsEngine'] as String?,
       tools: _asList(
         json['tools'],
       ).map(_asMap).map(ToolCall.fromJson).toList(growable: false),
@@ -121,6 +140,15 @@ class ConsoleSnapshot {
   final int cameraHeight;
   final int cameraFps;
   final String? cameraError;
+  final bool voiceEnabled;
+  final bool voiceListening;
+  final String voiceStatus;
+  final String voiceTranscript;
+  final String voiceReply;
+  final String? voiceError;
+  final String voiceInputDevice;
+  final String voiceOutputDevice;
+  final String? voiceTtsEngine;
   final List<ToolCall> tools;
   final List<ConsoleLog> logs;
 }
