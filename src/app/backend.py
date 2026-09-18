@@ -14,16 +14,19 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from adapters import (
+    ASRError,
     AudioOutputError,
-    HostSpeakerError,
-    HostSpeakerOutput,
+    FasterWhisperASR,
+    HostSpeechOutput,
     SpeechOutput,
+    SpeechRecognizer,
     UnitreeAudioOutput,
 )
 from adapters.langchain import SkillToolObserver
 from agent import AgentError, RobotAgent
+from agent.llamacpp_vision import LlamaCppVisionInvoker
 from agent.service import system_prompt_for
-from agent.social_vision import SocialVisionAgent
+from agent.social_vision import SocialVisionAgent, TaskDrivenObservation
 from agent.unifolm_vision import UnifolmVisionInvoker
 from agent.vision_policy import OllamaVisionInvoker, VisionPolicyWorker
 from core.runtime import SkillRuntime
@@ -97,6 +100,26 @@ class CameraView(ApiModel):
     error: str | None = None
 
 
+class VoiceView(ApiModel):
+    enabled: bool
+    listening: bool
+    status: Literal[
+        "disabled",
+        "stopped",
+        "loading",
+        "listening",
+        "thinking",
+        "speaking",
+        "error",
+    ]
+    transcript: str = ""
+    reply: str = ""
+    error: str | None = None
+    input_device: str = "pulse"
+    output_device: str = "pulse"
+    tts_engine: str | None = None
+
+
 class ConsoleSnapshot(ApiModel):
     backend: bool
     starting: bool
@@ -119,6 +142,7 @@ class ConsoleSnapshot(ApiModel):
     task_count: int
     robot: RobotView
     camera: CameraView
+    voice: VoiceView
     tools: list[ToolCall]
     logs: list[ConsoleLog]
 
@@ -136,6 +160,8 @@ class ChatAgent(Protocol):
 
 
 type AgentFactory = Callable[[SkillRuntime, str, SkillToolObserver], ChatAgent]
+type ASRFactory = Callable[[], SpeechRecognizer]
+type SpeechFactory = Callable[[asyncio.Lock], SpeechOutput]
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +177,16 @@ class BackendConfig:
     speaker_id: int = 0
     host_audio_device: str | None = None
     host_tts_voice: str = "cmn"
+    voice_enabled: bool = False
+    voice_record_seconds: float = 3.0
+    voice_language: str | None = "zh"
+    voice_model: str = "small"
+    voice_device: str = "auto"
+    voice_compute_type: str = "default"
+    audio_input_device: str = "pulse"
+    audio_output_device: str = "pulse"
+    piper_model: str | None = None
+    piper_config: str | None = None
     camera_source: Literal["demo", "local"] = "demo"
     camera_serial: str | None = None
     camera_width: int = 640
@@ -158,7 +194,7 @@ class BackendConfig:
     camera_fps: int = 30
     camera_detection_fps: float = 5.0
     vision_model: str = "qwen3.5:9b"
-    vision_backend: Literal["ollama", "unifolm"] = "ollama"
+    vision_backend: Literal["ollama", "unifolm", "llamacpp"] = "ollama"
     vision_url: str = "http://127.0.0.1:11435"
     vision_rotation_deg: int = 0
     vision_max_age_s: float = 5.0
@@ -171,6 +207,8 @@ class BackendConfig:
             raise ValueError("invalid vision rotation")
         if self.camera_detection_fps <= 0:
             raise ValueError("camera detection FPS must be positive")
+        if self.voice_record_seconds < 0.5:
+            raise ValueError("voice record window must be at least 0.5 seconds")
         if (
             self.vision_max_age_s <= 0
             or self.vision_window_s <= 0
@@ -220,6 +258,8 @@ class ConsoleBackend(SkillToolObserver):
         agent_factory: AgentFactory | None = None,
         camera_factory: Callable[[], RealSensePersonDetector] | None = None,
         vision_agent_factory: Callable[[str], SocialVisionAgent] | None = None,
+        asr_factory: ASRFactory | None = None,
+        speech_factory: SpeechFactory | None = None,
     ) -> None:
         self.config = config or BackendConfig()
         self.hardware_robot: HardwareRobot | None = None
@@ -249,11 +289,17 @@ class ConsoleBackend(SkillToolObserver):
         self._agent_factory = agent_factory or self._build_agent
         self._camera_factory = camera_factory or self._build_camera
         self._vision_agent_factory = vision_agent_factory or self._build_vision_agent
+        self._asr_factory = asr_factory or self._build_asr
+        self._speech_factory = speech_factory or self._build_host_speech
         self._vision_worker: VisionPolicyWorker | None = None
         self._video_buffer = self._new_video_buffer()
         self._safety_gate = _DepthSafetyGate()
         self._agent: ChatAgent | None = None
         self._audio: SpeechOutput | None = None
+        self._voice_input: SpeechRecognizer | None = None
+        self._voice_task: asyncio.Task[None] | None = None
+        self._audio_io_lock = asyncio.Lock()
+        self._agent_lock = asyncio.Lock()
         self._camera: RealSensePersonDetector | None = None
         self._camera_task: asyncio.Task[None] | None = None
         self._safety_stop_task: asyncio.Task[None] | None = None
@@ -293,6 +339,20 @@ class ConsoleBackend(SkillToolObserver):
         self.frame_version = 0
         self.tools: list[ToolCall] = []
         self.logs: list[ConsoleLog] = []
+        self.voice_enabled = False
+        self.voice_listening = False
+        self.voice_status: Literal[
+            "disabled",
+            "stopped",
+            "loading",
+            "listening",
+            "thinking",
+            "speaking",
+            "error",
+        ] = "stopped" if self.config.voice_enabled else "disabled"
+        self.voice_transcript = ""
+        self.voice_reply = ""
+        self.voice_error: str | None = None
 
     def _new_video_buffer(self) -> VideoBuffer:
         return VideoBuffer(
@@ -310,6 +370,14 @@ class ConsoleBackend(SkillToolObserver):
                 base_url=self.config.vision_url,
                 max_new_tokens=96,
                 timeout_s=120,
+            )
+        elif self.config.vision_backend == "llamacpp":
+            invoker = LlamaCppVisionInvoker(
+                self.config.vision_model,
+                base_url=self.config.vision_url,
+                max_new_tokens=96,
+                timeout_s=120,
+                output_schema=TaskDrivenObservation.model_json_schema(),
             )
         else:
             invoker = OllamaVisionInvoker(
@@ -352,6 +420,27 @@ class ConsoleBackend(SkillToolObserver):
             rgb_rotation_deg=self.config.vision_rotation_deg,
         )
 
+    def _build_asr(self) -> SpeechRecognizer:
+        return FasterWhisperASR(
+            record_seconds=self.config.voice_record_seconds,
+            model=self.config.voice_model,
+            language=self.config.voice_language,
+            audio_device=self.config.audio_input_device,
+            device=self.config.voice_device,
+            compute_type=self.config.voice_compute_type,
+        )
+
+    def _build_host_speech(self, audio_lock: asyncio.Lock) -> SpeechOutput:
+        return HostSpeechOutput(
+            audio_device=(
+                self.config.host_audio_device or self.config.audio_output_device
+            ),
+            piper_model=self.config.piper_model,
+            piper_config=self.config.piper_config,
+            fallback_voice=self.config.host_tts_voice,
+            audio_lock=audio_lock,
+        )
+
     async def start(self) -> ConsoleSnapshot:
         async with self._lifecycle_lock:
             if self.backend:
@@ -370,28 +459,15 @@ class ConsoleBackend(SkillToolObserver):
 
                 if self.config.audio_enabled:
                     if self.config.robot_model == "go2":
-                        speaker = HostSpeakerOutput(
-                            voice=self.config.host_tts_voice,
-                            audio_device=self.config.host_audio_device,
+                        self._audio = self._speech_factory(self._audio_io_lock)
+                        connect = getattr(self._audio, "connect", None)
+                        if callable(connect):
+                            await connect()
+                        await self._log(
+                            "INFO",
+                            "audio",
+                            "Go2 已启用主机本地 TTS，输出到外接扬声器。",
                         )
-                        if speaker.available:
-                            self._audio = speaker
-                            await self._log(
-                                "INFO",
-                                "audio",
-                                "Go2 使用主机外接扬声器 TTS（espeak-ng）。"
-                                + (
-                                    f" device={self.config.host_audio_device}"
-                                    if self.config.host_audio_device
-                                    else ""
-                                ),
-                            )
-                        else:
-                            await self._log(
-                                "WARN",
-                                "audio",
-                                "未找到 espeak-ng/espeak，外接扬声器不可用。请安装 espeak-ng。",
-                            )
                     elif self.hardware_robot is not None:
                         self._audio = UnitreeAudioOutput(
                             self.hardware_robot,
@@ -420,6 +496,8 @@ class ConsoleBackend(SkillToolObserver):
                         # The optional D435i may be absent while the Agent and
                         # robot console remain otherwise usable.
                         pass
+                if self.config.voice_enabled:
+                    await self.start_voice()
                 mode = "真机" if self.config.hardware else "模拟"
                 model_label = "Go2" if self.config.robot_model == "go2" else "G1"
                 await self._log(
@@ -454,6 +532,7 @@ class ConsoleBackend(SkillToolObserver):
             return self.snapshot()
 
     async def _close_resources(self) -> None:
+        await self.stop_voice()
         heartbeat = self._heartbeat_task
         self._heartbeat_task = None
         if heartbeat is not None and heartbeat is not asyncio.current_task():
@@ -464,11 +543,143 @@ class ConsoleBackend(SkillToolObserver):
         if safety_stop is not None and safety_stop is not asyncio.current_task():
             await asyncio.gather(safety_stop, return_exceptions=True)
         if self._audio is not None:
-            await self._audio.close()
+            close = getattr(self._audio, "close", None)
+            if callable(close):
+                await close()
             self._audio = None
+        if self._voice_input is not None:
+            await self._voice_input.close()
+            self._voice_input = None
         if self.hardware_robot is not None:
             await self.hardware_robot.close()
         self._agent = None
+
+    async def start_voice(self) -> ConsoleSnapshot:
+        if not self.backend or self._agent is None:
+            raise BackendNotRunning("backend session is not running")
+        if self._voice_task is not None and not self._voice_task.done():
+            return self.snapshot()
+        self.voice_enabled = True
+        self.voice_listening = False
+        self.voice_status = "loading"
+        self.voice_error = None
+        if self._voice_input is None:
+            self._voice_input = self._asr_factory()
+        self._voice_task = asyncio.create_task(
+            self._voice_loop(),
+            name="go2-console-voice",
+        )
+        await self._log(
+            "INFO",
+            "voice",
+            "本地语音对话已启动，正在加载 Faster Whisper。",
+        )
+        self._emit_state()
+        return self.snapshot()
+
+    async def stop_voice(self) -> ConsoleSnapshot:
+        task = self._voice_task
+        self._voice_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        was_enabled = self.voice_enabled
+        self.voice_enabled = False
+        self.voice_listening = False
+        self.voice_status = "stopped" if self.backend else "disabled"
+        if was_enabled:
+            await self._log("INFO", "voice", "本地语音对话已停止。")
+        self._emit_state()
+        return self.snapshot()
+
+    async def speak(self, text: str) -> ConsoleSnapshot:
+        text = text.strip()
+        if not text:
+            raise ValueError("speech text must not be empty")
+        if not self.backend:
+            raise BackendNotRunning("backend session is not running")
+        if self._audio is None:
+            raise RuntimeError("local speech output is disabled or unavailable")
+        previous_status = self.voice_status
+        self.voice_status = "speaking"
+        self.voice_listening = False
+        self._emit_state()
+        try:
+            await self._audio.speak(text)
+            self.voice_reply = text
+            self.voice_error = None
+            await self._log("INFO", "voice", f"本地 TTS 播放完成：{text}")
+        except AudioOutputError as exc:
+            self.voice_status = "error"
+            self.voice_error = str(exc)
+            await self._log("ERROR", "voice", f"本地 TTS 播放失败：{exc}")
+            raise
+        finally:
+            if self.voice_status != "error":
+                self.voice_status = (
+                    "listening" if self.voice_enabled else previous_status
+                )
+                self.voice_listening = self.voice_enabled
+            self._emit_state()
+        return self.snapshot()
+
+    async def _voice_loop(self) -> None:
+        current = asyncio.current_task()
+        try:
+            recognizer = self._voice_input
+            if recognizer is None:
+                raise ASRError("语音识别器未初始化")
+            await recognizer.warmup()
+            await self._log("INFO", "voice", "Faster Whisper 已就绪，开始监听。")
+            while self.voice_enabled:
+                self.voice_status = "listening"
+                self.voice_listening = True
+                self.voice_error = None
+                self._emit_state()
+                try:
+                    async with self._audio_io_lock:
+                        text = await recognizer.transcribe_once()
+                    self.voice_listening = False
+                    if not text:
+                        continue
+                    self.voice_transcript = text
+                    self.voice_status = "thinking"
+                    self._emit_state()
+                    await self._log("INFO", "voice.stt", f"识别到：{text}")
+                    agent = self._agent
+                    if agent is None:
+                        raise BackendNotRunning("Agent is not initialized")
+                    async with self._agent_lock:
+                        reply = await agent.chat(text)
+                    self.voice_reply = reply
+                    await self._log("INFO", "voice.agent", f"回复：{reply}")
+                    if self._audio is not None:
+                        self.voice_status = "speaking"
+                        self._emit_state()
+                        await self._audio.speak(reply)
+                except asyncio.CancelledError:
+                    raise
+                except (ASRError, AgentError, AudioOutputError, RuntimeError) as exc:
+                    self.voice_status = "error"
+                    self.voice_error = str(exc)
+                    self.voice_listening = False
+                    await self._log("ERROR", "voice", f"语音轮次失败：{exc}")
+                    self._emit_state()
+                    await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - keep API alive on voice failure
+            self.voice_status = "error"
+            self.voice_error = str(exc)
+            self.voice_listening = False
+            await self._log("ERROR", "voice", f"语音服务停止：{exc}")
+        finally:
+            if self._voice_task is current:
+                self._voice_task = None
+            self.voice_listening = False
+            if self.voice_status != "error":
+                self.voice_status = "stopped"
+            self._emit_state()
 
     async def update_system_prompt(self, prompt: str) -> ConsoleSnapshot:
         prompt = prompt.strip()
@@ -479,7 +690,8 @@ class ConsoleBackend(SkillToolObserver):
         self.prompt_saved = False
         self.system_prompt = prompt
         if self.backend:
-            self._agent = self._agent_factory(self.runtime, prompt, self)
+            async with self._agent_lock:
+                self._agent = self._agent_factory(self.runtime, prompt, self)
         self.prompt_saved = True
         await self._log(
             "INFO",
@@ -732,12 +944,13 @@ class ConsoleBackend(SkillToolObserver):
             agent = self._agent
             if agent is None:
                 raise BackendNotRunning("Agent is not initialized")
-            reply = await agent.chat(instruction)
+            async with self._agent_lock:
+                reply = await agent.chat(instruction)
             self.model_output += f"\n{reply}"
             if self._audio is not None:
                 try:
                     await self._audio.speak(reply)
-                except (AudioOutputError, HostSpeakerError) as exc:
+                except AudioOutputError as exc:
                     await self._log("WARN", "audio", f"语音播报失败：{exc}")
 
             if self.task_id != task_id:
@@ -1096,6 +1309,21 @@ class ConsoleBackend(SkillToolObserver):
                 fps=self.config.camera_fps,
                 observation=self.latest_observation,
                 error=self.camera_error,
+            ),
+            voice=VoiceView(
+                enabled=self.voice_enabled,
+                listening=self.voice_listening,
+                status=self.voice_status,
+                transcript=self.voice_transcript,
+                reply=self.voice_reply,
+                error=self.voice_error,
+                input_device=self.config.audio_input_device,
+                output_device=self.config.audio_output_device,
+                tts_engine=(
+                    getattr(self._audio, "engine", None)
+                    if self._audio is not None
+                    else None
+                ),
             ),
             tools=list(self.tools),
             logs=list(self.logs),

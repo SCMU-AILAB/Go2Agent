@@ -15,6 +15,7 @@ import 'widgets/skill_panel.dart';
 import 'widgets/robot_status_panel.dart';
 import 'widgets/prompt_panel.dart';
 import 'widgets/backend_panel.dart';
+import 'widgets/voice_panel.dart';
 import 'widgets/task_input_panel.dart';
 import 'widgets/log_panel.dart';
 import 'widgets/console_rail.dart';
@@ -245,6 +246,7 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
       RobotStatusPanel(controller: controller),
       TaskInputPanel(controller: controller),
       BackendPanel(controller: controller),
+      VoicePanel(controller: controller),
       PromptPanel(controller: controller),
     ];
     if (width <= 930 && width > 640) {
@@ -262,6 +264,8 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
           ),
           const SizedBox(height: 12),
           items[3],
+          const SizedBox(height: 12),
+          items[4],
         ],
       );
     }

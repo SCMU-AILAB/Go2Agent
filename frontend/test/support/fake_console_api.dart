@@ -35,6 +35,15 @@ Map<String, dynamic> consolePayload({
   int cameraHeight = 480,
   int cameraFps = 30,
   String? cameraError,
+  bool voiceEnabled = false,
+  bool voiceListening = false,
+  String voiceStatus = 'stopped',
+  String voiceTranscript = '',
+  String voiceReply = '',
+  String? voiceError,
+  String voiceInputDevice = 'pulse',
+  String voiceOutputDevice = 'pulse',
+  String? voiceTtsEngine = 'espeak-ng',
   List<Map<String, dynamic>> tools = const [],
   List<Map<String, dynamic>> logs = const [],
 }) => {
@@ -74,6 +83,17 @@ Map<String, dynamic> consolePayload({
     'fps': cameraFps,
     'error': cameraError,
   },
+  'voice': {
+    'enabled': voiceEnabled,
+    'listening': voiceListening,
+    'status': voiceStatus,
+    'transcript': voiceTranscript,
+    'reply': voiceReply,
+    'error': voiceError,
+    'inputDevice': voiceInputDevice,
+    'outputDevice': voiceOutputDevice,
+    'ttsEngine': voiceTtsEngine,
+  },
   'tools': tools,
   'logs': logs,
 };
@@ -99,6 +119,10 @@ class FakeConsoleApi implements ConsoleApi {
   int setCameraSourceCalls = 0;
   int clearLogsCalls = 0;
   int fetchCameraFrameCalls = 0;
+  int startVoiceCalls = 0;
+  int stopVoiceCalls = 0;
+  int speakCalls = 0;
+  String? lastSpeech;
   bool closeCalled = false;
   String? lastPrompt;
   String? lastInstruction;
@@ -217,6 +241,50 @@ class FakeConsoleApi implements ConsoleApi {
   Future<ConsoleSnapshot> clearLogs() async {
     clearLogsCalls += 1;
     _payload = {..._payload, 'logs': <Map<String, dynamic>>[]};
+    return snapshot;
+  }
+
+  @override
+  Future<ConsoleSnapshot> startVoice() async {
+    startVoiceCalls += 1;
+    _payload = {
+      ..._payload,
+      'voice': {
+        ...Map<String, dynamic>.from(_payload['voice'] as Map),
+        'enabled': true,
+        'listening': true,
+        'status': 'listening',
+      },
+    };
+    return snapshot;
+  }
+
+  @override
+  Future<ConsoleSnapshot> stopVoice() async {
+    stopVoiceCalls += 1;
+    _payload = {
+      ..._payload,
+      'voice': {
+        ...Map<String, dynamic>.from(_payload['voice'] as Map),
+        'enabled': false,
+        'listening': false,
+        'status': 'stopped',
+      },
+    };
+    return snapshot;
+  }
+
+  @override
+  Future<ConsoleSnapshot> speak(String text) async {
+    speakCalls += 1;
+    lastSpeech = text;
+    _payload = {
+      ..._payload,
+      'voice': {
+        ...Map<String, dynamic>.from(_payload['voice'] as Map),
+        'reply': text,
+      },
+    };
     return snapshot;
   }
 

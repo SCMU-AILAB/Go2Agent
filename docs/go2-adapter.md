@@ -105,9 +105,11 @@ Go2 移动技能会以约 20 ms 间隔刷新 `move` 速度，并在 `finally` / 
 开环移动技能不会注册到 Go2 目录。
 
 `handshake` / `high_five` 在 Go2 目录中不存在，社交视觉会将它们判为
-`gesture skill unavailable`。G1 `AudioClient` TTS 在 Go2 装配时会被禁用并
-写日志。当前 bindings 中的 Go2 `VuiClient` 只提供语音开关、音量和灯光亮度设置/读取，
-没有文本播报接口，因此不能作为 TTS 使用；Go2 文本播报需要另外的音频输出方案。
+`gesture skill unavailable`。Go2 不使用 G1 `AudioClient`。当前 bindings 中的
+`VuiClient` 只提供语音开关、音量和灯光亮度设置/读取，没有文本播报接口，因此本项目
+使用狗端电脑的外接麦克风/扬声器：常驻 Faster Whisper 负责 STT，Piper（或
+`espeak-ng` 回退）负责 TTS。FastAPI 增加 `--voice` 后自动监听，也可由前端 VOICE
+面板调用 `/api/v1/voice/start` 和 `/api/v1/voice/stop` 控制。
 
 ## 扩展动作目录
 

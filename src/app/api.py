@@ -14,7 +14,12 @@ from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDiscon
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import Field
 
-from agent import DEFAULT_UNIFOLM_MODEL
+from agent import (
+    DEFAULT_LLAMA_CPP_MODEL,
+    DEFAULT_LLAMA_CPP_URL,
+    DEFAULT_UNIFOLM_MODEL,
+    DEFAULT_UNIFOLM_URL,
+)
 from perception import PerceptionError
 
 from .backend import (
@@ -59,6 +64,10 @@ class CameraSourceUpdate(ApiModel):
     source: Literal["demo", "local"]
 
 
+class VoiceSpeakRequest(ApiModel):
+    text: str = Field(min_length=1)
+
+
 class SkillExecutionResponse(ApiModel):
     result: dict[str, object]
     console: ConsoleSnapshot
@@ -91,7 +100,7 @@ def create_app(
                 await console.stop()
 
     app = FastAPI(
-        title="G1 Agent Console API",
+        title="Robot Agent Console API",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -218,6 +227,26 @@ def create_app(
     async def clear_logs() -> ConsoleSnapshot:
         return await console.clear_logs()
 
+    @app.post("/api/v1/voice/start", response_model=ConsoleSnapshot)
+    async def start_voice() -> ConsoleSnapshot:
+        try:
+            return await console.start_voice()
+        except BackendNotRunning as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/v1/voice/stop", response_model=ConsoleSnapshot)
+    async def stop_voice() -> ConsoleSnapshot:
+        return await console.stop_voice()
+
+    @app.post("/api/v1/voice/speak", response_model=ConsoleSnapshot)
+    async def speak(body: VoiceSpeakRequest) -> ConsoleSnapshot:
+        try:
+            return await console.speak(body.text)
+        except BackendNotRunning as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.websocket("/api/v1/events")
     async def events(websocket: WebSocket) -> None:
         await websocket.accept()
@@ -242,7 +271,7 @@ def create_app(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the G1 console FastAPI server")
+    parser = argparse.ArgumentParser(description="Run the robot console FastAPI server")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--hardware", action="store_true")
@@ -269,6 +298,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="espeak-ng voice for host speaker TTS (cmn=普通话)",
     )
     parser.add_argument(
+        "--voice",
+        action="store_true",
+        help="start local microphone -> Faster Whisper -> Agent -> local TTS loop",
+    )
+    parser.add_argument("--record-seconds", type=float, default=3.0)
+    parser.add_argument("--whisper-model", default="small")
+    parser.add_argument("--whisper-language", default="zh")
+    parser.add_argument("--whisper-device", default="auto")
+    parser.add_argument("--whisper-compute-type", default="default")
+    parser.add_argument("--audio-input-device", default="pulse")
+    parser.add_argument("--audio-output-device", default="pulse")
+    parser.add_argument("--piper-model")
+    parser.add_argument("--piper-config")
+    parser.add_argument(
         "--camera-source",
         choices=("demo", "local"),
         default="demo",
@@ -284,10 +327,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="person detection rate; RGB preview continues at --camera-fps",
     )
     parser.add_argument(
-        "--vision-backend", choices=("ollama", "unifolm"), default="ollama"
+        "--vision-backend",
+        choices=("ollama", "unifolm", "llamacpp"),
+        default="ollama",
     )
     parser.add_argument("--vision-model")
-    parser.add_argument("--vision-url", default="http://127.0.0.1:11435")
+    parser.add_argument("--vision-url")
     parser.add_argument("--vision-window-s", type=float, default=0.8)
     parser.add_argument("--vision-frame-count", type=int, default=3)
     parser.add_argument(
@@ -315,6 +360,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         speaker_id=args.speaker_id,
         host_audio_device=args.host_audio_device,
         host_tts_voice=args.host_tts_voice,
+        voice_enabled=args.voice,
+        voice_record_seconds=args.record_seconds,
+        voice_language=args.whisper_language,
+        voice_model=args.whisper_model,
+        voice_device=args.whisper_device,
+        voice_compute_type=args.whisper_compute_type,
+        audio_input_device=args.audio_input_device,
+        audio_output_device=args.audio_output_device,
+        piper_model=args.piper_model,
+        piper_config=args.piper_config,
         camera_source=args.camera_source,
         camera_serial=args.camera_serial,
         camera_width=args.camera_width,
@@ -326,11 +381,22 @@ def main(argv: Sequence[str] | None = None) -> None:
             or (
                 DEFAULT_UNIFOLM_MODEL
                 if args.vision_backend == "unifolm"
+                else DEFAULT_LLAMA_CPP_MODEL
+                if args.vision_backend == "llamacpp"
                 else "qwen3.5:9b"
             )
         ),
         vision_backend=args.vision_backend,
-        vision_url=args.vision_url,
+        vision_url=(
+            args.vision_url
+            or (
+                DEFAULT_UNIFOLM_URL
+                if args.vision_backend == "unifolm"
+                else DEFAULT_LLAMA_CPP_URL
+                if args.vision_backend == "llamacpp"
+                else "http://127.0.0.1:11435"
+            )
+        ),
         vision_window_s=args.vision_window_s,
         vision_frame_count=args.vision_frame_count,
         vision_rotation_deg=args.vision_rotation_deg,

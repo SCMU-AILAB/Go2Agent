@@ -63,6 +63,15 @@ class ConsoleController extends ChangeNotifier {
   String cameraStatus = 'idle';
   String cameraFramePath = '/api/v1/camera/frame.jpg';
   String? cameraError;
+  bool voiceEnabled = false;
+  bool voiceListening = false;
+  String voiceStatus = 'disabled';
+  String voiceTranscript = '';
+  String voiceReply = '';
+  String? voiceError;
+  String voiceInputDevice = 'pulse';
+  String voiceOutputDevice = 'pulse';
+  String? voiceTtsEngine;
   bool cameraFrameAvailable = false;
   String robotMode = 'simulation';
   String? robotModel;
@@ -234,6 +243,15 @@ class ConsoleController extends ChangeNotifier {
     cameraHeight = snapshot.cameraHeight;
     cameraFps = snapshot.cameraFps;
     cameraError = snapshot.cameraError;
+    voiceEnabled = snapshot.voiceEnabled;
+    voiceListening = snapshot.voiceListening;
+    voiceStatus = snapshot.voiceStatus;
+    voiceTranscript = snapshot.voiceTranscript;
+    voiceReply = snapshot.voiceReply;
+    voiceError = snapshot.voiceError;
+    voiceInputDevice = snapshot.voiceInputDevice;
+    voiceOutputDevice = snapshot.voiceOutputDevice;
+    voiceTtsEngine = snapshot.voiceTtsEngine;
 
     if (!promptIsDirty &&
         systemPromptController.text != snapshot.systemPrompt) {
@@ -513,6 +531,23 @@ class ConsoleController extends ChangeNotifier {
     } catch (error) {
       addLog('ERROR', 'network', '清空日志失败：$error');
       onMessage('清空失败：$error');
+    }
+  }
+
+  Future<void> toggleVoice() async {
+    if (!backend) {
+      onMessage('请先启动后端');
+      return;
+    }
+    try {
+      final snapshot = voiceEnabled
+          ? await api.stopVoice()
+          : await api.startVoice();
+      _applySnapshot(snapshot);
+      onMessage(voiceEnabled ? '语音对话已启动' : '语音对话已停止');
+    } catch (error) {
+      addLog('ERROR', 'voice', '语音服务切换失败：$error');
+      onMessage('语音服务操作失败：$error');
     }
   }
 }

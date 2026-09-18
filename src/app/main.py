@@ -9,8 +9,8 @@ import os
 from adapters import (
     ASRError,
     AudioOutputError,
-    HostSpeakerError,
-    HostSpeakerOutput,
+    FasterWhisperASR,
+    HostSpeechOutput,
     MicrophoneASR,
     SpeechOutput,
     UnitreeAudioOutput,
@@ -38,7 +38,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", default=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_HOST"))
-    parser.add_argument("--network", default="", help="Unitree DDS interface, e.g. eth0")
+    parser.add_argument(
+        "--network", default="", help="Unitree DDS interface, e.g. eth0"
+    )
     parser.add_argument("--domain-id", type=int, default=0)
     parser.add_argument("--hardware", action="store_true")
     parser.add_argument(
@@ -64,7 +66,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--whisper-bin", default=None)
     parser.add_argument("--whisper-model", default=None)
     parser.add_argument("--language", default=None)
-    parser.add_argument("--audio-device", default=os.getenv("G1_AUDIO_DEVICE"))
+    parser.add_argument("--whisper-device", default="auto")
+    parser.add_argument("--whisper-compute-type", default="default")
+    parser.add_argument("--audio-device", default=os.getenv("G1_AUDIO_DEVICE", "pulse"))
+    parser.add_argument("--audio-output-device", default="pulse")
+    parser.add_argument("--piper-model")
+    parser.add_argument("--piper-config")
     parser.add_argument("--once", action="store_true")
     return parser.parse_args()
 
@@ -115,32 +122,38 @@ async def run(args: argparse.Namespace) -> None:
         base_url=args.ollama_url,
         system_prompt=system_prompt_for(robot_model),
     )
-    microphone = (
-        MicrophoneASR(
-            record_seconds=args.record_seconds,
-            whisper_bin=args.whisper_bin,
-            model=args.whisper_model,
-            language=args.language,
-            audio_device=args.audio_device,
-        )
-        if args.input == "microphone"
-        else None
-    )
+    microphone = None
+    if args.input == "microphone":
+        if args.whisper_bin:
+            microphone = MicrophoneASR(
+                record_seconds=args.record_seconds,
+                whisper_bin=args.whisper_bin,
+                model=args.whisper_model,
+                language=args.language,
+                audio_device=args.audio_device,
+            )
+        else:
+            microphone = FasterWhisperASR(
+                record_seconds=args.record_seconds,
+                model=args.whisper_model or "small",
+                language=args.language or "zh",
+                audio_device=args.audio_device,
+                device=args.whisper_device,
+                compute_type=args.whisper_compute_type,
+            )
 
     try:
         if hardware_robot is not None:
             await hardware_robot.connect()
         if robot_model == "go2":
             if not args.no_audio:
-                speaker = HostSpeakerOutput(
-                    voice=args.host_tts_voice,
-                    audio_device=args.host_audio_device,
+                audio = HostSpeechOutput(
+                    audio_device=args.host_audio_device or args.audio_output_device,
+                    piper_model=args.piper_model,
+                    piper_config=args.piper_config,
+                    fallback_voice=args.host_tts_voice,
                 )
-                if speaker.available:
-                    audio = speaker
-                    print("[audio] Go2 使用主机外接扬声器 TTS（espeak-ng）。")
-                else:
-                    print("[audio] 未找到 espeak-ng，外接扬声器不可用。")
+                await audio.connect()
         elif hardware_robot is not None and not args.no_audio:
             audio = UnitreeAudioOutput(
                 hardware_robot,
@@ -158,7 +171,10 @@ async def run(args: argparse.Namespace) -> None:
                 text = await _read_text()
             else:
                 print("请说话...")
-                text = await asyncio.to_thread(microphone.transcribe_once)
+                if isinstance(microphone, FasterWhisperASR):
+                    text = await microphone.transcribe_once()
+                else:
+                    text = await asyncio.to_thread(microphone.transcribe_once)
                 print(f"用户: {text}")
 
             if not text:
@@ -170,7 +186,7 @@ async def run(args: argparse.Namespace) -> None:
 
             try:
                 await _run_turn(text, agent, audio)
-            except (AgentError, AudioOutputError, HostSpeakerError) as exc:
+            except (AgentError, AudioOutputError) as exc:
                 print(f"错误: {exc}")
             if args.once:
                 break
@@ -180,7 +196,11 @@ async def run(args: argparse.Namespace) -> None:
         print("\n已退出。")
     finally:
         if audio is not None:
-            await audio.close()
+            close = getattr(audio, "close", None)
+            if callable(close):
+                await close()
+        if isinstance(microphone, FasterWhisperASR):
+            await microphone.close()
         if hardware_robot is not None:
             await hardware_robot.close()
 
