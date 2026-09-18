@@ -55,8 +55,47 @@ class LlamaCppVisionInvokerTests(unittest.IsolatedAsyncioTestCase):
         request = urlopen.call_args_list[1].args[0]
         body = json.loads(request.data)
         self.assertEqual(request.full_url, "http://127.0.0.1:8012/v1/chat/completions")
-        self.assertEqual(body["response_format"], {"type": "json_object"})
+        response_format = body["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertEqual(response_format["json_schema"]["name"], "vision_output")
+        self.assertIs(response_format["json_schema"]["strict"], True)
+        schema = response_format["json_schema"]["schema"]
+        self.assertIn("action", schema["properties"])
+        self.assertIn("action", schema["required"])
         self.assertEqual(len(body["messages"][0]["content"]), 3)
+
+    async def test_custom_output_schema_is_forwarded(self) -> None:
+        output_schema = {
+            "type": "object",
+            "properties": {"gesture": {"const": "none"}},
+            "required": ["gesture"],
+            "additionalProperties": False,
+        }
+        response = FakeResponse(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": '{"gesture":"none"}'},
+                    }
+                ]
+            }
+        )
+        with patch(
+            "agent.llamacpp_vision.urllib.request.urlopen", return_value=response
+        ) as urlopen:
+            output = await LlamaCppVisionInvoker(
+                timeout_s=2,
+                output_schema=output_schema,
+            ).ainvoke([b"jpeg"], "prompt")
+
+        self.assertEqual(output, '{"gesture":"none"}')
+        request = urlopen.call_args.args[0]
+        body = json.loads(request.data)
+        self.assertEqual(
+            body["response_format"]["json_schema"]["schema"],
+            output_schema,
+        )
 
     async def test_token_limited_completion_is_rejected(self) -> None:
         response = FakeResponse(

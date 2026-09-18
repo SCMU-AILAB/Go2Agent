@@ -18,7 +18,7 @@ from adapters.langchain import SkillToolObserver
 from agent import AgentError, RobotAgent
 from agent.llamacpp_vision import LlamaCppVisionInvoker
 from agent.service import system_prompt_for
-from agent.social_vision import SocialVisionAgent
+from agent.social_vision import SocialVisionAgent, SpeakingGestureObservation
 from agent.unifolm_vision import UnifolmVisionInvoker
 from agent.vision_policy import OllamaVisionInvoker, VisionPolicyWorker
 from core.runtime import SkillRuntime
@@ -310,6 +310,7 @@ class ConsoleBackend(SkillToolObserver):
                 base_url=self.config.vision_url,
                 max_new_tokens=96,
                 timeout_s=120,
+                output_schema=SpeakingGestureObservation.model_json_schema(),
             )
         else:
             invoker = OllamaVisionInvoker(

@@ -766,12 +766,22 @@ async def _run(args: argparse.Namespace) -> int:
                     timeout_s=args.vision_timeout_s,
                 )
             elif args.vision_backend == "llamacpp":
+                llama_output_schema = (
+                    (
+                        SpeakingGestureObservation
+                        if args.vision_generate_speech
+                        else GestureObservation
+                    ).model_json_schema()
+                    if args.vision_task == "social"
+                    else None
+                )
                 vision_invoker = LlamaCppVisionInvoker(
                     selected_model,
                     base_url=args.vision_url or DEFAULT_LLAMA_CPP_URL,
                     max_new_tokens=args.vision_max_new_tokens,
                     timeout_s=args.vision_timeout_s,
                     constrain_json=args.vision_json_mode != "prompt",
+                    output_schema=llama_output_schema,
                 )
             else:
                 vision_invoker = None

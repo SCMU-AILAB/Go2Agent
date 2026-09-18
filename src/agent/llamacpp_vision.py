@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
 
-from .decision import DecisionAgentError
+from .decision import AgentDecision, DecisionAgentError
 from .vision_policy import OllamaVisionInvoker
 
 DEFAULT_LLAMA_CPP_MODEL = "UnifoLM-ER-1-Q4_K_M"
@@ -28,6 +28,7 @@ class LlamaCppVisionInvoker:
         max_new_tokens: int = 96,
         timeout_s: float = 30.0,
         constrain_json: bool = True,
+        output_schema: Mapping[str, object] | None = None,
     ) -> None:
         if max_new_tokens <= 0:
             raise ValueError("max new tokens must be greater than zero")
@@ -38,6 +39,9 @@ class LlamaCppVisionInvoker:
         self.max_new_tokens = max_new_tokens
         self.timeout_s = timeout_s
         self.constrain_json = constrain_json
+        self.output_schema = dict(
+            output_schema or AgentDecision.model_json_schema()
+        )
         self._request_id = 0
         self._lock = asyncio.Lock()
         self._closed = False
@@ -100,7 +104,14 @@ class LlamaCppVisionInvoker:
                 "stream": False,
             }
             if self.constrain_json:
-                payload["response_format"] = {"type": "json_object"}
+                payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "vision_output",
+                        "strict": True,
+                        "schema": self.output_schema,
+                    },
+                }
             response = await asyncio.to_thread(
                 self._request_json,
                 "POST",
