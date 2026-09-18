@@ -116,6 +116,7 @@ class FakeConsoleApi implements ConsoleApi {
   int submitTaskCalls = 0;
   String? lastTaskMode;
   int cancelTaskCalls = 0;
+  int emergencyStopCalls = 0;
   int setCameraSourceCalls = 0;
   int clearLogsCalls = 0;
   int fetchCameraFrameCalls = 0;
@@ -219,6 +220,19 @@ class FakeConsoleApi implements ConsoleApi {
       'modelStatus': '已停止',
       'skillStatus': 'STOPPED',
       'progressText': '任务已停止',
+    };
+    return snapshot;
+  }
+
+  @override
+  Future<ConsoleSnapshot> emergencyStop() async {
+    emergencyStopCalls += 1;
+    _payload = {
+      ..._payload,
+      'busy': false,
+      'modelStatus': '急停',
+      'skillStatus': 'STOPPED',
+      'progressText': '已急停',
     };
     return snapshot;
   }

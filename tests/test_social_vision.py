@@ -13,6 +13,7 @@ from tests.test_vision_policy import FakeVisionInvoker, camera_frame
 class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
     def _decide(self, payloads, skills=None, **kwargs):
         policy_context = kwargs.pop("policy_context", None)
+        confirm_hold_s = kwargs.pop("confirm_hold_s", 0.0)
         agent = SocialVisionAgent(
             invoker=FakeVisionInvoker(payloads),
             task_context=kwargs.pop(
@@ -20,6 +21,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
             ),
             generate_speech=kwargs.pop("generate_speech", False),
             response_format=kwargs.pop("response_format", "json"),
+            confirm_hold_s=confirm_hold_s,
             **kwargs,
         )
         return agent.decide(
@@ -75,6 +77,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
                 ]
             ),
             task_context="用户比耶就比心，挥手就打招呼",
+            confirm_hold_s=0,
         )
         decision = await agent.decide(
             [camera_frame(1), camera_frame(2)],
@@ -194,6 +197,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
             invoker=invoker,
             task_context="用户打招呼就打招呼，比耶或比心就比心",
             response_format="gesture_label",
+            confirm_hold_s=0,
         )
         decision = await agent.decide(
             [camera_frame(1), camera_frame(2)],
@@ -233,6 +237,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
             invoker=invoker,
             task_context="当用户给你竖起来大拇指的时候就随机选一个预设的舞蹈跳跃",
             response_format="gesture_label",
+            confirm_hold_s=0,
         )
         decision = await agent.decide(
             [camera_frame(1), camera_frame(2)],
@@ -303,6 +308,91 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
             policy_context={"active_skill": "random_dance"},
         )
         self.assertEqual(decision.action, "continue")
+
+    async def test_confirm_hold_requires_1_5s_continuous_gesture(self):
+        payload = {
+            "action": "execute_skill",
+            "skill": "random_dance",
+            "observation": "thumbs up toward camera",
+            "hand_visible": True,
+            "directed_at_robot": True,
+            "present_in_latest": True,
+        }
+        invoker = FakeVisionInvoker([payload, payload, payload])
+        agent = SocialVisionAgent(
+            invoker=invoker,
+            task_context="用户竖起大拇指时随机跳舞",
+            confirm_hold_s=1.5,
+        )
+        first = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(first.action, "ignore")
+        self.assertIn("confirming gesture hold", first.reason)
+        # Same agent, still held (mock time progression via pending_since)
+        agent._pending_since_s -= 0.2
+        second = await agent.decide(
+            [camera_frame(2), camera_frame(3)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(second.action, "ignore")
+        agent._pending_since_s -= 2.0
+        third = await agent.decide(
+            [camera_frame(3), camera_frame(4)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(third.action, "execute_skill")
+        self.assertEqual(third.skill, "random_dance")
+
+    async def test_same_gesture_requires_release_before_retry(self):
+        payload = {
+            "action": "execute_skill",
+            "skill": "random_dance",
+            "observation": "thumbs up",
+            "hand_visible": True,
+            "directed_at_robot": True,
+            "present_in_latest": True,
+        }
+        invoker = FakeVisionInvoker([payload, payload])
+        agent = SocialVisionAgent(
+            invoker=invoker,
+            task_context="用户点赞时随机跳舞",
+            confirm_hold_s=0,
+        )
+        first = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(first.action, "execute_skill")
+        second = await agent.decide(
+            [camera_frame(2), camera_frame(3)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(second.action, "ignore")
+        self.assertIn("release", second.reason)
+
+    async def test_prompt_requires_center_person_only(self):
+        invoker = FakeVisionInvoker(["none"])
+        agent = SocialVisionAgent(
+            invoker=invoker,
+            task_context="用户点赞时随机跳舞",
+            response_format="gesture_label",
+            confirm_hold_s=0,
+        )
+        await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        prompt = invoker.calls[-1][1]
+        self.assertIn("IMAGE CENTER", prompt)
+        self.assertIn("Ignore people on the", prompt)
 
 
 if __name__ == "__main__":

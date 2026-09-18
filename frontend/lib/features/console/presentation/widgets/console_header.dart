@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/theme/console_colors.dart';
 import '../../controllers/console_controller.dart';
 import 'console_widgets.dart';
+import 'estop_button.dart';
 
 class ConsoleHeader extends StatelessWidget {
   const ConsoleHeader({
@@ -75,6 +76,8 @@ class ConsoleHeader extends StatelessWidget {
             ],
           ),
           const Spacer(),
+          EmergencyStopButton(controller: controller),
+          if (!mobile) const SizedBox(width: 12),
           if (!mobile) ...[
             _metric('CAMERA', _cameraLabel()),
             const SizedBox(width: 14),

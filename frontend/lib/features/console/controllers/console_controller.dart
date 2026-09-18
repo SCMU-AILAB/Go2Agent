@@ -487,6 +487,17 @@ class ConsoleController extends ChangeNotifier {
     }
   }
 
+  Future<void> emergencyStop() async {
+    try {
+      final snapshot = await api.emergencyStop();
+      _applySnapshot(snapshot);
+      onMessage('已急停');
+    } catch (error) {
+      addLog('ERROR', 'executor', '急停失败：$error');
+      onMessage('急停失败：$error');
+    }
+  }
+
   List<ConsoleLog> get visibleLogs {
     final query = searchController.text.trim().toLowerCase();
     return logs.where((entry) {

@@ -1119,6 +1119,11 @@ class ConsoleBackend(SkillToolObserver):
     async def cancel_task(self, reason: str = "用户停止了任务") -> ConsoleSnapshot:
         task = self._active_task
         if task is None or task.done():
+            # Still issue a robot stop so e-stop works while idle after a motion.
+            try:
+                await self.robot.stop()
+            except (RobotCommandError, RuntimeError) as exc:
+                await self._log("ERROR", "executor", f"停止机器人失败：{exc}")
             return self.snapshot()
         self._active_task = None
         task.cancel()
@@ -1133,6 +1138,34 @@ class ConsoleBackend(SkillToolObserver):
         self.progress_text = "任务已停止"
         self.model_output += f"\n\n执行已中断：{reason}。"
         await self._log("WARN", "executor", reason)
+        self._emit_state()
+        return self.snapshot()
+
+    async def emergency_stop(self, reason: str = "操作员急停") -> ConsoleSnapshot:
+        """Hard stop: cancel vision/task workers and command robot stop_move."""
+        await self._log("WARN", "executor", reason)
+        worker = self._vision_worker
+        if worker is not None:
+            try:
+                await worker.stop()
+            except Exception as exc:  # noqa: BLE001 - e-stop must continue
+                await self._log("ERROR", "executor", f"停止视觉 worker 失败：{exc}")
+        task = self._active_task
+        if task is not None and not task.done():
+            self._active_task = None
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        try:
+            await self.robot.stop()
+        except (RobotCommandError, RuntimeError) as exc:
+            await self._log("ERROR", "executor", f"急停发送 stop 失败：{exc}")
+        self.busy = False
+        self.skill_status = "STOPPED"
+        self.model_status = "急停"
+        self.progress_text = "已急停"
+        self.skill_name = "已急停"
+        self.progress = 0
+        self.model_output += f"\n\n【急停】{reason}"
         self._emit_state()
         return self.snapshot()
 

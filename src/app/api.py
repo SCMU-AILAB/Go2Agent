@@ -180,6 +180,10 @@ def create_app(
         reason = body.reason if body is not None else "用户停止了任务"
         return await console.cancel_task(reason)
 
+    @app.post("/api/v1/robot/emergency-stop", response_model=ConsoleSnapshot)
+    async def emergency_stop() -> ConsoleSnapshot:
+        return await console.emergency_stop("操作员点击急停")
+
     @app.get("/api/v1/skills")
     async def get_skills() -> dict[str, list[dict[str, object]]]:
         return {"skills": console.skill_catalog()}
