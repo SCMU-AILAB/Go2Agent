@@ -14,7 +14,9 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
     def _decide(self, payloads, skills=None, **kwargs):
         agent = SocialVisionAgent(
             invoker=FakeVisionInvoker(payloads),
-            task_context=kwargs.pop("task_context", "有人比耶或比心就比心，打招呼就打招呼"),
+            task_context=kwargs.pop(
+                "task_context", "有人比耶或比心就比心，打招呼就打招呼"
+            ),
             generate_speech=kwargs.pop("generate_speech", False),
             **kwargs,
         )
@@ -55,6 +57,47 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(decision.action, "execute_skill")
         self.assertEqual(decision.skill, "heart")
+
+    async def test_corrects_peace_sign_misclassified_as_wave(self):
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker(
+                [
+                    {
+                        "action": "execute_skill",
+                        "skill": "wave",
+                        "observation": "stationary peace sign near face",
+                        "hand_visible": True,
+                        "directed_at_robot": True,
+                        "present_in_latest": True,
+                    }
+                ]
+            ),
+            task_context="用户比耶就比心，挥手就打招呼",
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(decision.skill, "heart")
+        self.assertEqual(
+            agent.last_metrics["gesture_observation"]["resolved_skill"], "heart"
+        )
+
+    async def test_real_wave_is_not_corrected_to_heart(self):
+        decision = await self._decide(
+            [
+                {
+                    "action": "execute_skill",
+                    "skill": "wave",
+                    "observation": "open hand waving side-to-side",
+                    "hand_visible": True,
+                    "directed_at_robot": True,
+                    "present_in_latest": True,
+                }
+            ]
+        )
+        self.assertEqual(decision.skill, "wave")
 
     async def test_speech_only_when_generate_speech_enabled(self):
         payload = {
@@ -139,6 +182,8 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("用户比耶就比心", prompt)
         self.assertIn("heart", prompt)
         self.assertIn("wave", prompt)
+        self.assertIn("is NOT waving", prompt)
+        self.assertIn("choose heart", prompt)
         self.assertNotIn("damp", prompt)
 
 

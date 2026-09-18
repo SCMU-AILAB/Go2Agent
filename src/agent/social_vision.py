@@ -44,6 +44,12 @@ Hard rules:
 8. observation is a short English phrase describing what you saw
    (for example: "peace sign near face", "waving hand", "two-hand heart").
    Do not put the skill name alone with no visual description.
+9. Keep these gestures distinct:
+   - A stationary V sign / peace sign / victory sign / two raised fingers
+     (比耶/剪刀手) is NOT waving. When the task says to answer 比耶 with 比心,
+     choose heart.
+   - Choose wave only for a hand visibly moving side-to-side as a greeting.
+   - A heart made with fingers or both hands also maps to heart when requested.
 
 Registered skills (name: description):
 {skill_catalog}
@@ -127,15 +133,12 @@ class SocialVisionAgent(VisionDecisionAgent):
         if not frames:
             return AgentDecision(action="ignore", reason="waiting for gesture window")
         if any(
-            a.observed_at_s >= b.observed_at_s
-            for a, b in itertools.pairwise(frames)
+            a.observed_at_s >= b.observed_at_s for a, b in itertools.pairwise(frames)
         ):
             return AgentDecision(
                 action="ignore", reason="gesture frames not chronological"
             )
-        offsets = [
-            round(f.observed_at_s - frames[-1].observed_at_s, 3) for f in frames
-        ]
+        offsets = [round(f.observed_at_s - frames[-1].observed_at_s, 3) for f in frames]
         task = self.task_context.strip() or (
             "Respond only to clear intentional social gestures toward the robot."
         )
@@ -145,8 +148,8 @@ class SocialVisionAgent(VisionDecisionAgent):
         )
         prompt += "\nframe_offsets_s=" + json.dumps(offsets)
         if policy_context:
-            prompt += (
-                "\npolicy_context=" + json.dumps(dict(policy_context), ensure_ascii=False)
+            prompt += "\npolicy_context=" + json.dumps(
+                dict(policy_context), ensure_ascii=False
             )
 
         try:
@@ -168,6 +171,15 @@ class SocialVisionAgent(VisionDecisionAgent):
             )
 
         skill_name = observation.skill.strip()
+        skill_name = self._resolve_task_skill(
+            skill_name,
+            observation.observation,
+            task,
+            registered,
+        )
+        if skill_name != observation.skill.strip():
+            self._last_observation["resolved_skill"] = skill_name
+            self._last_observation["skill_correction"] = "peace_sign_to_heart"
         skill = registered.get(skill_name)
         if skill is None or {"dangerous", "operator_only"}.intersection(
             skill.metadata.tags
@@ -208,6 +220,42 @@ class SocialVisionAgent(VisionDecisionAgent):
             speech=speech or None,
             reason=observation.observation or skill_name,
         )
+
+    @staticmethod
+    def _resolve_task_skill(
+        skill_name: str,
+        observation: str,
+        task: str,
+        registered: Mapping[str, RobotSkill[SkillArgs]],
+    ) -> str:
+        """Correct the common peace-sign-as-wave VLM confusion.
+
+        The correction remains task-driven: it is applied only when the
+        operator explicitly asks for a heart response to 比耶 and heart is in
+        the safe registered catalog. A real waving observation stays wave.
+        """
+        if skill_name != "wave" or "heart" not in registered:
+            return skill_name
+        task_lower = task.casefold()
+        if "比耶" not in task_lower or not any(
+            marker in task_lower for marker in ("比心", "heart")
+        ):
+            return skill_name
+        evidence = observation.casefold()
+        peace_markers = (
+            "peace sign",
+            "v-sign",
+            "v sign",
+            "victory sign",
+            "two raised fingers",
+            "two-finger",
+            "two finger",
+            "比耶",
+            "剪刀手",
+        )
+        if any(marker in evidence for marker in peace_markers):
+            return "heart"
+        return skill_name
 
     @staticmethod
     def _parse_observation(output: object) -> TaskDrivenObservation:

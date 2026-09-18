@@ -58,6 +58,29 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.action, "execute_skill")
         self.assertEqual(decision.skill, "wave")
 
+    async def test_peace_sign_returned_as_wave_is_resolved_to_heart(self):
+        agent = SocialVisionAgent(
+            task_context="用户打招呼就打招呼，比耶或比心就比心",
+            invoker=FakeVisionInvoker(
+                [
+                    {
+                        "action": "execute_skill",
+                        "skill": "wave",
+                        "observation": "V-sign held near face",
+                        "hand_visible": True,
+                        "directed_at_robot": True,
+                        "present_in_latest": True,
+                    }
+                ]
+            ),
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(decision.skill, "heart")
+
     async def test_unregistered_or_operator_skill_is_ignored(self):
         for skill in ("damp", "front_flip", "not_a_skill"):
             agent = SocialVisionAgent(
