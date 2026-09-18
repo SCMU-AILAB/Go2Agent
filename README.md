@@ -79,21 +79,22 @@ JPEG，决策、Skill 结果与状态通过 REST/WebSocket 快照展示。详见
 [前端运行说明](frontend/README.md)。
 
 ```bash
-# 原云端 Ollama 服务和 SSH 隧道需保持运行；此命令不驱动机器人
+# 局域网 UnifoLM 只负责视觉；此命令使用模拟机器人，不会下发真机动作
 .venv/bin/python -m app.api --camera-source local \
-  --vision-model qwen3.5:9b --vision-url http://127.0.0.1:11435 --no-audio
+  --vision-backend unifolm \
+  --vision-model unitreerobotics/UnifoLM-ER-1 \
+  --vision-url http://192.168.31.112:8011 --no-audio
 ```
 
 不要同时启动占用同一相机的 `run-remote-vision.sh`。前端选择手势模式并开始任务才会
 启动视觉决策；停止任务会结束 worker。连接真机由后端 `--hardware --network eth0` 决定，
 软件停止不是物理急停，API 仅用于可信网络。
 
-Go2 真机控制台示例（文本与视觉共用现有 Ollama 隧道；只配 `--vision-url` 不会自动配置文本模型）：
+Go2 真机直接使用启动脚本。视觉连接局域网 UnifoLM；文字 Agent 仍使用独立的
+Ollama 地址，因此 `OLLAMA_HOST` 必须指向可用的文字推理服务：
 
 ```bash
-.venv/bin/python -m app.api --robot go2 --hardware --network eth0 \
-  --camera-source local --vision-rotation-deg 0 --no-audio \
-  --model qwen3.5:9b --ollama-url http://127.0.0.1:11435
+OLLAMA_HOST=http://127.0.0.1:11435 sh scripts/run-go2-console.sh
 ```
 
 架构上文本/麦克风路径示意如下（Go2 时 TTS 段会禁用；Adapter 换成 Go2）：
@@ -321,7 +322,7 @@ FastAPI 与前端一起使用：
   --whisper-model /home/cf/Go2Agent/models/faster-whisper-small \
   --whisper-device cpu --whisper-compute-type int8 \
   --audio-input-device pulse --audio-output-device pulse \
-  --piper-model /home/cf/models/piper/zh_CN-huayan-medium.onnx \
+  --piper-model /home/cf/Go2Agent/models/piper/zh_CN-huayan-medium.onnx \
   --host 0.0.0.0 --port 8000
 ```
 
@@ -418,22 +419,22 @@ sh scripts/run-jetson-unifolm-vision.sh --hardware --network eth0
 
 #### 宇树 UnifoLM-ER-1（Go2，可选）
 
-仓库保留原 Ollama/Qwen 链路，并新增 `--vision-backend unifolm`。4090 上的
-`UnifoLM-ER-1-4B` 常驻服务只监听 `127.0.0.1:8011`；机器人端通过 SSH 隧道访问，
-模型输出仍由本地严格 Pydantic Schema、Skill catalog、决策时效和深度安全共同拦截。
-服务不会补造缺失的动作字段，只允许客户端剥离包裹完整 JSON 的单个 Markdown 代码块。
+仓库保留文字 Agent 的 Ollama/Qwen 链路，并用 `--vision-backend unifolm` 单独连接
+视觉服务。当前局域网服务位于 `http://192.168.31.112:8011`。UnifoLM 对 JSON 提示
+容易输出定位坐标，因此该后端使用严格的单标签手势协议；狗端再按操作员任务把
+`wave`、`peace_sign`、`heart` 映射到已注册的安全 Skill。未知标签、坐标或未请求的
+手势都会被拒绝，决策仍经过 Skill catalog、时效门和深度安全。
 
-4090 端（模型已下载到 `/home/qwq/models/UnifoLM-ER-1`）：
+视觉服务器健康检查：
 
 ```bash
-source /home/qwq/venvs/unifolm-er/bin/activate
-python /home/qwq/unifolm-vision-server.py --host 127.0.0.1 --port 8011
+curl http://192.168.31.112:8011/health
 ```
 
-Go2 端先保持隧道：
+Go2 端启动完整控制台：
 
 ```bash
-sh scripts/remote-unifolm-tunnel.sh
+sh scripts/run-go2-console.sh
 ```
 
 另一终端先只测相机和模型，不驱动机器人：
@@ -448,16 +449,14 @@ sh scripts/run-unifolm-vision.sh --once
 sh scripts/run-unifolm-vision.sh --hardware --network eth0
 ```
 
-2026-09-17 实测三帧 448px、生产六字段提示词：热态服务器推理约
-0.88–0.91 秒，SSH HTTP 往返约 0.93–1.01 秒；模型常驻约占 8.8 GiB。
-合成空场景连续 4/4 通过严格 Schema 并被判定为 `ignore`。这只验证传输、格式和
-安全拒绝链路，不代表真实挥手/比心识别准确率；真机动作前仍需现场回放验证。
+2026-09-18 实测当前相机空场景返回 `none`，服务端推理约 0.11 秒，HTTP 往返约
+0.16 秒，并被狗端判定为 `ignore`。这只验证传输、格式和安全拒绝链路，不代表真实
+挥手/比耶/比心识别准确率；真机动作前仍需现场逐项验证。
 Go2 当前可直接映射 `wave` 和 `heart`。`handshake`、`high_five` 若不在 Go2
 SkillRegistry 中会被拒绝，不会绕过 Runtime 调用不存在的动作。
 
-远程脚本现在默认 `--vision-generate-speech`：模型在同一次视觉判断中生成手势字段与
-简短中文 `speech`，本地校验后组合成 `execute_and_speak`。不是固定话术，也没有新增
-语音输入。实机通过 Unitree AudioClient TTS 播报，模拟模式仅在日志显示文字。
+单标签 UnifoLM 路径不生成视觉回复文本；语音输入与文字 Agent 使用本地
+Faster Whisper、独立 Ollama 和 Piper。
 2026-09-12 带语音回归：补充六字段完整输出及“走近、手臂下垂不是握手”的说明后，
 同一23窗口回放动作选择23/23、无格式错误、无无动作场景误触发；该集已用于调试，
 不是独立准确率评测。结果保存于 `debug/vision/eval-speaking-20260912-v2-retry.jsonl`。

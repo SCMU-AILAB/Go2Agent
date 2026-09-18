@@ -18,6 +18,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
                 "task_context", "有人比耶或比心就比心，打招呼就打招呼"
             ),
             generate_speech=kwargs.pop("generate_speech", False),
+            response_format=kwargs.pop("response_format", "json"),
             **kwargs,
         )
         return agent.decide(
@@ -185,6 +186,45 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("is NOT waving", prompt)
         self.assertIn("choose heart", prompt)
         self.assertNotIn("damp", prompt)
+
+    async def test_gesture_label_maps_peace_sign_to_requested_heart(self):
+        invoker = FakeVisionInvoker(["peace_sign"])
+        agent = SocialVisionAgent(
+            invoker=invoker,
+            task_context="用户打招呼就打招呼，比耶或比心就比心",
+            response_format="gesture_label",
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(decision.action, "execute_skill")
+        self.assertEqual(decision.skill, "heart")
+        prompt = invoker.calls[-1][1]
+        self.assertIn("Reply with exactly one label", prompt)
+        self.assertNotIn("JSON object", prompt)
+
+    async def test_gesture_label_none_is_ignored(self):
+        decision = await self._decide(
+            ["none"],
+            response_format="gesture_label",
+        )
+        self.assertEqual(decision.action, "ignore")
+
+    async def test_gesture_label_not_requested_is_ignored(self):
+        decision = await self._decide(
+            ["high_five"],
+            response_format="gesture_label",
+        )
+        self.assertEqual(decision.action, "ignore")
+
+    async def test_gesture_label_rejects_coordinate_output(self):
+        with self.assertRaisesRegex(Exception, "unsupported gesture label"):
+            await self._decide(
+                ['[{"point": [236, 738]}]'],
+                response_format="gesture_label",
+            )
 
 
 if __name__ == "__main__":

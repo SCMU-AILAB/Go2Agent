@@ -392,6 +392,11 @@ class ConsoleBackend(SkillToolObserver):
             prompt_profile="egocentric",
             generate_speech=True,
             task_context=f"{self.system_prompt}\nCurrent task: {instruction}",
+            response_format=(
+                "gesture_label"
+                if self.config.vision_backend == "unifolm"
+                else "json"
+            ),
             timeout_s=120,
             invoker=invoker,
         )

@@ -11,6 +11,7 @@ import asyncio
 import itertools
 import json
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -68,6 +69,22 @@ Optional "speech": short Chinese line under 40 characters when it helps the
 interaction; omit or null otherwise.
 """
 
+_GESTURE_LABEL_PROMPT = """Classify the intentional hand gesture directed at this
+robot camera in the newest image. The images are chronological (newest last).
+
+Choose exactly one label:
+none, wave, peace_sign, heart, blow_kiss, handshake, high_five
+
+Use peace_sign for a stationary V sign, victory sign, scissors sign, or two
+raised fingers. Use wave only when the hand is visibly greeting or moving
+side-to-side. Use heart for a finger-heart or a heart made with both hands.
+Choose none when the hand is unclear, the gesture is no longer present in the
+newest image, or the person is not directing it toward this camera.
+
+Reply with exactly one label and nothing else. Do not return JSON, markdown,
+coordinates, points, boxes, or an explanation.
+"""
+
 
 class TaskDrivenObservation(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -92,15 +109,19 @@ class SocialVisionAgent(VisionDecisionAgent):
         prompt_profile: str = "egocentric",
         generate_speech: bool = False,
         task_context: str = "",
+        response_format: Literal["json", "gesture_label"] = "json",
         **kwargs,
     ):
         # prompt_profile kept for CLI/backend compatibility; policy is task-driven.
         if prompt_profile not in ("legacy", "egocentric"):
             raise ValueError("unknown social prompt profile")
+        if response_format not in ("json", "gesture_label"):
+            raise ValueError("unknown social vision response format")
         super().__init__(**kwargs)
         self.prompt_profile = prompt_profile
         self.generate_speech = generate_speech
         self.task_context = task_context
+        self.response_format = response_format
 
     @property
     def last_metrics(self) -> Mapping[str, object]:
@@ -108,7 +129,9 @@ class SocialVisionAgent(VisionDecisionAgent):
             **super().last_metrics,
             "gesture_observation": getattr(self, "_last_observation", None),
             "prompt_profile": self.prompt_profile,
-            "decision_mode": "task_driven",
+            "decision_mode": (
+                "gesture_label" if self.response_format == "gesture_label" else "task_driven"
+            ),
         }
 
     @staticmethod
@@ -142,20 +165,27 @@ class SocialVisionAgent(VisionDecisionAgent):
         task = self.task_context.strip() or (
             "Respond only to clear intentional social gestures toward the robot."
         )
-        prompt = _TASK_PROMPT.format(
-            skill_catalog=self._catalog_text(skill_catalog),
-            task=task,
-        )
-        prompt += "\nframe_offsets_s=" + json.dumps(offsets)
-        if policy_context:
-            prompt += "\npolicy_context=" + json.dumps(
-                dict(policy_context), ensure_ascii=False
+        if self.response_format == "gesture_label":
+            prompt = _GESTURE_LABEL_PROMPT
+        else:
+            prompt = _TASK_PROMPT.format(
+                skill_catalog=self._catalog_text(skill_catalog),
+                task=task,
             )
+            prompt += "\nframe_offsets_s=" + json.dumps(offsets)
+            if policy_context:
+                prompt += "\npolicy_context=" + json.dumps(
+                    dict(policy_context), ensure_ascii=False
+                )
 
         try:
             async with asyncio.timeout(self.timeout_s):
                 output = await self._invoker.ainvoke([f.rgb for f in frames], prompt)
-            observation = self._parse_observation(output)
+            observation = (
+                self._parse_gesture_label(output, task)
+                if self.response_format == "gesture_label"
+                else self._parse_observation(output)
+            )
         except Exception as exc:
             raise DecisionAgentError(
                 f"task-driven vision decision failed: {type(exc).__name__}: {exc}"
@@ -219,6 +249,62 @@ class SocialVisionAgent(VisionDecisionAgent):
             skill=skill_name,
             speech=speech or None,
             reason=observation.observation or skill_name,
+        )
+
+    @staticmethod
+    def _parse_gesture_label(output: object, task: str) -> TaskDrivenObservation:
+        if not isinstance(output, str):
+            raise TypeError("gesture label output must be text")
+        label = output.strip().casefold().replace("-", "_").replace(" ", "_")
+        allowed = {
+            "none",
+            "wave",
+            "peace_sign",
+            "heart",
+            "blow_kiss",
+            "handshake",
+            "high_five",
+        }
+        if label not in allowed:
+            raise ValueError(f"unsupported gesture label: {output!r}")
+        if label == "none":
+            return TaskDrivenObservation(
+                action="ignore",
+                observation="no current directed gesture",
+            )
+
+        task_lower = task.casefold()
+        skill: str | None = None
+        if label == "wave" and any(
+            marker in task_lower
+            for marker in ("挥手", "打招呼", "你好", "wave", "greet")
+        ):
+            skill = "wave"
+        elif (
+            label == "heart"
+            and any(marker in task_lower for marker in ("比心", "爱心", "heart"))
+        ) or (
+            label == "peace_sign"
+            and any(
+                marker in task_lower
+                for marker in ("比耶", "剪刀手", "peace", "v sign")
+            )
+            and any(marker in task_lower for marker in ("比心", "爱心", "heart"))
+        ):
+            skill = "heart"
+
+        if skill is None:
+            return TaskDrivenObservation(
+                action="ignore",
+                observation=f"{label} not requested by operator task",
+            )
+        return TaskDrivenObservation(
+            action="execute_skill",
+            skill=skill,
+            observation=label.replace("_", " "),
+            hand_visible=True,
+            directed_at_robot=True,
+            present_in_latest=True,
         )
 
     @staticmethod
