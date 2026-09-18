@@ -318,6 +318,8 @@ FastAPI 与前端一起使用：
   --robot go2 --hardware --network eth0 \
   --camera-source local --vision-rotation-deg 0 \
   --voice --record-seconds 3 \
+  --whisper-model /home/cf/Go2Agent/models/faster-whisper-small \
+  --whisper-device cpu --whisper-compute-type int8 \
   --audio-input-device pulse --audio-output-device pulse \
   --piper-model /home/cf/models/piper/zh_CN-huayan-medium.onnx \
   --host 0.0.0.0 --port 8000
