@@ -22,7 +22,9 @@ from .vision_policy import VisionDecisionAgent
 
 class GestureObservation(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    gesture: Literal["handshake", "wave", "high_five", "heart", "none", "uncertain"]
+    gesture: Literal[
+        "handshake", "wave", "high_five", "peace", "heart", "none", "uncertain"
+    ]
     hand_visible: bool
     directed_at_robot: bool
     present_in_latest: bool
@@ -30,6 +32,7 @@ class GestureObservation(BaseModel):
         "offered_hand",
         "side_to_side",
         "raised_palm",
+        "peace_sign",
         "heart_shape",
         "none",
         "ambiguous",
@@ -44,6 +47,7 @@ _EVIDENCE = {
     "handshake": "offered_hand",
     "wave": "side_to_side",
     "high_five": "raised_palm",
+    "peace": "peace_sign",
     "heart": "heart_shape",
 }
 _PROMPT = """Classify the human social gesture in these chronological camera images.
@@ -54,6 +58,8 @@ shoulder with fingers together, inviting hand contact. Mere reaching toward an
 object/camera, pointing, or holding an object is NOT a handshake.
 high_five: an open palm deliberately offered toward the robot near shoulder/head
 height. wave: visible side-to-side hand motion across frames, NOT a still palm.
+peace: a stationary V sign / victory sign / two raised fingers (比耶/剪刀手),
+NOT a side-to-side waving hand. The robot responds to peace with heart.
 heart: both hands deliberately form one heart shape together in the latest image.
 none: no offered social gesture. uncertain: hand is cropped, occluded, blurred,
 gesture direction is unclear, or handshake/high-five cannot be distinguished.
@@ -63,12 +69,12 @@ present and the intended recipient is unclear, choose uncertain.
 Return a JSON object, not a schema. Use exactly five keys:
 gesture, hand_visible, directed_at_robot, present_in_latest, evidence.
 The three boolean fields must be true or false, not strings.
-gesture must be exactly one of: "handshake", "wave", "high_five", "heart", "none", "uncertain".
+gesture must be exactly one of: "handshake", "wave", "high_five", "peace", "heart", "none", "uncertain".
 evidence must be exactly one of: "offered_hand", "side_to_side", "raised_palm",
-"heart_shape", "none", "ambiguous". NEVER write a sentence in evidence.
+"peace_sign", "heart_shape", "none", "ambiguous". NEVER write a sentence in evidence.
 Required gesture/evidence pairs:
 {"handshake":"offered_hand","wave":"side_to_side","high_five":"raised_palm",
-"heart":"heart_shape","none":"none","uncertain":"ambiguous"}.
+"peace":"peace_sign","heart":"heart_shape","none":"none","uncertain":"ambiguous"}.
 Only select a pair supported by the images. No markdown or explanation.
 """
 
@@ -76,8 +82,15 @@ Only select a pair supported by the images. No markdown or explanation.
 class SocialVisionAgent(VisionDecisionAgent):
     minimum_frames = 2
 
-    def __init__(self, *, prompt_profile: str = "legacy", generate_speech: bool = False,
-                 task_context: str = "", wave_response: str = "wave", **kwargs):
+    def __init__(
+        self,
+        *,
+        prompt_profile: str = "legacy",
+        generate_speech: bool = False,
+        task_context: str = "",
+        wave_response: str = "wave",
+        **kwargs,
+    ):
         if prompt_profile not in ("legacy", "egocentric"):
             raise ValueError("unknown social prompt profile")
         super().__init__(**kwargs)
@@ -204,13 +217,27 @@ class SocialVisionAgent(VisionDecisionAgent):
                 reason=f"gesture unconfirmed: {gesture} ({', '.join(unmet)})",
             )
         registered = {s.metadata.name: s for s in skill_catalog}
-        response_skill = self.wave_response if gesture == "wave" else gesture
+        response_skill = (
+            "heart"
+            if gesture == "peace"
+            else self.wave_response
+            if gesture == "wave"
+            else gesture
+        )
         skill = registered.get(response_skill)
-        if skill is None or {"dangerous", "operator_only"}.intersection(skill.metadata.tags):
+        if skill is None or {"dangerous", "operator_only"}.intersection(
+            skill.metadata.tags
+        ):
             return AgentDecision(action="ignore", reason="gesture skill unavailable")
         if (policy_context or {}).get("active_skill") == response_skill:
-            return AgentDecision(action="continue", reason=f"gesture ongoing: {gesture}")
+            return AgentDecision(
+                action="continue", reason=f"gesture ongoing: {gesture}"
+            )
         speech = getattr(observation, "speech", None)
         speech = speech.strip() if speech else None
-        return AgentDecision(action="execute_and_speak" if speech else "execute_skill",
-                             skill=response_skill, speech=speech or None, reason=observation.evidence)
+        return AgentDecision(
+            action="execute_and_speak" if speech else "execute_skill",
+            skill=response_skill,
+            speech=speech or None,
+            reason=observation.evidence,
+        )

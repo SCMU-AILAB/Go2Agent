@@ -308,6 +308,29 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.action, "execute_skill")
         self.assertEqual(decision.skill, "heart")
 
+    async def test_go2_peace_sign_maps_to_heart_skill(self):
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker(
+                [
+                    {
+                        "gesture": "peace",
+                        "evidence": "peace_sign",
+                        "hand_visible": True,
+                        "directed_at_robot": True,
+                        "present_in_latest": True,
+                    }
+                ]
+            )
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+
+        self.assertEqual(decision.action, "execute_skill")
+        self.assertEqual(decision.skill, "heart")
+
     async def test_duplicate_frame_timestamps_are_rejected(self):
         invoker = FakeVisionInvoker([])
         decision = await SocialVisionAgent(invoker=invoker).decide(
