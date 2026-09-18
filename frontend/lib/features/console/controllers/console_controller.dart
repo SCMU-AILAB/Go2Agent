@@ -490,13 +490,31 @@ class ConsoleController extends ChangeNotifier {
   }
 
   Future<void> emergencyStop() async {
+    Object? primaryError;
     try {
       final snapshot = await api.emergencyStop();
       _applySnapshot(snapshot);
       onMessage('已急停');
+      return;
+    } catch (error) {
+      primaryError = error;
+      addLog('WARN', 'executor', '急停接口不可用，尝试停止任务：$error');
+    }
+    // Fallback for older backends without /robot/emergency-stop.
+    try {
+      final snapshot = await api.cancelTask('操作员急停');
+      _applySnapshot(snapshot);
+      onMessage(
+        primaryError == null
+            ? '已停止任务'
+            : '急停接口不可用，已改用任务停止（请重启后端以启用急停 API）',
+      );
     } catch (error) {
       addLog('ERROR', 'executor', '急停失败：$error');
-      onMessage('急停失败：$error');
+      onMessage(
+        '急停失败：$error\n'
+        '若提示 Not Found，请重启后端加载新接口后重试',
+      );
     }
   }
 

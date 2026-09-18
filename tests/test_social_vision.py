@@ -318,32 +318,27 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
             "directed_at_robot": True,
             "present_in_latest": True,
         }
-        invoker = FakeVisionInvoker([payload, payload, payload])
+        invoker = FakeVisionInvoker([payload, payload, payload, payload])
         agent = SocialVisionAgent(
             invoker=invoker,
             task_context="用户竖起大拇指时随机跳舞",
             confirm_hold_s=1.5,
         )
+        skills = build_go2_autonomy_skills()
+        state = RobotState(hardware=False, connected=True)
         first = await agent.decide(
-            [camera_frame(1), camera_frame(2)],
-            RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
+            [camera_frame(1.0), camera_frame(1.2)], state, skills
         )
         self.assertEqual(first.action, "ignore")
         self.assertIn("confirming gesture hold", first.reason)
-        # Same agent, still held (mock time progression via pending_since)
-        agent._pending_since_s -= 0.2
+        # Still too short on the camera timeline.
         second = await agent.decide(
-            [camera_frame(2), camera_frame(3)],
-            RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
+            [camera_frame(1.2), camera_frame(1.4)], state, skills
         )
         self.assertEqual(second.action, "ignore")
-        agent._pending_since_s -= 2.0
+        # Continuous recognition reaches 1.5s on camera timestamps + 2 hits.
         third = await agent.decide(
-            [camera_frame(3), camera_frame(4)],
-            RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
+            [camera_frame(1.4), camera_frame(2.8)], state, skills
         )
         self.assertEqual(third.action, "execute_skill")
         self.assertEqual(third.skill, "random_dance")

@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
-import time
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
@@ -150,6 +149,7 @@ class SocialVisionAgent(VisionDecisionAgent):
         self.confirm_hold_s = float(hold)
         self._pending_skill: str | None = None
         self._pending_since_s: float | None = None
+        self._hold_hits = 0
         self._fired_skill: str | None = None
 
     @property
@@ -281,19 +281,30 @@ class SocialVisionAgent(VisionDecisionAgent):
                 reason="gesture already responded; release before retry",
             )
 
-        now_s = time.monotonic()
+        # Hold uses CAMERA timestamps so slow inference does not fake a hold.
+        # Also require at least two consecutive confirmations for the same skill.
+        frame_t = float(frames[-1].observed_at_s)
         if self._pending_skill != skill_name:
             self._pending_skill = skill_name
-            self._pending_since_s = now_s
-        held_s = now_s - (self._pending_since_s or now_s)
+            self._pending_since_s = frame_t
+            self._hold_hits = 1
+        else:
+            self._hold_hits += 1
+        since = self._pending_since_s if self._pending_since_s is not None else frame_t
+        held_s = max(0.0, frame_t - since)
         self._last_observation["hold_elapsed_s"] = round(held_s, 3)
+        self._last_observation["hold_hits"] = self._hold_hits
         self._last_observation["confirm_hold_s"] = self.confirm_hold_s
-        if held_s < self.confirm_hold_s:
+        self._last_observation["hold_clock"] = "camera_frame"
+        if self.confirm_hold_s > 0 and (
+            self._hold_hits < 2 or held_s < self.confirm_hold_s
+        ):
             return AgentDecision(
                 action="ignore",
                 reason=(
                     f"confirming gesture hold "
-                    f"{held_s:.2f}s < {self.confirm_hold_s:.2f}s"
+                    f"{held_s:.2f}s < {self.confirm_hold_s:.2f}s "
+                    f"(hits={self._hold_hits})"
                 ),
             )
 
@@ -303,6 +314,7 @@ class SocialVisionAgent(VisionDecisionAgent):
         self._fired_skill = skill_name
         self._pending_skill = None
         self._pending_since_s = None
+        self._hold_hits = 0
         return AgentDecision(
             action="execute_and_speak" if speech else "execute_skill",
             skill=skill_name,
@@ -313,6 +325,7 @@ class SocialVisionAgent(VisionDecisionAgent):
     def _reset_hold(self, *, rearm: bool) -> None:
         self._pending_skill = None
         self._pending_since_s = None
+        self._hold_hits = 0
         if rearm:
             self._fired_skill = None
 
