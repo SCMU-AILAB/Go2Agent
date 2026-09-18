@@ -51,6 +51,11 @@ Hard rules:
      choose heart.
    - Choose wave only for a hand visibly moving side-to-side as a greeting.
    - A heart made with fingers or both hands also maps to heart when requested.
+   - thumbs_up: one closed fist with the thumb clearly raised toward this
+     camera (点赞/大拇指). Do NOT treat open palms, pointing fingers, waves,
+     or unclear hand poses as thumbs_up. If the operator task explicitly
+     says 大拇指/点赞 triggers a random dance, choose skill random_dance
+     only. Never pick dance1/dance2 yourself; random_dance picks one safely.
 
 Registered skills (name: description):
 {skill_catalog}
@@ -73,11 +78,14 @@ _GESTURE_LABEL_PROMPT = """Classify the intentional hand gesture directed at thi
 robot camera in the newest image. The images are chronological (newest last).
 
 Choose exactly one label:
-none, wave, peace_sign, heart, blow_kiss, handshake, high_five
+none, wave, peace_sign, heart, blow_kiss, handshake, high_five, thumbs_up
 
 Use peace_sign for a stationary V sign, victory sign, scissors sign, or two
 raised fingers. Use wave only when the hand is visibly greeting or moving
 side-to-side. Use heart for a finger-heart or a heart made with both hands.
+Use thumbs_up for one closed fist with the thumb clearly raised toward this
+robot camera (点赞/大拇指). Do not classify open palms, pointing fingers,
+waving hands, or unclear poses as thumbs_up.
 Choose none when the hand is unclear, the gesture is no longer present in the
 newest image, or the person is not directing it toward this camera.
 
@@ -264,6 +272,7 @@ class SocialVisionAgent(VisionDecisionAgent):
             "blow_kiss",
             "handshake",
             "high_five",
+            "thumbs_up",
         }
         if label not in allowed:
             raise ValueError(f"unsupported gesture label: {output!r}")
@@ -292,6 +301,13 @@ class SocialVisionAgent(VisionDecisionAgent):
             and any(marker in task_lower for marker in ("比心", "爱心", "heart"))
         ):
             skill = "heart"
+        elif label == "thumbs_up":
+            thumbs_markers = ("大拇指", "竖起大拇指", "点赞", "thumbs up", "thumbs-up")
+            dance_markers = ("随机", "跳舞", "舞蹈", "dance")
+            if any(marker in task_lower for marker in thumbs_markers) and any(
+                marker in task_lower for marker in dance_markers
+            ):
+                skill = "random_dance"
 
         if skill is None:
             return TaskDrivenObservation(

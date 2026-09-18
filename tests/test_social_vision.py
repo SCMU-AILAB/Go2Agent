@@ -12,6 +12,7 @@ from tests.test_vision_policy import FakeVisionInvoker, camera_frame
 
 class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
     def _decide(self, payloads, skills=None, **kwargs):
+        policy_context = kwargs.pop("policy_context", None)
         agent = SocialVisionAgent(
             invoker=FakeVisionInvoker(payloads),
             task_context=kwargs.pop(
@@ -25,7 +26,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
             [camera_frame(1), camera_frame(2)],
             RobotState(hardware=False, connected=True),
             skills if skills is not None else build_go2_autonomy_skills(),
-            **kwargs,
+            policy_context=policy_context,
         )
 
     async def test_ignore_when_no_social_response(self):
@@ -225,6 +226,83 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
                 ['[{"point": [236, 738]}]'],
                 response_format="gesture_label",
             )
+
+    async def test_gesture_label_thumbs_up_random_dance_when_task_asks(self):
+        invoker = FakeVisionInvoker(["thumbs_up"])
+        agent = SocialVisionAgent(
+            invoker=invoker,
+            task_context="当用户给你竖起来大拇指的时候就随机选一个预设的舞蹈跳跃",
+            response_format="gesture_label",
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(decision.action, "execute_skill")
+        self.assertEqual(decision.skill, "random_dance")
+        prompt = invoker.calls[-1][1]
+        self.assertIn("thumbs_up", prompt)
+        self.assertIn("Reply with exactly one label", prompt)
+
+    async def test_gesture_label_thumbs_up_unrelated_task_is_ignored(self):
+        decision = await self._decide(
+            ["thumbs_up"],
+            response_format="gesture_label",
+            task_context="用户打招呼时打招呼",
+        )
+        self.assertEqual(decision.action, "ignore")
+
+    async def test_gesture_label_thumbs_up_without_dance_task_is_ignored(self):
+        decision = await self._decide(
+            ["thumbs_up"],
+            response_format="gesture_label",
+            task_context="用户点赞时比心",
+        )
+        self.assertEqual(decision.action, "ignore")
+
+    async def test_gesture_label_rejects_point_2d(self):
+        for label in ("point", "point_2d", 'point_2d'):
+            with self.assertRaisesRegex(Exception, "unsupported gesture label"):
+                await self._decide(
+                    [label],
+                    response_format="gesture_label",
+                    task_context="用户点赞时随机跳舞",
+                )
+
+    async def test_json_path_can_select_random_dance(self):
+        decision = await self._decide(
+            [
+                {
+                    "action": "execute_skill",
+                    "skill": "random_dance",
+                    "observation": "thumbs up toward camera",
+                    "hand_visible": True,
+                    "directed_at_robot": True,
+                    "present_in_latest": True,
+                }
+            ],
+            task_context="用户竖起大拇指时随机跳舞",
+        )
+        self.assertEqual(decision.action, "execute_skill")
+        self.assertEqual(decision.skill, "random_dance")
+
+    async def test_json_active_random_dance_returns_continue(self):
+        decision = await self._decide(
+            [
+                {
+                    "action": "execute_skill",
+                    "skill": "random_dance",
+                    "observation": "thumbs up still held",
+                    "hand_visible": True,
+                    "directed_at_robot": True,
+                    "present_in_latest": True,
+                }
+            ],
+            task_context="用户竖起大拇指时随机跳舞",
+            policy_context={"active_skill": "random_dance"},
+        )
+        self.assertEqual(decision.action, "continue")
 
 
 if __name__ == "__main__":

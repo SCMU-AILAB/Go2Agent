@@ -172,6 +172,34 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(decision.action, "continue")
 
+    async def test_gesture_label_thumbs_up_maps_to_random_dance(self):
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker(["thumbs_up"]),
+            task_context="用户点赞时随机跳舞",
+            response_format="gesture_label",
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(decision.action, "execute_skill")
+        self.assertEqual(decision.skill, "random_dance")
+
+    async def test_gesture_label_active_random_dance_continues(self):
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker(["thumbs_up"]),
+            task_context="用户竖起大拇指的时候就随机跳舞",
+            response_format="gesture_label",
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+            policy_context={"active_skill": "random_dance"},
+        )
+        self.assertEqual(decision.action, "continue")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,10 @@ from skills import (
     register_g1_skills,
     register_go2_skills,
 )
+from skills.go2_catalog import (
+    GO2_RANDOM_DANCE_POOL,
+    RandomGo2DanceSkill,
+)
 from skills.motions.go2_motion import GO2_VELOCITY_REFRESH_S
 
 
@@ -94,12 +98,34 @@ class Go2CatalogTests(unittest.TestCase):
         self.assertIn("wave", names)
         self.assertIn("move", names)
         self.assertIn("stop", names)
+        self.assertIn("random_dance", names)
         self.assertNotIn("handshake", names)
         self.assertNotIn("high_five", names)
         self.assertNotIn("squat", names)
         self.assertNotIn("start", names)
         self.assertNotIn("damp", names)
         self.assertNotIn("recovery_stand", names)
+
+    def test_random_dance_catalog_safety(self) -> None:
+        skills = {
+            skill.metadata.name: skill for skill in build_go2_autonomy_skills()
+        }
+        random_dance = skills["random_dance"]
+        self.assertNotIn("operator_only", random_dance.metadata.tags)
+        self.assertNotIn("dangerous", random_dance.metadata.tags)
+        self.assertEqual(GO2_RANDOM_DANCE_POOL, ("dance1", "dance2"))
+        forbidden = {
+            "front_jump",
+            "front_flip",
+            "back_flip",
+            "left_flip",
+            "front_pounce",
+            "free_jump",
+            "free_bound",
+            "hand_stand",
+            "walk_upright",
+        }
+        self.assertFalse(forbidden.intersection(GO2_RANDOM_DANCE_POOL))
 
     def test_operator_catalog_adds_damp_and_recovery(self) -> None:
         robot = RecordingGo2Adapter()
@@ -131,6 +157,37 @@ class Go2SkillExecutionTests(unittest.IsolatedAsyncioTestCase):
         result = await self.runtime.execute("wave")
         self.assertTrue(result.success)
         self.assertEqual(self.robot.events, [("loco", ("hello", {}))])
+
+    async def test_random_dance_injected_chooser_dance1(self) -> None:
+        from core.context import SkillContext
+        from core.models import SkillArgs
+
+        skill = RandomGo2DanceSkill(chooser=lambda pool: "dance1")
+        ctx = SkillContext(robot=self.robot, execution_id="t1")
+        result = await skill.execute(ctx, SkillArgs())
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["chosen_action"], "dance1")
+        self.assertEqual(result.data["pool"], ["dance1", "dance2"])
+        self.assertIs(result.data["completion_verified"], False)
+        self.assertEqual(self.robot.events, [("loco", ("dance1", {}))])
+
+    async def test_random_dance_injected_chooser_dance2(self) -> None:
+        from core.context import SkillContext
+        from core.models import SkillArgs
+
+        skill = RandomGo2DanceSkill(chooser=lambda pool: "dance2")
+        ctx = SkillContext(robot=self.robot, execution_id="t2")
+        result = await skill.execute(ctx, SkillArgs())
+        self.assertEqual(result.data["chosen_action"], "dance2")
+        self.assertEqual(self.robot.events, [("loco", ("dance2", {}))])
+
+    async def test_random_dance_via_runtime_uses_pool_only(self) -> None:
+        result = await self.runtime.execute("random_dance")
+        self.assertTrue(result.success)
+        action = result.data["chosen_action"]
+        self.assertIn(action, ("dance1", "dance2"))
+        self.assertEqual(result.data["pool"], ["dance1", "dance2"])
+        self.assertEqual(self.robot.events, [("loco", (action, {}))])
 
     async def test_stand_up_maps_to_sport_client(self) -> None:
         result = await self.runtime.execute("stand_up")
