@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -33,10 +34,16 @@ class HostSpeechOutput:
         self.piper_config = piper_config
         self.fallback_voice = fallback_voice
         self._audio_lock = audio_lock or asyncio.Lock()
+        venv_piper = Path(sys.executable).with_name("piper")
+        self._piper_bin = (
+            str(venv_piper)
+            if venv_piper.is_file()
+            else shutil.which("piper")
+        )
 
     @property
     def engine(self) -> str:
-        if self.piper_model and shutil.which("piper"):
+        if self.piper_model and self._piper_bin:
             return "piper"
         return "espeak-ng"
 
@@ -76,7 +83,7 @@ class HostSpeechOutput:
 
     def _run_piper(self, text: str, wav_path: Path) -> None:
         command = [
-            "piper",
+            self._piper_bin or "piper",
             "--model",
             self.piper_model or "",
             "--output_file",
