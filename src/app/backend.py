@@ -145,6 +145,7 @@ class ConsoleSnapshot(ApiModel):
     voice: VoiceView
     tools: list[ToolCall]
     logs: list[ConsoleLog]
+    vision_confirm_hold_s: float = 1.5
 
 
 class ConsoleEvent(ApiModel):
@@ -201,10 +202,13 @@ class BackendConfig:
     # Match run-remote-vision.sh; configurable for recognition/latency replay.
     vision_window_s: float = 0.8
     vision_frame_count: int = 3
+    vision_confirm_hold_s: float = 1.5
 
     def __post_init__(self) -> None:
         if self.vision_rotation_deg not in (0, 90, 180, 270):
             raise ValueError("invalid vision rotation")
+        if not (0.0 <= float(self.vision_confirm_hold_s) <= 30.0):
+            raise ValueError("vision_confirm_hold_s must be between 0 and 30")
         if self.camera_detection_fps <= 0:
             raise ValueError("camera detection FPS must be positive")
         if self.voice_record_seconds < 0.5:
@@ -339,6 +343,7 @@ class ConsoleBackend(SkillToolObserver):
         self.frame_version = 0
         self.tools: list[ToolCall] = []
         self.logs: list[ConsoleLog] = []
+        self.vision_confirm_hold_s = float(self.config.vision_confirm_hold_s)
         self.voice_enabled = False
         self.voice_listening = False
         self.voice_status: Literal[
@@ -397,6 +402,7 @@ class ConsoleBackend(SkillToolObserver):
                 if self.config.vision_backend == "unifolm"
                 else "json"
             ),
+            confirm_hold_s=self.vision_confirm_hold_s,
             timeout_s=120,
             invoker=invoker,
         )
@@ -1169,6 +1175,22 @@ class ConsoleBackend(SkillToolObserver):
         self._emit_state()
         return self.snapshot()
 
+    async def update_vision_confirm_hold(self, seconds: float) -> ConsoleSnapshot:
+        """Set continuous gesture confirmation window used by the vision agent."""
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+            raise ValueError("confirm hold must be a number")
+        value = float(seconds)
+        if not (0.0 <= value <= 30.0):
+            raise ValueError("confirm hold must be between 0 and 30 seconds")
+        self.vision_confirm_hold_s = value
+        await self._log(
+            "INFO",
+            "config",
+            f"手势确认时长已更新为 {value:.2f} 秒（新视觉任务生效）。",
+        )
+        self._emit_state()
+        return self.snapshot()
+
     async def execute_skill(
         self,
         skill_name: str,
@@ -1365,6 +1387,7 @@ class ConsoleBackend(SkillToolObserver):
             ),
             tools=list(self.tools),
             logs=list(self.logs),
+            vision_confirm_hold_s=self.vision_confirm_hold_s,
         )
 
     def skill_catalog(self) -> list[dict[str, object]]:

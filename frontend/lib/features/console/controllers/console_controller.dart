@@ -83,6 +83,7 @@ class ConsoleController extends ChangeNotifier {
   String progressText = '等待执行';
   String modelOutput = '';
   String currentTask = '';
+  double visionConfirmHoldS = 1.5;
 
   /// Local chat history for the dialog page (frontend-only; no backend field).
   final List<DialogTurn> dialog = [];
@@ -228,6 +229,7 @@ class ConsoleController extends ChangeNotifier {
     activeStep = snapshot.activeStep;
     currentTask = snapshot.currentTask;
     modelOutput = snapshot.modelOutput;
+    visionConfirmHoldS = snapshot.visionConfirmHoldS;
     taskCount = snapshot.taskCount;
     latency = snapshot.latency;
     robotMode = snapshot.robotMode;
@@ -495,6 +497,17 @@ class ConsoleController extends ChangeNotifier {
     } catch (error) {
       addLog('ERROR', 'executor', '急停失败：$error');
       onMessage('急停失败：$error');
+    }
+  }
+
+  Future<void> applyVisionConfirmHold(double seconds) async {
+    try {
+      final snapshot = await api.updateVisionConfirmHold(seconds);
+      _applySnapshot(snapshot);
+      onMessage('手势确认时长：${seconds.toStringAsFixed(2)} 秒');
+    } catch (error) {
+      addLog('ERROR', 'config', '更新手势确认时长失败：$error');
+      onMessage('更新失败：$error');
     }
   }
 

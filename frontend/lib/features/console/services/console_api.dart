@@ -33,6 +33,8 @@ abstract interface class ConsoleApi {
   Future<ConsoleSnapshot> cancelTask(String reason);
 
   Future<ConsoleSnapshot> emergencyStop();
+
+  Future<ConsoleSnapshot> updateVisionConfirmHold(double seconds);
   Future<ConsoleSnapshot> setCameraSource(String source);
   Future<ConsoleSnapshot> clearLogs();
   Future<ConsoleSnapshot> startVoice();
@@ -105,6 +107,15 @@ class HttpConsoleApi implements ConsoleApi {
   Future<ConsoleSnapshot> emergencyStop() async => ConsoleSnapshot.fromJson(
     await _post('/api/v1/robot/emergency-stop', <String, dynamic>{}),
   );
+
+  @override
+  Future<ConsoleSnapshot> updateVisionConfirmHold(double seconds) async =>
+      ConsoleSnapshot.fromJson(
+        await _put(
+          '/api/v1/config/vision-confirm-hold',
+          {'seconds': seconds},
+        ),
+      );
 
   @override
   Future<ConsoleSnapshot> setCameraSource(String source) async =>

@@ -238,6 +238,12 @@ class FakeConsoleApi implements ConsoleApi {
   }
 
   @override
+  Future<ConsoleSnapshot> updateVisionConfirmHold(double seconds) async {
+    _payload = {..._payload, 'visionConfirmHold': seconds};
+    return snapshot;
+  }
+
+  @override
   Future<ConsoleSnapshot> setCameraSource(String source) async {
     setCameraSourceCalls += 1;
     final local = source == 'local';
