@@ -15,6 +15,7 @@ from .llamacpp_vision import (
     DEFAULT_LLAMA_CPP_URL,
     LlamaCppVisionInvoker,
 )
+from .local_voice import LocalVoiceCommandAgent
 from .service import AgentError, AgentInvoker, RobotAgent
 from .unifolm_vision import (
     DEFAULT_UNIFOLM_MODEL,
@@ -53,6 +54,7 @@ __all__ = [
     "DecisionOutcome",
     "EventDecisionAgent",
     "LlamaCppVisionInvoker",
+    "LocalVoiceCommandAgent",
     "OllamaVisionInvoker",
     "RobotAgent",
     "TransformersVisionInvoker",

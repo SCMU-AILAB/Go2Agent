@@ -63,12 +63,13 @@ Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、`--robot go2` 装�
 
 ## 一键启动 Go2 控制台
 
-云端 Ollama / SSH 隧道需先就绪。此脚本连真机但**不会**自动提交动作任务：
+此脚本连真机但**不会**自动提交动作任务。默认使用狗端离线语音命令模式，5070 Ti
+只处理视觉，不需要为语音准备 Ollama：
 
 ```bash
 sh scripts/run-go2-console.sh
-# 默认：--robot go2 --hardware --network eth0 --camera-source local --no-audio
-# 网卡可用 GO2_NETWORK 覆盖；文本模型用 OLLAMA_MODEL / OLLAMA_HOST
+# 默认：真机 + 本地相机 + 外接麦克风/扬声器 + local_commands
+# 网卡可用 GO2_NETWORK 覆盖；视觉服务用 GO2_VISION_URL 覆盖
 ```
 
 ## 控制台视觉接入
@@ -90,11 +91,10 @@ JPEG，决策、Skill 结果与状态通过 REST/WebSocket 快照展示。详见
 启动视觉决策；停止任务会结束 worker。连接真机由后端 `--hardware --network eth0` 决定，
 软件停止不是物理急停，API 仅用于可信网络。
 
-Go2 真机直接使用启动脚本。视觉连接局域网 UnifoLM；文字 Agent 仍使用独立的
-Ollama 地址，因此 `OLLAMA_HOST` 必须指向可用的文字推理服务：
+Go2 真机直接使用启动脚本。视觉连接局域网 UnifoLM；离线语音命令不占用这个服务：
 
 ```bash
-OLLAMA_HOST=http://127.0.0.1:11435 sh scripts/run-go2-console.sh
+GO2_VISION_URL=http://192.168.31.112:8011 sh scripts/run-go2-console.sh
 ```
 
 架构上文本/麦克风路径示意如下（Go2 时 TTS 段会禁用；Adapter 换成 Go2）：
@@ -318,7 +318,8 @@ FastAPI 与前端一起使用：
 .venv/bin/python -m app.api \
   --robot go2 --hardware --network eth0 \
   --camera-source local --vision-rotation-deg 0 \
-  --voice --record-seconds 3 \
+  --vision-backend unifolm --vision-url http://192.168.31.112:8011 \
+  --voice --voice-agent-backend local_commands --record-seconds 3 \
   --whisper-model /home/cf/Go2Agent/models/faster-whisper-small \
   --whisper-device cpu --whisper-compute-type int8 \
   --audio-input-device pulse --audio-output-device pulse \
@@ -332,13 +333,15 @@ FastAPI 与前端一起使用：
 语音路径固定为：
 
 ```text
-外接麦克风 -> Faster Whisper -> RobotAgent -> SkillRuntime -> Go2
-                                      |
-                                      -> Agent 回复 -> Piper -> 外接扬声器
+外接麦克风 -> Faster Whisper -> 本地安全指令解析 -> SkillRuntime -> Go2
+                                           |
+                                           -> 结果回复 -> Piper -> 外接扬声器
 ```
 
-TTS 内容不是硬编码：它是 Agent 当前轮次的最终文字回复。机器人动作仍然只能通过
-`SkillRuntime` 执行。
+`local_commands` 支持明确的比心、打招呼、坐下、站起、趴下、伸懒腰、跳舞、短距离
+移动/转向和停止指令；未知语句不会猜动作。回复是按实际 `SkillResult` 生成的确定性短句，
+不是开放式聊天。需要独立文本 LLM 时可改为 `--voice-agent-backend shared`，但不要让它
+和单 in-flight 的视觉 UnifoLM 共用同一服务。机器人动作始终只能通过 `SkillRuntime`。
 
 ### 旧 Whisper CLI 入口
 

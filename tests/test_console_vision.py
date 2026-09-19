@@ -174,6 +174,7 @@ class ConsoleVisionTests(unittest.TestCase):
                 prompt_profile="egocentric",
                 generate_speech=True,
                 task_context=backend.system_prompt + "\n" + text,
+                confirm_hold_s=0,
             ),
         )
         return backend, camera, invoker

@@ -296,6 +296,34 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(recognizer.closed)
         self.assertTrue(speaker.closed)
 
+    def test_go2_offline_voice_commands_do_not_use_text_llm(self) -> None:
+        recognizer = FakeRecognizer("给我比个心")
+        speaker = FakeSpeechOutput()
+        backend = ConsoleBackend(
+            BackendConfig(
+                robot_model="go2",
+                audio_enabled=True,
+                voice_agent_backend="local_commands",
+            ),
+            agent_factory=slow_agent_factory,
+            asr_factory=lambda: recognizer,
+            speech_factory=lambda lock: speaker,
+        )
+        with TestClient(create_app(backend=backend)) as client:
+            client.post("/api/v1/voice/start")
+            deadline = time.monotonic() + 2
+            payload = client.get("/api/v1/console").json()
+            while not payload["voice"]["reply"] and time.monotonic() < deadline:
+                time.sleep(0.01)
+                payload = client.get("/api/v1/console").json()
+
+            self.assertEqual(payload["voice"]["transcript"], "给我比个心")
+            self.assertEqual(payload["voice"]["reply"], "好的，比心指令已发送。")
+            self.assertEqual(speaker.messages, ["好的，比心指令已发送。"])
+
+        robot = cast(SimulatedRobotAdapter, backend.robot)
+        self.assertIn(("loco_action", ("heart", {})), robot.events)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,7 +23,7 @@ from adapters import (
     UnitreeAudioOutput,
 )
 from adapters.langchain import SkillToolObserver
-from agent import AgentError, RobotAgent
+from agent import AgentError, LocalVoiceCommandAgent, RobotAgent
 from agent.llamacpp_vision import LlamaCppVisionInvoker
 from agent.service import system_prompt_for
 from agent.social_vision import SocialVisionAgent, TaskDrivenObservation
@@ -179,6 +179,7 @@ class BackendConfig:
     host_audio_device: str | None = None
     host_tts_voice: str = "cmn"
     voice_enabled: bool = False
+    voice_agent_backend: Literal["shared", "local_commands"] = "shared"
     voice_record_seconds: float = 3.0
     voice_language: str | None = "zh"
     voice_model: str = "small"
@@ -299,6 +300,7 @@ class ConsoleBackend(SkillToolObserver):
         self._video_buffer = self._new_video_buffer()
         self._safety_gate = _DepthSafetyGate()
         self._agent: ChatAgent | None = None
+        self._voice_agent: ChatAgent | None = None
         self._audio: SpeechOutput | None = None
         self._voice_input: SpeechRecognizer | None = None
         self._voice_task: asyncio.Task[None] | None = None
@@ -491,6 +493,11 @@ class ConsoleBackend(SkillToolObserver):
                     self.system_prompt,
                     self,
                 )
+                self._voice_agent = (
+                    LocalVoiceCommandAgent(self.runtime, tool_observer=self)
+                    if self.config.voice_agent_backend == "local_commands"
+                    else self._agent
+                )
                 self.backend = True
                 self.starting = False
                 self.session_id = uuid.uuid4().hex[:6].upper()
@@ -564,9 +571,10 @@ class ConsoleBackend(SkillToolObserver):
         if self.hardware_robot is not None:
             await self.hardware_robot.close()
         self._agent = None
+        self._voice_agent = None
 
     async def start_voice(self) -> ConsoleSnapshot:
-        if not self.backend or self._agent is None:
+        if not self.backend or self._voice_agent is None:
             raise BackendNotRunning("backend session is not running")
         if self._voice_task is not None and not self._voice_task.done():
             return self.snapshot()
@@ -657,7 +665,7 @@ class ConsoleBackend(SkillToolObserver):
                     self.voice_status = "thinking"
                     self._emit_state()
                     await self._log("INFO", "voice.stt", f"识别到：{text}")
-                    agent = self._agent
+                    agent = self._voice_agent
                     if agent is None:
                         raise BackendNotRunning("Agent is not initialized")
                     async with self._agent_lock:
@@ -703,6 +711,8 @@ class ConsoleBackend(SkillToolObserver):
         if self.backend:
             async with self._agent_lock:
                 self._agent = self._agent_factory(self.runtime, prompt, self)
+                if self.config.voice_agent_backend == "shared":
+                    self._voice_agent = self._agent
         self.prompt_saved = True
         await self._log(
             "INFO",
@@ -1178,7 +1188,7 @@ class ConsoleBackend(SkillToolObserver):
     async def update_vision_confirm_hold(self, seconds: float) -> ConsoleSnapshot:
         """Set continuous gesture confirmation window used by the vision agent."""
         if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
-            raise ValueError("confirm hold must be a number")
+            raise TypeError("confirm hold must be a number")
         value = float(seconds)
         if not (0.0 <= value <= 30.0):
             raise ValueError("confirm hold must be between 0 and 30 seconds")

@@ -158,7 +158,7 @@ def create_app(
             return await console.update_system_prompt(body.system_prompt)
         except TaskConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/api/v1/tasks", response_model=ConsoleSnapshot, status_code=202)
@@ -317,6 +317,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="start local microphone -> Faster Whisper -> Agent -> local TTS loop",
     )
+    parser.add_argument(
+        "--voice-agent-backend",
+        choices=("shared", "local_commands"),
+        default="shared",
+        help=(
+            "shared uses the text LLM; local_commands keeps explicit safe Go2 "
+            "voice commands offline without consuming the vision GPU"
+        ),
+    )
     parser.add_argument("--record-seconds", type=float, default=3.0)
     parser.add_argument("--whisper-model", default="small")
     parser.add_argument("--whisper-language", default="zh")
@@ -376,6 +385,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         host_audio_device=args.host_audio_device,
         host_tts_voice=args.host_tts_voice,
         voice_enabled=args.voice,
+        voice_agent_backend=args.voice_agent_backend,
         voice_record_seconds=args.record_seconds,
         voice_language=args.whisper_language,
         voice_model=args.whisper_model,

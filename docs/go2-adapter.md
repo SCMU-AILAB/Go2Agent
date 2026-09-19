@@ -109,7 +109,9 @@ Go2 移动技能会以约 20 ms 间隔刷新 `move` 速度，并在 `finally` / 
 `VuiClient` 只提供语音开关、音量和灯光亮度设置/读取，没有文本播报接口，因此本项目
 使用狗端电脑的外接麦克风/扬声器：常驻 Faster Whisper 负责 STT，Piper（或
 `espeak-ng` 回退）负责 TTS。FastAPI 增加 `--voice` 后自动监听，也可由前端 VOICE
-面板调用 `/api/v1/voice/start` 和 `/api/v1/voice/stop` 控制。
+面板调用 `/api/v1/voice/start` 和 `/api/v1/voice/stop` 控制。户外默认增加
+`--voice-agent-backend local_commands`，在狗端解析明确安全动作，不占用负责视觉的
+5070 Ti；`shared` 模式才会复用文本 Agent。
 
 ## 扩展动作目录
 

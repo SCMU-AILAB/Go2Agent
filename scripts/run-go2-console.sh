@@ -12,7 +12,8 @@ exec .venv/bin/python -m app.api \
   --vision-url "${GO2_VISION_URL:-http://192.168.31.112:8011}" \
   --vision-window-s "${GO2_VISION_WINDOW_S:-0.8}" \
   --vision-frame-count "${GO2_VISION_FRAME_COUNT:-3}" \
-  --voice --audio-input-device "${GO2_AUDIO_INPUT:-pulse}" \
+  --voice --voice-agent-backend "${GO2_VOICE_AGENT:-local_commands}" \
+  --audio-input-device "${GO2_AUDIO_INPUT:-pulse}" \
   --audio-output-device "${GO2_AUDIO_OUTPUT:-pulse}" \
   --whisper-model "${WHISPER_MODEL:-models/faster-whisper-small}" \
   --whisper-device "${WHISPER_DEVICE:-cpu}" \
