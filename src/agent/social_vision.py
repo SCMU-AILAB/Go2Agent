@@ -42,15 +42,23 @@ Hard rules:
 7. hand_visible / directed_at_robot / present_in_latest must be true before
    execute_skill. directed_at_robot means the person is acting toward THIS
    camera, not another person or object.
-8. observation is a short English phrase describing what you saw
+8. TARGET PERSON: only respond to ONE person — the person nearest the image
+   CENTER. Ignore people on the left/right edges, in the background, or not
+   centered. If no person occupies the center region, return ignore.
+9. observation is a short English phrase describing what you saw
    (for example: "peace sign near face", "waving hand", "two-hand heart").
    Do not put the skill name alone with no visual description.
-9. Keep these gestures distinct:
+10. Keep these gestures distinct:
    - A stationary V sign / peace sign / victory sign / two raised fingers
      (比耶/剪刀手) is NOT waving. When the task says to answer 比耶 with 比心,
      choose heart.
    - Choose wave only for a hand visibly moving side-to-side as a greeting.
    - A heart made with fingers or both hands also maps to heart when requested.
+   - thumbs_up: one closed fist with the thumb clearly raised toward this
+     camera (点赞/大拇指). Do NOT treat open palms, pointing fingers, waves,
+     or unclear hand poses as thumbs_up. If the operator task explicitly
+     says 大拇指/点赞 triggers a random dance, choose skill random_dance
+     only. Never pick dance1/dance2 yourself; random_dance picks one safely.
 
 Registered skills (name: description):
 {skill_catalog}
@@ -72,14 +80,22 @@ interaction; omit or null otherwise.
 _GESTURE_LABEL_PROMPT = """Classify the intentional hand gesture directed at this
 robot camera in the newest image. The images are chronological (newest last).
 
+TARGET: only the ONE person nearest the IMAGE CENTER. Ignore people on the
+left/right edges, in the background, or interacting with someone else. If no
+center person is visible, reply none.
+
 Choose exactly one label:
-none, wave, peace_sign, heart, blow_kiss, handshake, high_five
+none, wave, peace_sign, heart, blow_kiss, handshake, high_five, thumbs_up
 
 Use peace_sign for a stationary V sign, victory sign, scissors sign, or two
 raised fingers. Use wave only when the hand is visibly greeting or moving
 side-to-side. Use heart for a finger-heart or a heart made with both hands.
+Use thumbs_up for one closed fist with the thumb clearly raised toward this
+robot camera (点赞/大拇指). Do not classify open palms, pointing fingers,
+waving hands, or unclear poses as thumbs_up.
 Choose none when the hand is unclear, the gesture is no longer present in the
-newest image, or the person is not directing it toward this camera.
+newest image, the person is not directing it toward this camera, or the actor
+is not the center person.
 
 Reply with exactly one label and nothing else. Do not return JSON, markdown,
 coordinates, points, boxes, or an explanation.
@@ -102,6 +118,8 @@ class SocialVisionAgent(VisionDecisionAgent):
     """Continuously decide skills from the operator task + live video."""
 
     minimum_frames = 1
+    # Require this much continuous confirmation before execute_skill.
+    DEFAULT_CONFIRM_HOLD_S = 1.5
 
     def __init__(
         self,
@@ -110,6 +128,7 @@ class SocialVisionAgent(VisionDecisionAgent):
         generate_speech: bool = False,
         task_context: str = "",
         response_format: Literal["json", "gesture_label"] = "json",
+        confirm_hold_s: float | None = None,
         **kwargs,
     ):
         # prompt_profile kept for CLI/backend compatibility; policy is task-driven.
@@ -122,6 +141,16 @@ class SocialVisionAgent(VisionDecisionAgent):
         self.generate_speech = generate_speech
         self.task_context = task_context
         self.response_format = response_format
+        hold = (
+            self.DEFAULT_CONFIRM_HOLD_S if confirm_hold_s is None else confirm_hold_s
+        )
+        if hold < 0:
+            raise ValueError("confirm_hold_s must not be negative")
+        self.confirm_hold_s = float(hold)
+        self._pending_skill: str | None = None
+        self._pending_since_s: float | None = None
+        self._hold_hits = 0
+        self._fired_skill: str | None = None
 
     @property
     def last_metrics(self) -> Mapping[str, object]:
@@ -132,6 +161,7 @@ class SocialVisionAgent(VisionDecisionAgent):
             "decision_mode": (
                 "gesture_label" if self.response_format == "gesture_label" else "task_driven"
             ),
+            "confirm_hold_s": self.confirm_hold_s,
         }
 
     @staticmethod
@@ -195,6 +225,7 @@ class SocialVisionAgent(VisionDecisionAgent):
         registered = {s.metadata.name: s for s in skill_catalog}
 
         if observation.action == "ignore" or not observation.skill:
+            self._reset_hold(rearm=True)
             return AgentDecision(
                 action="ignore",
                 reason=observation.observation or "no matching social response",
@@ -214,6 +245,7 @@ class SocialVisionAgent(VisionDecisionAgent):
         if skill is None or {"dangerous", "operator_only"}.intersection(
             skill.metadata.tags
         ):
+            self._reset_hold(rearm=True)
             return AgentDecision(
                 action="ignore",
                 reason=f"skill not allowed for vision: {skill_name}",
@@ -224,6 +256,7 @@ class SocialVisionAgent(VisionDecisionAgent):
             and observation.directed_at_robot
             and observation.present_in_latest
         ):
+            self._reset_hold(rearm=True)
             unmet = []
             if not observation.hand_visible:
                 unmet.append("hand_not_visible")
@@ -241,15 +274,60 @@ class SocialVisionAgent(VisionDecisionAgent):
                 action="continue", reason=f"skill ongoing: {skill_name}"
             )
 
+        # Latch: after a skill fires, ignore the same gesture until it drops.
+        if self._fired_skill == skill_name:
+            return AgentDecision(
+                action="ignore",
+                reason="gesture already responded; release before retry",
+            )
+
+        # Hold uses CAMERA timestamps so slow inference does not fake a hold.
+        # Also require at least two consecutive confirmations for the same skill.
+        frame_t = float(frames[-1].observed_at_s)
+        if self._pending_skill != skill_name:
+            self._pending_skill = skill_name
+            self._pending_since_s = frame_t
+            self._hold_hits = 1
+        else:
+            self._hold_hits += 1
+        since = self._pending_since_s if self._pending_since_s is not None else frame_t
+        held_s = max(0.0, frame_t - since)
+        self._last_observation["hold_elapsed_s"] = round(held_s, 3)
+        self._last_observation["hold_hits"] = self._hold_hits
+        self._last_observation["confirm_hold_s"] = self.confirm_hold_s
+        self._last_observation["hold_clock"] = "camera_frame"
+        if self.confirm_hold_s > 0 and (
+            self._hold_hits < 2 or held_s < self.confirm_hold_s
+        ):
+            return AgentDecision(
+                action="ignore",
+                reason=(
+                    f"confirming gesture hold "
+                    f"{held_s:.2f}s < {self.confirm_hold_s:.2f}s "
+                    f"(hits={self._hold_hits})"
+                ),
+            )
+
         speech = observation.speech.strip() if observation.speech else None
         if speech and not self.generate_speech:
             speech = None
+        self._fired_skill = skill_name
+        self._pending_skill = None
+        self._pending_since_s = None
+        self._hold_hits = 0
         return AgentDecision(
             action="execute_and_speak" if speech else "execute_skill",
             skill=skill_name,
             speech=speech or None,
             reason=observation.observation or skill_name,
         )
+
+    def _reset_hold(self, *, rearm: bool) -> None:
+        self._pending_skill = None
+        self._pending_since_s = None
+        self._hold_hits = 0
+        if rearm:
+            self._fired_skill = None
 
     @staticmethod
     def _parse_gesture_label(output: object, task: str) -> TaskDrivenObservation:
@@ -264,6 +342,7 @@ class SocialVisionAgent(VisionDecisionAgent):
             "blow_kiss",
             "handshake",
             "high_five",
+            "thumbs_up",
         }
         if label not in allowed:
             raise ValueError(f"unsupported gesture label: {output!r}")
@@ -292,6 +371,13 @@ class SocialVisionAgent(VisionDecisionAgent):
             and any(marker in task_lower for marker in ("比心", "爱心", "heart"))
         ):
             skill = "heart"
+        elif label == "thumbs_up":
+            thumbs_markers = ("大拇指", "竖起大拇指", "点赞", "thumbs up", "thumbs-up")
+            dance_markers = ("随机", "跳舞", "舞蹈", "dance")
+            if any(marker in task_lower for marker in thumbs_markers) and any(
+                marker in task_lower for marker in dance_markers
+            ):
+                skill = "random_dance"
 
         if skill is None:
             return TaskDrivenObservation(

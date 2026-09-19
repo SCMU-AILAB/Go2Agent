@@ -145,6 +145,7 @@ class ConsoleSnapshot(ApiModel):
     voice: VoiceView
     tools: list[ToolCall]
     logs: list[ConsoleLog]
+    vision_confirm_hold_s: float = 1.5
 
 
 class ConsoleEvent(ApiModel):
@@ -201,10 +202,13 @@ class BackendConfig:
     # Match run-remote-vision.sh; configurable for recognition/latency replay.
     vision_window_s: float = 0.8
     vision_frame_count: int = 3
+    vision_confirm_hold_s: float = 1.5
 
     def __post_init__(self) -> None:
         if self.vision_rotation_deg not in (0, 90, 180, 270):
             raise ValueError("invalid vision rotation")
+        if not (0.0 <= float(self.vision_confirm_hold_s) <= 30.0):
+            raise ValueError("vision_confirm_hold_s must be between 0 and 30")
         if self.camera_detection_fps <= 0:
             raise ValueError("camera detection FPS must be positive")
         if self.voice_record_seconds < 0.5:
@@ -339,6 +343,7 @@ class ConsoleBackend(SkillToolObserver):
         self.frame_version = 0
         self.tools: list[ToolCall] = []
         self.logs: list[ConsoleLog] = []
+        self.vision_confirm_hold_s = float(self.config.vision_confirm_hold_s)
         self.voice_enabled = False
         self.voice_listening = False
         self.voice_status: Literal[
@@ -397,6 +402,7 @@ class ConsoleBackend(SkillToolObserver):
                 if self.config.vision_backend == "unifolm"
                 else "json"
             ),
+            confirm_hold_s=self.vision_confirm_hold_s,
             timeout_s=120,
             invoker=invoker,
         )
@@ -1119,6 +1125,11 @@ class ConsoleBackend(SkillToolObserver):
     async def cancel_task(self, reason: str = "用户停止了任务") -> ConsoleSnapshot:
         task = self._active_task
         if task is None or task.done():
+            # Still issue a robot stop so e-stop works while idle after a motion.
+            try:
+                await self.robot.stop()
+            except (RobotCommandError, RuntimeError) as exc:
+                await self._log("ERROR", "executor", f"停止机器人失败：{exc}")
             return self.snapshot()
         self._active_task = None
         task.cancel()
@@ -1133,6 +1144,50 @@ class ConsoleBackend(SkillToolObserver):
         self.progress_text = "任务已停止"
         self.model_output += f"\n\n执行已中断：{reason}。"
         await self._log("WARN", "executor", reason)
+        self._emit_state()
+        return self.snapshot()
+
+    async def emergency_stop(self, reason: str = "操作员急停") -> ConsoleSnapshot:
+        """Hard stop: cancel vision/task workers and command robot stop_move."""
+        await self._log("WARN", "executor", reason)
+        worker = self._vision_worker
+        if worker is not None:
+            try:
+                await worker.stop()
+            except Exception as exc:  # noqa: BLE001 - e-stop must continue
+                await self._log("ERROR", "executor", f"停止视觉 worker 失败：{exc}")
+        task = self._active_task
+        if task is not None and not task.done():
+            self._active_task = None
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        try:
+            await self.robot.stop()
+        except (RobotCommandError, RuntimeError) as exc:
+            await self._log("ERROR", "executor", f"急停发送 stop 失败：{exc}")
+        self.busy = False
+        self.skill_status = "STOPPED"
+        self.model_status = "急停"
+        self.progress_text = "已急停"
+        self.skill_name = "已急停"
+        self.progress = 0
+        self.model_output += f"\n\n【急停】{reason}"
+        self._emit_state()
+        return self.snapshot()
+
+    async def update_vision_confirm_hold(self, seconds: float) -> ConsoleSnapshot:
+        """Set continuous gesture confirmation window used by the vision agent."""
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+            raise ValueError("confirm hold must be a number")
+        value = float(seconds)
+        if not (0.0 <= value <= 30.0):
+            raise ValueError("confirm hold must be between 0 and 30 seconds")
+        self.vision_confirm_hold_s = value
+        await self._log(
+            "INFO",
+            "config",
+            f"手势确认时长已更新为 {value:.2f} 秒（新视觉任务生效）。",
+        )
         self._emit_state()
         return self.snapshot()
 
@@ -1332,6 +1387,7 @@ class ConsoleBackend(SkillToolObserver):
             ),
             tools=list(self.tools),
             logs=list(self.logs),
+            vision_confirm_hold_s=self.vision_confirm_hold_s,
         )
 
     def skill_catalog(self) -> list[dict[str, object]]:

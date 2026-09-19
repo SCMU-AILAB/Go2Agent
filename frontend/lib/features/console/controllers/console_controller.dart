@@ -83,6 +83,7 @@ class ConsoleController extends ChangeNotifier {
   String progressText = '等待执行';
   String modelOutput = '';
   String currentTask = '';
+  double visionConfirmHoldS = 1.5;
 
   /// Local chat history for the dialog page (frontend-only; no backend field).
   final List<DialogTurn> dialog = [];
@@ -228,6 +229,7 @@ class ConsoleController extends ChangeNotifier {
     activeStep = snapshot.activeStep;
     currentTask = snapshot.currentTask;
     modelOutput = snapshot.modelOutput;
+    visionConfirmHoldS = snapshot.visionConfirmHoldS;
     taskCount = snapshot.taskCount;
     latency = snapshot.latency;
     robotMode = snapshot.robotMode;
@@ -484,6 +486,46 @@ class ConsoleController extends ChangeNotifier {
     } catch (error) {
       addLog('ERROR', 'executor', '任务停止失败：$error');
       onMessage('停止失败：$error');
+    }
+  }
+
+  Future<void> emergencyStop() async {
+    Object? primaryError;
+    try {
+      final snapshot = await api.emergencyStop();
+      _applySnapshot(snapshot);
+      onMessage('已急停');
+      return;
+    } catch (error) {
+      primaryError = error;
+      addLog('WARN', 'executor', '急停接口不可用，尝试停止任务：$error');
+    }
+    // Fallback for older backends without /robot/emergency-stop.
+    try {
+      final snapshot = await api.cancelTask('操作员急停');
+      _applySnapshot(snapshot);
+      onMessage(
+        primaryError == null
+            ? '已停止任务'
+            : '急停接口不可用，已改用任务停止（请重启后端以启用急停 API）',
+      );
+    } catch (error) {
+      addLog('ERROR', 'executor', '急停失败：$error');
+      onMessage(
+        '急停失败：$error\n'
+        '若提示 Not Found，请重启后端加载新接口后重试',
+      );
+    }
+  }
+
+  Future<void> applyVisionConfirmHold(double seconds) async {
+    try {
+      final snapshot = await api.updateVisionConfirmHold(seconds);
+      _applySnapshot(snapshot);
+      onMessage('手势确认时长：${seconds.toStringAsFixed(2)} 秒');
+    } catch (error) {
+      addLog('ERROR', 'config', '更新手势确认时长失败：$error');
+      onMessage('更新失败：$error');
     }
   }
 

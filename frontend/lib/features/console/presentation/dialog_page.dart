@@ -6,6 +6,7 @@ import 'widgets/console_header.dart';
 import 'widgets/console_footer.dart';
 import 'widgets/console_widgets.dart';
 import 'widgets/log_panel.dart';
+import 'widgets/vision_hold_panel.dart';
 
 /// Standalone dialog / text-interaction page.
 ///
@@ -266,6 +267,8 @@ class _SideColumn extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _StatusCard(controller: controller),
+        const SizedBox(height: 12),
+        VisionHoldPanel(controller: controller),
         const SizedBox(height: 12),
         SizedBox(
           width: double.infinity,

@@ -6,12 +6,14 @@ postures are intentionally omitted. damp and recovery_stand stay operator-only.
 
 from __future__ import annotations
 
+import random
+from collections.abc import Callable, Sequence
 from typing import cast
 
 from pydantic import Field, StrictBool
 
 from core.context import SkillContext
-from core.models import SkillArgs, SkillResult
+from core.models import SkillArgs, SkillMetadata, SkillResult
 from core.runtime import SkillRuntime
 from core.skill import RobotSkill
 
@@ -27,6 +29,9 @@ from .motions import (
     StopSkill,
 )
 from .posture import PostureSkill, PostureSpec
+
+# Safe random-dance pool only. Never operator-only or dangerous actions.
+GO2_RANDOM_DANCE_POOL: tuple[str, ...] = ("dance1", "dance2")
 
 # Skill names map 1:1 to SportClient methods documented in docs/go2-adapter.md.
 # Descriptions are tool-selection text for the cloud LLM: include Chinese
@@ -324,11 +329,62 @@ def _go2_wave_hello_skill() -> PostureSkill:
     )
 
 
+class RandomGo2DanceSkill(RobotSkill[SkillArgs]):
+    """Pick one safe native dance from a fixed pool after Runtime checks."""
+
+    args_model = SkillArgs
+
+    def __init__(
+        self,
+        chooser: Callable[[Sequence[str]], str] | None = None,
+    ) -> None:
+        self._chooser = chooser or random.choice
+        self.metadata = SkillMetadata(
+            name="random_dance",
+            description=(
+                "用户竖起大拇指、点赞或明确要求随机跳舞时使用；从 dance1/dance2 "
+                "中随机选择一个。不是跳跃、空翻或危险特技。 "
+                "Use when the user gives a thumbs-up / like or explicitly asks "
+                "for a random dance; randomly choose dance1 or dance2. "
+                "Not a jump, flip, or dangerous stunt."
+            ),
+            tags=("motion", "dance", "go2"),
+            required_resources=("mobile_base",),
+            timeout_s=20.0,
+            interruptible=True,
+        )
+
+    async def check_preconditions(
+        self,
+        ctx: SkillContext,
+        args: SkillArgs,
+    ) -> tuple[bool, str]:
+        state = await ctx.robot.get_state()
+        if state.hardware and not state.connected:
+            return False, "robot is not connected"
+        return True, ""
+
+    async def execute(self, ctx: SkillContext, args: SkillArgs) -> SkillResult:
+        chosen = self._chooser(GO2_RANDOM_DANCE_POOL)
+        if chosen not in GO2_RANDOM_DANCE_POOL:
+            raise ValueError(
+                f"random dance chooser returned unsafe action: {chosen!r}"
+            )
+        await ctx.robot.execute_loco_action(chosen)
+        return SkillResult.ok(
+            f"{chosen} command accepted from random_dance pool",
+            chosen_action=chosen,
+            pool=list(GO2_RANDOM_DANCE_POOL),
+            completion_verified=False,
+        )
+
+
 def build_go2_autonomy_skills() -> tuple[RobotSkill[SkillArgs], ...]:
     skills = (
         *(PostureSkill(spec) for spec in GO2_AUTONOMY_POSTURES),
         *(Go2FlagSkill(spec) for spec in GO2_FLAG_SPECS if not spec.operator_only),
         _go2_wave_hello_skill(),
+        RandomGo2DanceSkill(),
         Go2MoveForwardSkill(),
         Go2MoveBackwardSkill(),
         Go2MoveLeftSkill(),
@@ -369,6 +425,8 @@ def register_go2_skills(
 __all__ = [
     "GO2_AUTONOMY_POSTURES",
     "GO2_OPERATOR_POSTURES",
+    "GO2_RANDOM_DANCE_POOL",
+    "RandomGo2DanceSkill",
     "build_go2_all_skills",
     "build_go2_autonomy_skills",
     "build_go2_operator_skills",

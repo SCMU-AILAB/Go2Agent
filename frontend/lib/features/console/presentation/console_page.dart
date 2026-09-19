@@ -17,6 +17,7 @@ import 'widgets/prompt_panel.dart';
 import 'widgets/backend_panel.dart';
 import 'widgets/voice_panel.dart';
 import 'widgets/task_input_panel.dart';
+import 'widgets/vision_hold_panel.dart';
 import 'widgets/log_panel.dart';
 import 'widgets/console_rail.dart';
 import 'widgets/console_header.dart';
@@ -244,6 +245,7 @@ class _G1ConsolePageState extends State<G1ConsolePage> {
   Widget _buildControls(double width) {
     final items = <Widget>[
       RobotStatusPanel(controller: controller),
+      VisionHoldPanel(controller: controller),
       TaskInputPanel(controller: controller),
       BackendPanel(controller: controller),
       VoicePanel(controller: controller),
