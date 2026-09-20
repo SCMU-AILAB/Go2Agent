@@ -504,11 +504,7 @@ class ConsoleController extends ChangeNotifier {
     try {
       final snapshot = await api.cancelTask('操作员急停');
       _applySnapshot(snapshot);
-      onMessage(
-        primaryError == null
-            ? '已停止任务'
-            : '急停接口不可用，已改用任务停止（请重启后端以启用急停 API）',
-      );
+      onMessage('急停接口不可用，已改用任务停止（请重启后端以启用急停 API）');
     } catch (error) {
       addLog('ERROR', 'executor', '急停失败：$error');
       onMessage(
