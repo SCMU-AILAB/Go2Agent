@@ -27,11 +27,7 @@ from agent import AgentError, LocalVoiceCommandAgent, RobotAgent
 from agent.decision import AgentDecision
 from agent.llamacpp_vision import LlamaCppVisionInvoker
 from agent.service import system_prompt_for
-from agent.social_vision import (
-    SocialVisionAgent,
-    TaskDrivenObservation,
-    is_follow_goal,
-)
+from agent.social_vision import SocialVisionAgent, TaskDrivenObservation
 from agent.unifolm_vision import UnifolmVisionInvoker
 from agent.vision_policy import OllamaVisionInvoker, VisionPolicyWorker
 from core.runtime import SkillRuntime
@@ -994,20 +990,6 @@ class ConsoleBackend(SkillToolObserver):
         started = time.monotonic()
         try:
             if mode == "gesture":
-                await self._run_vision_task(instruction)
-                return
-            # The Go2 follow skill is a local depth-feedback loop.  Route an
-            # explicit follow goal through it even when the frontend is in text
-            # mode, so it does not depend on a text LLM or remote VLM choosing
-            # the tool before the camera controller can start.
-            if (
-                self.config.robot_model == "go2"
-                and is_follow_goal(instruction)
-            ):
-                if self.camera_source != "local" or self.camera_status != "ready":
-                    raise PerceptionError(
-                        "跟随任务需要已就绪的本地 D435i 相机"
-                    )
                 await self._run_vision_task(instruction)
                 return
             # Text tasks do not supply images to RobotAgent. Keep preview running,
