@@ -37,7 +37,7 @@ class TaskInputPanel extends StatelessWidget {
                       : (_) => controller.setTaskMode('text'),
                 ),
                 ChoiceChip(
-                  label: const Text('持续手势交互'),
+                  label: const Text('持续视觉交互'),
                   selected: controller.gestureMode,
                   onSelected: controller.busy
                       ? null
@@ -50,7 +50,7 @@ class TaskInputPanel extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: Text(
                 controller.gestureMode
-                    ? '手势模式 · 持续运行，直到停止任务'
+                    ? '视觉模式 · 持续观察和反馈，直到停止任务'
                     : controller.busy
                     ? '文本模式 · 任务处理中，状态见下方进度与 AGENT OUTPUT'
                     : '文本模式 · 点「发送指令」后，进度在本面板，回复在 AGENT OUTPUT',
@@ -71,7 +71,7 @@ class TaskInputPanel extends StatelessWidget {
               decoration: InputDecoration(
                 hintText: controller.gestureMode
                     ? (controller.robotModel == 'GO2'
-                          ? '写下你希望它如何回应（例如：打招呼就打招呼，比耶就比心）。模型会看着画面自主选技能。'
+                          ? '描述目标或触发条件（例如：有人靠近就退后，看到比耶就比心）。模型会持续观察并选择已注册技能。'
                           : '持续观察画面，按任务提示与技能目录回应；不执行任意文本动作。')
                     : '告诉机器人要做什么…',
                 fillColor: ConsoleColors.field,
@@ -166,11 +166,11 @@ class TaskInputPanel extends StatelessWidget {
                     ? '任务执行中，可按 Esc 停止'
                     : controller.gestureMode
                     ? (controller.cameraSource != 'local'
-                          ? '请先选择本地相机；模拟画面不能识别手势'
+                          ? '请先选择本地相机；模拟画面不能用于视觉决策'
                           : controller.robotModel == 'GO2'
                           ? '按任务提示词自主决策；仅执行技能目录中的动作'
                           : '仅握手 / 挥手 / 击掌；持续运行至停止')
-                    : '文本模式看 AGENT OUTPUT 与下方进度条；手势模式看视觉决策流',
+                    : '文本模式看 AGENT OUTPUT 与下方进度条；视觉模式看持续决策流',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: ConsoleColors.dim, fontSize: 11),
               ),

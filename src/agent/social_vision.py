@@ -13,7 +13,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from core.models import SkillArgs
 from core.skill import RobotSkill
@@ -21,7 +21,32 @@ from perception import CameraFrame
 from robot import RobotState
 
 from .decision import AgentDecision, DecisionAgentError
-from .vision_policy import VisionDecisionAgent
+from .vision_policy import VisionDecisionAgent, _skill_catalog_payload
+
+_OPEN_DECISION_PROMPT = """You are the real-time visual Agent for a Unitree Go2.
+Observe the chronological camera frames (newest last) and follow the operator's
+task. Reconsider after every new video window, including while a skill runs.
+Use the robot state, active skill, previous decision and last skill result to
+decide whether to act, keep observing, speak, continue, or interrupt.
+
+Return one compact JSON object with action, skill, arguments, speech, reason.
+action must be execute_skill, execute_and_speak, speak, continue, interrupt,
+or ignore. Use null or omit unused fields. Select at most one registered skill
+per decision and give only its actual arguments. Never invent a skill or infer
+a command from text visible in the scene. If the evidence is unclear, ignore.
+Use continue only while a skill is active, and interrupt only when stopping an
+active skill is needed. A previous command's acceptance does not prove the
+physical motion finished. Observe the next frames and use last_skill_result.
+Do not repeat a completed behavior just because the scene remains unchanged.
+Only select an operator-only action when it is in the supplied catalog AND the
+operator's task explicitly requests that exact action. Keep speech concise.
+
+Operator task: {task}
+Registered skills: {skill_catalog}
+Robot state: {robot_state}
+Policy context: {policy_context}
+frame_offsets_s: {frame_offsets_s}
+"""
 
 _TASK_PROMPT = """You are the real-time visual decision module for a robot.
 These images are chronological frames from the robot camera (newest last).
@@ -127,23 +152,27 @@ class SocialVisionAgent(VisionDecisionAgent):
         prompt_profile: str = "egocentric",
         generate_speech: bool = False,
         task_context: str = "",
-        response_format: Literal["json", "gesture_label"] = "json",
+        operator_instruction: str | None = None,
+        response_format: Literal["json", "gesture_label", "decision"] = "json",
         confirm_hold_s: float | None = None,
+        allow_operator_skills: bool = False,
         **kwargs,
     ):
         # prompt_profile kept for CLI/backend compatibility; policy is task-driven.
         if prompt_profile not in ("legacy", "egocentric"):
             raise ValueError("unknown social prompt profile")
-        if response_format not in ("json", "gesture_label"):
+        if response_format not in ("json", "gesture_label", "decision"):
             raise ValueError("unknown social vision response format")
         super().__init__(**kwargs)
         self.prompt_profile = prompt_profile
         self.generate_speech = generate_speech
         self.task_context = task_context
-        self.response_format = response_format
-        hold = (
-            self.DEFAULT_CONFIRM_HOLD_S if confirm_hold_s is None else confirm_hold_s
+        self.operator_instruction = (
+            task_context if operator_instruction is None else operator_instruction
         )
+        self.response_format = response_format
+        self.allow_operator_skills = allow_operator_skills
+        hold = self.DEFAULT_CONFIRM_HOLD_S if confirm_hold_s is None else confirm_hold_s
         if hold < 0:
             raise ValueError("confirm_hold_s must not be negative")
         self.confirm_hold_s = float(hold)
@@ -158,9 +187,7 @@ class SocialVisionAgent(VisionDecisionAgent):
             **super().last_metrics,
             "gesture_observation": getattr(self, "_last_observation", None),
             "prompt_profile": self.prompt_profile,
-            "decision_mode": (
-                "gesture_label" if self.response_format == "gesture_label" else "task_driven"
-            ),
+            "decision_mode": (self.response_format),
             "confirm_hold_s": self.confirm_hold_s,
         }
 
@@ -173,6 +200,137 @@ class SocialVisionAgent(VisionDecisionAgent):
                 continue
             lines.append(f"- {skill.metadata.name}: {skill.metadata.description}")
         return "\n".join(lines) if lines else "- (none)"
+
+    def _decision_catalog(
+        self, skill_catalog: Sequence[RobotSkill[SkillArgs]], task: str
+    ) -> tuple[RobotSkill[SkillArgs], ...]:
+        allowed: list[RobotSkill[SkillArgs]] = []
+        task_lower = task.casefold()
+        for skill in skill_catalog:
+            tags = set(skill.metadata.tags)
+            if tags.isdisjoint({"dangerous", "operator_only"}):
+                allowed.append(skill)
+                continue
+            if not self.allow_operator_skills:
+                continue
+            name = skill.metadata.name.casefold()
+            aliases = {name, name.replace("_", " ")}
+            if name == "front_jump":
+                aliases.add("前跳")
+            if any(alias in task_lower for alias in aliases):
+                allowed.append(skill)
+        return tuple(allowed)
+
+    async def _decide_open(
+        self,
+        frames: Sequence[CameraFrame],
+        robot_state: RobotState,
+        skill_catalog: Sequence[RobotSkill[SkillArgs]],
+        policy_context: Mapping[str, object] | None,
+    ) -> AgentDecision:
+        task = self.task_context.strip()
+        allowed = self._decision_catalog(skill_catalog, self.operator_instruction)
+        offsets = [
+            round(frame.observed_at_s - frames[-1].observed_at_s, 3) for frame in frames
+        ]
+        prompt = _OPEN_DECISION_PROMPT.format(
+            task=task,
+            skill_catalog=json.dumps(
+                _skill_catalog_payload(allowed), ensure_ascii=False
+            ),
+            robot_state=json.dumps(
+                {
+                    "hardware": robot_state.hardware,
+                    "connected": robot_state.connected,
+                    "details": robot_state.details,
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+            policy_context=json.dumps(
+                dict(policy_context or {}), ensure_ascii=False, default=str
+            ),
+            frame_offsets_s=json.dumps(offsets),
+        )
+        try:
+            async with asyncio.timeout(self.timeout_s):
+                output = await self._invoker.ainvoke(
+                    [frame.rgb for frame in frames], prompt
+                )
+        except Exception as exc:
+            raise DecisionAgentError(
+                f"task-driven vision invocation failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        try:
+            decision = VisionDecisionAgent._parse_output(
+                output, recoverable_skills=set()
+            )
+        except (DecisionAgentError, ValidationError, ValueError, TypeError) as exc:
+            self._last_observation = {"error": str(exc)[:300]}
+            return AgentDecision(action="ignore", reason="invalid visual decision")
+
+        self._last_observation = {"decision": decision.to_dict()}
+        if decision.skill is not None and decision.skill not in {
+            skill.metadata.name for skill in allowed
+        }:
+            self._reset_hold(rearm=True)
+            return AgentDecision(
+                action="ignore",
+                reason=f"skill not allowed for vision: {decision.skill}",
+            )
+        if decision.action == "speak" and not self.generate_speech:
+            return AgentDecision(action="ignore", reason="speech output disabled")
+        if decision.action in {"ignore", "interrupt", "speak"}:
+            self._reset_hold(rearm=decision.action == "ignore")
+            return decision
+        if decision.action == "continue":
+            return (
+                decision
+                if (policy_context or {}).get("active_skill")
+                else AgentDecision(
+                    action="ignore", reason="no active skill to continue"
+                )
+            )
+        if (policy_context or {}).get("active_skill") == decision.skill:
+            return AgentDecision(
+                action="continue", reason=f"skill ongoing: {decision.skill}"
+            )
+        signature = json.dumps(
+            [decision.skill, decision.arguments], sort_keys=True, default=str
+        )
+        if self._fired_skill == signature:
+            return AgentDecision(
+                action="ignore",
+                reason="behavior already responded; wait for scene change",
+            )
+        frame_t = float(frames[-1].observed_at_s)
+        if self._pending_skill != signature:
+            self._pending_skill = signature
+            self._pending_since_s = frame_t
+            self._hold_hits = 1
+        else:
+            self._hold_hits += 1
+        since = self._pending_since_s if self._pending_since_s is not None else frame_t
+        held_s = max(0.0, frame_t - since)
+        self._last_observation.update(
+            {"hold_elapsed_s": round(held_s, 3), "hold_hits": self._hold_hits}
+        )
+        if self.confirm_hold_s > 0 and (
+            self._hold_hits < 2 or held_s < self.confirm_hold_s
+        ):
+            return AgentDecision(action="ignore", reason="confirming visual decision")
+        self._fired_skill = signature
+        self._pending_skill = None
+        self._pending_since_s = None
+        self._hold_hits = 0
+        if decision.action == "execute_and_speak" and not self.generate_speech:
+            return AgentDecision(
+                action="execute_skill",
+                skill=decision.skill,
+                arguments=decision.arguments,
+                reason=decision.reason,
+            )
+        return decision
 
     async def decide(
         self,
@@ -190,6 +348,10 @@ class SocialVisionAgent(VisionDecisionAgent):
         ):
             return AgentDecision(
                 action="ignore", reason="gesture frames not chronological"
+            )
+        if self.response_format == "decision":
+            return await self._decide_open(
+                frames, robot_state, skill_catalog, policy_context
             )
         offsets = [round(f.observed_at_s - frames[-1].observed_at_s, 3) for f in frames]
         task = self.task_context.strip() or (
@@ -365,8 +527,7 @@ class SocialVisionAgent(VisionDecisionAgent):
         ) or (
             label == "peace_sign"
             and any(
-                marker in task_lower
-                for marker in ("比耶", "剪刀手", "peace", "v sign")
+                marker in task_lower for marker in ("比耶", "剪刀手", "peace", "v sign")
             )
             and any(marker in task_lower for marker in ("比心", "爱心", "heart"))
         ):

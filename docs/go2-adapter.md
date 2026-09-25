@@ -124,7 +124,8 @@ Go2 移动技能会以约 20 ms 间隔刷新 `move` 速度，并在 `finally` / 
 `classic_walk`、`walk_upright`、`cross_step`、`static_walk`、`trot_run`、
 `economic_gait`、`switch_avoid_mode`，以及原有的 `damp` / `recovery_stand`。
 该选项会把这些工具同时暴露给文本 Agent 和 API；operator-only 是启动时目录划分，
-并非额外的运行时权限检查。
+并非额外的运行时权限检查。持续视觉 Agent 还要求任务提示词明确写出具体
+operator-only 动作；否则不会把它提供给远程视觉模型。默认启动参数不包含这些动作。
 
 `pose`、`hand_stand`、`free_bound`、`free_jump`、`free_avoid`、`classic_walk`、
 `walk_upright`、`cross_step` 必须显式传入 JSON 布尔值 `flag`，不接受字符串或整数。

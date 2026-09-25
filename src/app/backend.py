@@ -24,6 +24,7 @@ from adapters import (
 )
 from adapters.langchain import SkillToolObserver
 from agent import AgentError, LocalVoiceCommandAgent, RobotAgent
+from agent.decision import AgentDecision
 from agent.llamacpp_vision import LlamaCppVisionInvoker
 from agent.service import system_prompt_for
 from agent.social_vision import SocialVisionAgent, TaskDrivenObservation
@@ -375,16 +376,20 @@ class ConsoleBackend(SkillToolObserver):
             invoker = UnifolmVisionInvoker(
                 self.config.vision_model,
                 base_url=self.config.vision_url,
-                max_new_tokens=96,
+                max_new_tokens=160,
                 timeout_s=120,
             )
         elif self.config.vision_backend == "llamacpp":
             invoker = LlamaCppVisionInvoker(
                 self.config.vision_model,
                 base_url=self.config.vision_url,
-                max_new_tokens=96,
+                max_new_tokens=160,
                 timeout_s=120,
-                output_schema=TaskDrivenObservation.model_json_schema(),
+                output_schema=(
+                    AgentDecision.model_json_schema()
+                    if self.config.robot_model == "go2"
+                    else TaskDrivenObservation.model_json_schema()
+                ),
             )
         else:
             invoker = OllamaVisionInvoker(
@@ -399,11 +404,11 @@ class ConsoleBackend(SkillToolObserver):
             prompt_profile="egocentric",
             generate_speech=True,
             task_context=f"{self.system_prompt}\nCurrent task: {instruction}",
+            operator_instruction=instruction,
             response_format=(
-                "gesture_label"
-                if self.config.vision_backend == "unifolm"
-                else "json"
+                "decision" if self.config.robot_model == "go2" else "json"
             ),
+            allow_operator_skills=self.config.include_operator_only_skills,
             confirm_hold_s=self.vision_confirm_hold_s,
             timeout_s=120,
             invoker=invoker,
@@ -1030,7 +1035,7 @@ class ConsoleBackend(SkillToolObserver):
         await self._log(
             "INFO",
             "vision",
-            f"手势任务按指令与已确认手势执行：{instruction}",
+            f"视觉任务持续观察并按指令决策：{instruction}",
         )
         worker = VisionPolicyWorker(
             self.runtime,
@@ -1044,7 +1049,7 @@ class ConsoleBackend(SkillToolObserver):
         self._vision_worker = worker
         try:
             self.model_status = "加载视觉模型"
-            self.model_output = f"视觉交互 · {self.config.vision_model}\n任务：{instruction}\n持续运行，点击停止任务结束。"
+            self.model_output = f"持续视觉决策 · {self.config.vision_model}\n任务：{instruction}\n持续运行，点击停止任务结束。"
             self._emit_state()
             await agent.warmup()
             worker.set_safety_latched(self._safety_gate.latched)
@@ -1063,8 +1068,8 @@ class ConsoleBackend(SkillToolObserver):
                 "INFO",
                 "vision",
                 (
-                    "Go2 手势任务：VLM 按任务提示词从技能目录自主选择；"
-                    "未注册/operator-only 技能会被拒绝。"
+                    "Go2 视觉 Agent：VLM 按任务、画面和执行结果从技能目录选择；"
+                    "未注册技能会被拒绝。"
                     if self.config.robot_model == "go2"
                     else "手势模式：VLM 按任务与技能目录决策；其他动作请选文本指令。"
                 ),
@@ -1072,9 +1077,9 @@ class ConsoleBackend(SkillToolObserver):
             while True:
                 await self._check_vision_camera()
                 self.model_status = "持续视觉交互"
-                self.progress_text = "正在观察手势 · 停止任务可结束"
+                self.progress_text = "正在观察并决策 · 停止任务可结束"
                 self.skill_name = (
-                    "执行视觉技能" if worker.active_behavior else "等待确认手势"
+                    "执行视觉技能" if worker.active_behavior else "等待视觉决策"
                 )
                 self.progress = 40
                 self.active_step = 1
