@@ -519,6 +519,7 @@ class VisionDecisionAgent:
     ) -> AgentDecision:
         if isinstance(output, Mapping):
             candidate = output.get("structured_response", output)
+            candidate = _unwrap_single_decision(candidate)
             return AgentDecision.model_validate(
                 _sanitize_visual_noop_payload(candidate)
             )
@@ -565,7 +566,25 @@ class VisionDecisionAgent:
                     "Vision Decision Agent returned invalid JSON: "
                     f"{exc}; raw={text[:500]!r}"
                 ) from exc
+        decoded = _unwrap_single_decision(decoded)
         return AgentDecision.model_validate(_sanitize_visual_noop_payload(decoded))
+
+
+def _unwrap_single_decision(value: object) -> object:
+    """Accept video-model wrappers while rejecting ambiguous action batches."""
+    if not isinstance(value, list):
+        return value
+    candidates = [
+        item
+        for item in value
+        if isinstance(item, Mapping)
+        and ("action" in item or "skill" in item)
+    ]
+    if len(candidates) != 1:
+        raise DecisionAgentError(
+            "Vision Decision Agent must return exactly one action object"
+        )
+    return candidates[0]
 
 
 @dataclass(frozen=True, slots=True)

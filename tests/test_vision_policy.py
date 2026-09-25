@@ -210,6 +210,18 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("duration_s", item["arguments_schema"]["properties"])
         self.assertIn("required_resources", item)
 
+    async def test_unwraps_single_action_object_from_video_model_list(self) -> None:
+        decision = VisionDecisionAgent._parse_output(
+            '[{"action":"execute_skill","arguments":{"name":"follow_person"}}]'
+        )
+        self.assertEqual((decision.action, decision.skill), ("execute_skill", "follow_person"))
+
+    async def test_rejects_ambiguous_action_list(self) -> None:
+        with self.assertRaisesRegex(Exception, "exactly one action"):
+            VisionDecisionAgent._parse_output(
+                '[{"action":"ignore"},{"action":"execute_skill","skill":"sit"}]'
+            )
+
     async def test_noisy_json_noop_discards_hallucinated_arguments(self) -> None:
         decision = VisionDecisionAgent._parse_output(
             json.dumps(
