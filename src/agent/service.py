@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping, Sequence
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -111,6 +111,7 @@ class RobotAgent:
         system_prompt: str = SYSTEM_PROMPT,
         tool_observer: SkillToolObserver | None = None,
         invoker: AgentInvoker | None = None,
+        chat_model: Any | None = None,
     ) -> None:
         self._history: list[BaseMessage] = []
         if invoker is not None:
@@ -119,12 +120,14 @@ class RobotAgent:
 
         effective_system_prompt = build_runtime_system_prompt(runtime, system_prompt)
 
-        model = ChatOllama(
-            model=model_name or os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
-            base_url=base_url or os.getenv("OLLAMA_HOST"),
-            temperature=0.2,
-            client_kwargs={"trust_env": False},
-        )
+        model = chat_model
+        if model is None:
+            model = ChatOllama(
+                model=model_name or os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+                base_url=base_url or os.getenv("OLLAMA_HOST"),
+                temperature=0.2,
+                client_kwargs={"trust_env": False},
+            )
         graph = create_agent(
             model=model,
             tools=build_langchain_tools(runtime, observer=tool_observer),

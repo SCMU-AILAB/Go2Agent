@@ -4,6 +4,7 @@ import json
 import unittest
 from collections.abc import Mapping, Sequence
 
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import ValidationError
 
@@ -45,6 +46,13 @@ class FakeAgentInvoker:
 class InvalidAgentInvoker:
     async def ainvoke(self, input_state: dict[str, object]) -> object:
         return {"messages": []}
+
+
+class ToolCapableFakeChatModel(FakeMessagesListChatModel):
+    """Allow LangChain's create_agent to bind tools during the integration test."""
+
+    def bind_tools(self, tools, **kwargs):  # type: ignore[no-untyped-def]
+        return self
 
 
 class FailingRobotAdapter:
@@ -97,6 +105,33 @@ class AgentAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(AgentError):
             await agent.chat("你好")
+
+    async def test_agent_calls_skill_then_reads_result_before_final_reply(self) -> None:
+        robot = SimulatedRobotAdapter()
+        runtime = SkillRuntime(robot)
+        runtime.register(WaveSkill())
+        model = ToolCapableFakeChatModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "wave",
+                            "args": {"arm": "right"},
+                            "id": "wave-call",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessage(content="已根据工具结果完成挥手。"),
+            ]
+        )
+        agent = RobotAgent(runtime, chat_model=model)
+
+        reply = await agent.chat("请挥手，确认动作结果后告诉我")
+
+        self.assertEqual(reply, "已根据工具结果完成挥手。")
+        self.assertEqual(robot.events, [("wave", "right")])
 
     async def test_langchain_tool_invokes_skill_runtime(self) -> None:
         robot = SimulatedRobotAdapter()
