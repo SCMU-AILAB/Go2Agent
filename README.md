@@ -52,9 +52,10 @@ Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、`--robot go2` 装�
 该开关会把这些工具同时暴露给文本 Agent 和 API；operator-only 是**启动时目录划分**，
 不是额外的运行时权限检查。正常视觉自治不要打开。
 
-文本 Agent 对中文指令有固定映射（站起来→`stand_up`，比心→`heart`，跳舞→`dance1` 等），
-且禁止用 `hello`/`wave` 替代比心、跳舞、坐下、趴下或移动。完整说明见
-`src/agent/service.py` 的 `GO2_SYSTEM_PROMPT` 与 [Go2 Adapter](docs/go2-adapter.md)。
+文本 Agent 不依赖一份固定的中文动作映射；它读取当前 Registry 自动生成的工具描述和
+参数 schema，再按用户目标选择一个或多个 Skill。`local_commands` 仅是无模型离线备用模式，
+才使用有限的显式命令匹配。完整说明见 `src/agent/service.py` 的 `GO2_SYSTEM_PROMPT`
+与 [Go2 Adapter](docs/go2-adapter.md)。
 
 **遥测**：Go2 Adapter 订阅 `rt/sportmodestate`，`get_state().details` 含 `mode`、
 `gait_type`、位置/速度/姿态、`error_code`；`telemetry_available` 仅在最近 2 秒有数据时为 true。
