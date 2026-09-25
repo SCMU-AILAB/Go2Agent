@@ -2,6 +2,8 @@
 # Go2 console with separate text-Agent and UnifoLM vision endpoints.
 set -eu
 cd "$(dirname "$0")/.."
+# A test worktree may reuse main's venv; always import this worktree's code.
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 export NO_PROXY="127.0.0.1,localhost,${GO2_VISION_HOST:-192.168.31.112}${NO_PROXY:+,$NO_PROXY}"
 export no_proxy="$NO_PROXY"
 exec .venv/bin/python -m app.api \

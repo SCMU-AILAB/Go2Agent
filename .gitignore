@@ -11,6 +11,10 @@ wheels/
 .venv-cuda/
 .cuda-packages/
 
+# Robot-local runtime data and model weights
+/logs
+/models
+
 # Local editor/type-checker and tool caches
 typings/
 .ruff_cache/
