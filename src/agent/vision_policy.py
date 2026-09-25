@@ -338,6 +338,16 @@ def _skill_catalog_payload(
                 "description": skill.metadata.description,
                 "argument_defaults": arguments,
                 "required_arguments": sorted(required_names),
+                "arguments_schema": {
+                    "type": schema.get("type", "object"),
+                    "properties": raw_properties,
+                    "required": sorted(required_names),
+                    "additionalProperties": False,
+                },
+                "tags": list(skill.metadata.tags),
+                "required_resources": list(skill.metadata.required_resources),
+                "timeout_s": skill.metadata.timeout_s,
+                "max_retries": skill.metadata.max_retries,
                 "interruptible": skill.metadata.interruptible,
             }
         )

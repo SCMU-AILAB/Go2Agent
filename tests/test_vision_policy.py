@@ -199,21 +199,16 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
                 '{"action":"execute_skill","skill":"handshake","arguments":'
             )
 
-    async def test_skill_catalog_uses_values_instead_of_json_schema(self) -> None:
+    async def test_skill_catalog_includes_values_and_argument_schema(self) -> None:
         payload = _skill_catalog_payload([HandshakeSkill()])
-
-        self.assertEqual(
-            payload,
-            [
-                {
-                    "name": "handshake",
-                    "description": HandshakeSkill.metadata.description,
-                    "argument_defaults": {"duration_s": 4.0},
-                    "required_arguments": [],
-                    "interruptible": True,
-                }
-            ],
-        )
+        item = payload[0]
+        self.assertEqual(item["name"], "handshake")
+        self.assertEqual(item["description"], HandshakeSkill.metadata.description)
+        self.assertEqual(item["argument_defaults"], {"duration_s": 4.0})
+        self.assertEqual(item["required_arguments"], [])
+        self.assertIn("arguments_schema", item)
+        self.assertIn("duration_s", item["arguments_schema"]["properties"])
+        self.assertIn("required_resources", item)
 
     async def test_noisy_json_noop_discards_hallucinated_arguments(self) -> None:
         decision = VisionDecisionAgent._parse_output(
