@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from agent.social_vision import SocialVisionAgent
+from agent.social_vision import _OPEN_DECISION_PROMPT
 from app.api import create_app
 from app.backend import BackendConfig, ConsoleBackend
 from perception import CameraFrame, PerceptionResult
@@ -162,6 +163,8 @@ class ConsoleVisionTests(unittest.TestCase):
         self.assertEqual(agent.response_format, "decision")
         self.assertIn("看到人坐下就坐下", agent.task_context)
         self.assertFalse(agent.allow_operator_skills)
+        self.assertEqual(backend.config.vision_confirm_hold_s, 0.5)
+        self.assertIn("registered `wave`", _OPEN_DECISION_PROMPT)
 
     def test_default_camera_applies_rotation_before_jpeg_encoding(self):
         backend = ConsoleBackend(

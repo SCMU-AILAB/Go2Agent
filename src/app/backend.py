@@ -146,7 +146,9 @@ class ConsoleSnapshot(ApiModel):
     voice: VoiceView
     tools: list[ToolCall]
     logs: list[ConsoleLog]
-    vision_confirm_hold_s: float = 1.5
+    # The VLM already supplies the semantic confirmation. A short hold keeps
+    # transient greetings responsive while still requiring two model windows.
+    vision_confirm_hold_s: float = 0.5
 
 
 class ConsoleEvent(ApiModel):
@@ -204,7 +206,7 @@ class BackendConfig:
     # Match run-remote-vision.sh; configurable for recognition/latency replay.
     vision_window_s: float = 0.8
     vision_frame_count: int = 3
-    vision_confirm_hold_s: float = 1.5
+    vision_confirm_hold_s: float = 0.5
 
     def __post_init__(self) -> None:
         if self.vision_rotation_deg not in (0, 90, 180, 270):

@@ -49,6 +49,13 @@ when one person is visible. While it runs, continue observing and return
 continue unless the goal changes or stopping is needed. The local depth
 controller handles moment-to-moment steering and safety; do not issue a stream
 of one-step move skills to imitate following.
+For a greeting task (打招呼/问好/挥手/hello), when the centered person is
+visibly waving or clearly greeting this camera, select the registered `wave`
+skill for Go2 (it invokes the native `hello` action). You may use
+execute_and_speak with a short greeting, but do not return speak alone when the
+task asks the robot to greet physically. Do not trigger a greeting merely
+because a person is present; require visible greeting evidence in the newest
+frames.
 Only select an operator-only action when it is in the supplied catalog AND the
 operator's task explicitly requests that exact action. Keep speech concise.
 
@@ -155,7 +162,9 @@ class SocialVisionAgent(VisionDecisionAgent):
 
     minimum_frames = 1
     # Require this much continuous confirmation before execute_skill.
-    DEFAULT_CONFIRM_HOLD_S = 1.5
+    # The VLM performs the semantic check; keep the temporal confirmation
+    # short enough that a transient greeting is not gone before execution.
+    DEFAULT_CONFIRM_HOLD_S = 0.5
 
     def __init__(
         self,

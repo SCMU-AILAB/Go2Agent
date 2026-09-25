@@ -60,6 +60,26 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.action, "execute_skill")
         self.assertEqual(decision.skill, "wave")
 
+    async def test_default_short_hold_allows_transient_greeting(self):
+        agent = SocialVisionAgent(
+            task_context="用户打招呼就给他打招呼",
+            response_format="decision",
+            invoker=FakeVisionInvoker(
+                [{"action": "execute_skill", "skill": "wave", "reason": "greeting"}]
+            ),
+        )
+        state = RobotState(hardware=False, connected=True)
+        skills = build_go2_autonomy_skills()
+        first = await agent.decide(
+            [camera_frame(1.0), camera_frame(1.2)], state, skills
+        )
+        second = await agent.decide(
+            [camera_frame(1.5), camera_frame(1.7)], state, skills
+        )
+        self.assertEqual(first.action, "ignore")
+        self.assertEqual(second.action, "execute_skill")
+        self.assertEqual(second.skill, "wave")
+
     async def test_peace_sign_returned_as_wave_is_resolved_to_heart(self):
         agent = SocialVisionAgent(confirm_hold_s=0, 
             task_context="用户打招呼就打招呼，比耶或比心就比心",
