@@ -105,6 +105,16 @@ def observation(at_s: float, distance_m: float) -> PerceptionResult:
 
 
 class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
+    def test_normalizes_multimodal_tool_name_inside_arguments(self) -> None:
+        decision = AgentDecision.model_validate(
+            {
+                "action": "execute_skill",
+                "arguments": {"name": "follow_person"},
+            }
+        )
+        self.assertEqual(decision.skill, "follow_person")
+        self.assertEqual(decision.arguments, {})
+
     def test_decision_prompt_is_built_from_registry_catalog(self) -> None:
         runtime = SkillRuntime(SimulatedRobotAdapter())
         runtime.register(WaveSkill())

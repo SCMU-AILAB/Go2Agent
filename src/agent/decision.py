@@ -96,6 +96,20 @@ class AgentDecision(BaseModel):
         action = action.strip()
         payload["action"] = action
         skill_value = payload.get("skill")
+        # Some multimodal models put the selected tool in arguments.name.
+        # Normalize that shape at the protocol boundary.
+        raw_arguments = payload.get("arguments")
+        if (
+            action in {"execute_skill", "execute_and_speak"}
+            and not _has_nonempty_text(skill_value)
+            and isinstance(raw_arguments, Mapping)
+            and _has_nonempty_text(raw_arguments.get("name"))
+        ):
+            payload["skill"] = str(raw_arguments["name"]).strip()
+            payload["arguments"] = {
+                key: item for key, item in raw_arguments.items() if key != "name"
+            }
+            skill_value = payload["skill"]
         has_skill = _has_nonempty_text(skill_value)
         has_arguments = bool(payload.get("arguments"))
         has_speech = _has_nonempty_text(payload.get("speech"))

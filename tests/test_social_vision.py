@@ -123,6 +123,30 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.action, "ignore")
         self.assertIn("depth-confirmed", decision.reason)
 
+    async def test_accepts_model_tool_call_name_nested_in_arguments(self):
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker(
+                [{"action": "execute_skill", "arguments": {"name": "follow_person"}}]
+            ),
+            response_format="decision",
+            task_context="跟着人走",
+            confirm_hold_s=0,
+        )
+        at_s = 2.0
+        frame = replace(
+            camera_frame(at_s),
+            observation=PerceptionResult(
+                observed_at_s=at_s,
+                person_count=1,
+                nearest_person_distance_m=2.0,
+                person_center_x=0.5,
+            ),
+        )
+        decision = await agent.decide(
+            [frame], RobotState(hardware=False, connected=True), build_go2_autonomy_skills()
+        )
+        self.assertEqual((decision.action, decision.skill), ("execute_skill", "follow_person"))
+
     async def test_open_decision_supports_speech_and_interrupt(self):
         agent = SocialVisionAgent(
             invoker=FakeVisionInvoker(
