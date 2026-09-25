@@ -65,7 +65,11 @@ class Go2FollowTests(unittest.IsolatedAsyncioTestCase):
         try:
             await asyncio.sleep(0.08)
             self.assertTrue(
-                any(name == "move_velocity" and value[0] == 0.15 for name, value in self.robot.events)
+                any(
+                    name == "move_velocity"
+                    and 0.20 <= value[0] <= self.skill.MAX_FORWARD_M_S
+                    for name, value in self.robot.events
+                )
             )
             self.skill.observe_frame(frame(distance=1.5))
             await asyncio.sleep(0.06)

@@ -41,7 +41,11 @@ class FollowPersonSkill(RobotSkill[SkillArgs]):
     args_model = SkillArgs
     TARGET_M = 1.5
     DISTANCE_HYSTERESIS_M = 0.25
-    MAX_FORWARD_M_S = 0.15
+    # Go2 needs a meaningful command to overcome static friction.  0.15 m/s
+    # was often below the platform's effective motion threshold, so following
+    # appeared to do nothing even though move() succeeded.
+    MIN_FORWARD_M_S = 0.20
+    MAX_FORWARD_M_S = 0.30
     MAX_YAW_RAD_S = 0.3
     FRAME_MAX_AGE_S = 0.5
     # Keep this close to the console depth safety gate.  The previous 1.2 m
@@ -163,12 +167,18 @@ class FollowPersonSkill(RobotSkill[SkillArgs]):
                 yaw = max(-self.MAX_YAW_RAD_S, min(self.MAX_YAW_RAD_S, -offset * 0.8))
                 if abs(offset) < 0.1 or target.distance_m < self.TARGET_M - self.DISTANCE_HYSTERESIS_M:
                     yaw = 0.0
-                forward = (
-                    self.MAX_FORWARD_M_S
-                    if target.distance_m > self.TARGET_M + self.DISTANCE_HYSTERESIS_M
+                distance_error = target.distance_m - self.TARGET_M
+                forward = 0.0
+                if (
+                    distance_error > self.DISTANCE_HYSTERESIS_M
                     and abs(offset) < 0.2
-                    else 0.0
-                )
+                ):
+                    # Keep the command above the effective Go2 start speed,
+                    # then ramp to the application cap as the target recedes.
+                    forward = min(
+                        self.MAX_FORWARD_M_S,
+                        max(self.MIN_FORWARD_M_S, distance_error * 0.6),
+                    )
                 # At the desired distance, hold position instead of creeping forward.
                 if forward or yaw:
                     await ctx.robot.move_velocity(forward, 0.0, yaw)

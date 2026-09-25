@@ -101,7 +101,7 @@ Go2 使用 `skills.register_go2_skills()`，不会调用 `register_g1_skills()`�
 `recovery_stand` 仅在 `--include-operator-only-skills` 时注册。
 
 `follow_person` 是单目标视觉反馈 Skill：持续收到 D435i 单人检测、有效深度及
-安全空间时维持约 1.5 m；最多 0.15 m/s 前进、0.3 rad/s 转向。丢失、多人、
+安全空间时维持约 1.5 m；前进速度保持在 0.20--0.30 m/s、0.3 rad/s 转向。丢失、多人、
 障碍、相机过期或取消均调用 `stop()`。目前依赖 HOG 人体框中心，并非身份
 跟踪器；多人交错或遮挡后不能保证继续跟随同一人，不可视为通用导航。
 
