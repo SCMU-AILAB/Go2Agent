@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping, Sequence
 from typing import Protocol, cast
@@ -54,6 +55,42 @@ def system_prompt_for(robot_model: str) -> str:
     return SYSTEM_PROMPT
 
 
+def build_runtime_system_prompt(
+    runtime: SkillRuntime,
+    system_prompt: str,
+) -> str:
+    """Append the live SkillRegistry contract to the model's system prompt.
+
+    LangChain also exposes the skills as structured tools, but a compact catalog
+    in the prompt makes the available capabilities and argument schemas visible
+    to models that are weak at tool discovery. The registry remains the only
+    source of truth; this is generated at Agent construction time.
+    """
+    entries: list[dict[str, object]] = []
+    for skill in runtime.registry.list():
+        entries.append(
+            {
+                "name": skill.metadata.name,
+                "description": skill.metadata.description,
+                "tags": list(skill.metadata.tags),
+                "required_resources": list(skill.metadata.required_resources),
+                "timeout_s": skill.metadata.timeout_s,
+                "interruptible": skill.metadata.interruptible,
+                "arguments_schema": skill.args_model.model_json_schema(),
+            }
+        )
+    catalog = json.dumps(entries, ensure_ascii=False, default=str)
+    return (
+        f"{system_prompt.rstrip()}\n\n"
+        "Live registered robot skill catalog (the only callable capabilities):\n"
+        f"{catalog}\n"
+        "Choose tools by matching the user's goal to these descriptions and "
+        "schemas. You may call multiple tools in sequence when the goal needs "
+        "multiple steps; inspect each SkillResult before choosing the next step. "
+        "Never invent a skill name or arguments.\n"
+    )
+
+
 class AgentError(RuntimeError):
     """Raised when the Agent fails to produce a usable final response."""
 
@@ -80,6 +117,8 @@ class RobotAgent:
             self._invoker = invoker
             return
 
+        effective_system_prompt = build_runtime_system_prompt(runtime, system_prompt)
+
         model = ChatOllama(
             model=model_name or os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
             base_url=base_url or os.getenv("OLLAMA_HOST"),
@@ -89,7 +128,7 @@ class RobotAgent:
         graph = create_agent(
             model=model,
             tools=build_langchain_tools(runtime, observer=tool_observer),
-            system_prompt=system_prompt,
+            system_prompt=effective_system_prompt,
         )
         self._invoker = cast(AgentInvoker, cast(object, graph))
 

@@ -5,7 +5,11 @@ from __future__ import annotations
 import unittest
 
 from adapters.langchain import build_langchain_tools
-from agent.service import GO2_SYSTEM_PROMPT, system_prompt_for
+from agent.service import (
+    GO2_SYSTEM_PROMPT,
+    build_runtime_system_prompt,
+    system_prompt_for,
+)
 from core.runtime import SkillRuntime
 from robot import SimulatedRobotAdapter
 from skills import register_go2_skills
@@ -72,6 +76,15 @@ class Go2LlmHintTests(unittest.TestCase):
         self.assertIn("跟着人走", description)
         self.assertIn("D435i", description)
         self.assertNotIn("follow_person", GO2_SYSTEM_PROMPT)
+
+    def test_text_agent_prompt_is_generated_from_registry(self) -> None:
+        prompt = build_runtime_system_prompt(self.runtime, "base instructions")
+
+        self.assertTrue(prompt.startswith("base instructions"))
+        self.assertIn("Live registered robot skill catalog", prompt)
+        self.assertIn('"name": "follow_person"', prompt)
+        self.assertIn('"arguments_schema"', prompt)
+        self.assertIn("multiple tools in sequence", prompt)
 
     def test_pose_flag_description_documents_boolean(self) -> None:
         description = self.tools["pose"].description or ""
