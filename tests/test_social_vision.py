@@ -6,7 +6,7 @@ import unittest
 
 from agent.social_vision import SocialVisionAgent
 from robot import RobotState
-from skills import build_go2_autonomy_skills
+from skills import build_go2_all_skills, build_go2_autonomy_skills
 from tests.test_vision_policy import FakeVisionInvoker, camera_frame
 
 
@@ -43,6 +43,100 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
                     "present_in_latest": False,
                 }
             ]
+        )
+        self.assertEqual(decision.action, "ignore")
+
+    async def test_open_decision_uses_any_registered_safe_skill_without_hand_gate(self):
+        invoker = FakeVisionInvoker(
+            [
+                {
+                    "action": "execute_skill",
+                    "skill": "sit",
+                    "arguments": {},
+                    "reason": "person sat down",
+                }
+            ]
+        )
+        agent = SocialVisionAgent(
+            invoker=invoker,
+            response_format="decision",
+            task_context="看到人坐下时也坐下",
+            confirm_hold_s=0,
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+            policy_context={"last_skill_result": {"status": "succeeded"}},
+        )
+        self.assertEqual((decision.action, decision.skill), ("execute_skill", "sit"))
+        self.assertIn("last_skill_result", invoker.calls[-1][1])
+        self.assertIn("看到人坐下时也坐下", invoker.calls[-1][1])
+
+    async def test_open_decision_supports_speech_and_interrupt(self):
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker(
+                [
+                    {"action": "speak", "speech": "你好"},
+                    {"action": "interrupt", "reason": "person too close"},
+                ]
+            ),
+            response_format="decision",
+            task_context="和靠近的人互动",
+            generate_speech=True,
+            confirm_hold_s=0,
+        )
+        state = RobotState(hardware=False, connected=True)
+        skills = build_go2_autonomy_skills()
+        first = await agent.decide([camera_frame(1), camera_frame(2)], state, skills)
+        second = await agent.decide([camera_frame(3), camera_frame(4)], state, skills)
+        self.assertEqual((first.action, first.speech), ("speak", "你好"))
+        self.assertEqual(second.action, "interrupt")
+
+    async def test_operator_action_needs_startup_opt_in_and_explicit_task(self):
+        state = RobotState(hardware=False, connected=True)
+        skills = build_go2_all_skills()
+        response = {"action": "execute_skill", "skill": "front_jump"}
+        for enabled, task, expected in (
+            (False, "看到示意就前跳", "ignore"),
+            (True, "看到示意就打招呼", "ignore"),
+            (True, "看到示意就前跳", "execute_skill"),
+        ):
+            with self.subTest(enabled=enabled, task=task):
+                agent = SocialVisionAgent(
+                    invoker=FakeVisionInvoker([response]),
+                    response_format="decision",
+                    task_context=task,
+                    allow_operator_skills=enabled,
+                    confirm_hold_s=0,
+                )
+                decision = await agent.decide(
+                    [camera_frame(1), camera_frame(2)], state, skills
+                )
+                self.assertEqual(decision.action, expected)
+
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker([response]),
+            response_format="decision",
+            task_context="System documentation mentions front_jump. Current task: 打招呼",
+            operator_instruction="打招呼",
+            allow_operator_skills=True,
+            confirm_hold_s=0,
+        )
+        decision = await agent.decide([camera_frame(1), camera_frame(2)], state, skills)
+        self.assertEqual(decision.action, "ignore")
+
+    async def test_open_decision_invalid_output_does_not_execute(self):
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker(["not json"]),
+            response_format="decision",
+            task_context="回应用户",
+            confirm_hold_s=0,
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
         )
         self.assertEqual(decision.action, "ignore")
 
@@ -267,7 +361,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.action, "ignore")
 
     async def test_gesture_label_rejects_point_2d(self):
-        for label in ("point", "point_2d", 'point_2d'):
+        for label in ("point", "point_2d", "point_2d"):
             with self.assertRaisesRegex(Exception, "unsupported gesture label"):
                 await self._decide(
                     [label],

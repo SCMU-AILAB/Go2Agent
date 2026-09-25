@@ -150,6 +150,18 @@ class ConsoleVisionTests(unittest.TestCase):
         self.assertEqual(backend.config.vision_frame_count, 3)
         self.assertEqual(backend.config.vision_window_s, 0.8)
 
+    def test_go2_vision_factory_uses_open_decisions(self):
+        backend = ConsoleBackend(
+            BackendConfig(
+                robot_model="go2", audio_enabled=False, vision_backend="unifolm"
+            ),
+            agent_factory=fake_agent_factory,
+        )
+        agent = backend._build_vision_agent("看到人坐下就坐下")
+        self.assertEqual(agent.response_format, "decision")
+        self.assertIn("看到人坐下就坐下", agent.task_context)
+        self.assertFalse(agent.allow_operator_skills)
+
     def test_default_camera_applies_rotation_before_jpeg_encoding(self):
         backend = ConsoleBackend(
             BackendConfig(audio_enabled=False, vision_rotation_deg=180),
@@ -174,6 +186,7 @@ class ConsoleVisionTests(unittest.TestCase):
                 prompt_profile="egocentric",
                 generate_speech=True,
                 task_context=backend.system_prompt + "\n" + text,
+                confirm_hold_s=0,
             ),
         )
         return backend, camera, invoker

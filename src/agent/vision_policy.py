@@ -130,9 +130,13 @@ class OllamaVisionInvoker:
         )
         payload = response if isinstance(response, Mapping) else response.model_dump()
         if payload.get("done") is not True:
-            raise DecisionAgentError("Ollama returned an incomplete response; check server logs")
+            raise DecisionAgentError(
+                "Ollama returned an incomplete response; check server logs"
+            )
         if payload.get("done_reason") == "length":
-            raise DecisionAgentError("Ollama exhausted the output token budget; refusing truncated decision")
+            raise DecisionAgentError(
+                "Ollama exhausted the output token budget; refusing truncated decision"
+            )
         finished = time.monotonic()
         client_encode_s = max(0.0, request_started - started)
         http_round_trip_s = max(0.0, finished - request_started)
@@ -146,19 +150,24 @@ class OllamaVisionInvoker:
             "input_tokens": payload.get("prompt_eval_count"),
             "generated_tokens": payload.get("eval_count"),
         }
-        for field in ("total_duration", "load_duration", "prompt_eval_duration", "eval_duration"):
+        for field in (
+            "total_duration",
+            "load_duration",
+            "prompt_eval_duration",
+            "eval_duration",
+        ):
             value = payload.get(field)
             if isinstance(value, (int, float)):
-                self.last_metrics[field.replace("_duration", "_s")] = round(value / 1e9, 3)
+                self.last_metrics[field.replace("_duration", "_s")] = round(
+                    value / 1e9, 3
+                )
         total_s = self.last_metrics.get("total_s")
         if isinstance(total_s, (int, float)):
             # Ollama exposes no separate upload/download clocks. This residual
             # is therefore an upper bound containing HTTP serialization plus
             # network transfer, retained as network_rtt_s for log compatibility.
             transport_residual_s = max(0.0, http_round_trip_s - total_s)
-            self.last_metrics["transport_residual_s"] = round(
-                transport_residual_s, 3
-            )
+            self.last_metrics["transport_residual_s"] = round(transport_residual_s, 3)
             self.last_metrics["network_rtt_s"] = round(transport_residual_s, 3)
         prompt_eval_s = self.last_metrics.get("prompt_eval_s")
         eval_s = self.last_metrics.get("eval_s")
@@ -306,15 +315,15 @@ def _skill_catalog_payload(
         schema = skill.args_model.model_json_schema()
         raw_properties = schema.get("properties", {})
         raw_required = schema.get("required", [])
-        required_names = {
-            name for name in raw_required if isinstance(name, str)
-        } if isinstance(raw_required, list) else set()
+        required_names = (
+            {name for name in raw_required if isinstance(name, str)}
+            if isinstance(raw_required, list)
+            else set()
+        )
         arguments: dict[str, object] = {}
         if isinstance(raw_properties, Mapping):
             for name, raw_descriptor in raw_properties.items():
-                if not isinstance(name, str) or not isinstance(
-                    raw_descriptor, Mapping
-                ):
+                if not isinstance(name, str) or not isinstance(raw_descriptor, Mapping):
                     continue
                 if "default" in raw_descriptor:
                     arguments[name] = raw_descriptor["default"]
@@ -696,11 +705,15 @@ class VisionPolicyWorker:
         )
         self._worker_tasks: tuple[asyncio.Task[None], ...] = ()
         self._active_task: asyncio.Task[tuple[SkillResult | None, bool]] | None = None
+        self._active_completion_task: asyncio.Task[None] | None = None
+        self._completion_tasks: set[asyncio.Task[None]] = set()
         self._active_signature: str | None = None
         self._active_skill: str | None = None
         self._active_started_at_s: float | None = None
         self._active_required_resources: tuple[str, ...] = ()
         self._last_decision: AgentDecision | None = None
+        self._last_skill_result: SkillResult | None = None
+        self._last_skill_result_at_s: float | None = None
         self._last_selected_skill: str | None = None
         self._last_selected_at_s: float | None = None
         self._last_close_obstacle_at_s: float | None = None
@@ -727,10 +740,7 @@ class VisionPolicyWorker:
 
     def observe_frame(self, frame: CameraFrame) -> None:
         distance_m = frame.nearest_obstacle_distance_m
-        if (
-            distance_m is not None
-            and distance_m <= _HANDSHAKE_CONFIRMATION_DISTANCE_M
-        ):
+        if distance_m is not None and distance_m <= _HANDSHAKE_CONFIRMATION_DISTANCE_M:
             self._last_close_obstacle_at_s = frame.observed_at_s
 
     async def start(self) -> None:
@@ -752,7 +762,10 @@ class VisionPolicyWorker:
         if active is not None and not active.done():
             active.cancel()
             await asyncio.gather(active, return_exceptions=True)
+        if self._completion_tasks:
+            await asyncio.gather(*self._completion_tasks, return_exceptions=True)
         self._active_task = None
+        self._active_completion_task = None
         self._active_signature = None
         self._active_skill = None
         self._active_started_at_s = None
@@ -775,11 +788,14 @@ class VisionPolicyWorker:
     ) -> bool:
         async with self._interrupt_lock:
             active = self._active_task
+            if active is not None and active.done() and self._active_completion_task:
+                await self._active_completion_task
             had_active_behavior = active is not None and not active.done()
             if had_active_behavior:
                 active.cancel()
                 await asyncio.gather(active, return_exceptions=True)
             self._active_task = None
+            self._active_completion_task = None
             self._active_signature = None
             self._active_skill = None
             self._active_started_at_s = None
@@ -814,6 +830,7 @@ class VisionPolicyWorker:
                 active.cancel()
                 await asyncio.gather(active, return_exceptions=True)
                 self._active_task = None
+                self._active_completion_task = None
                 self._active_signature = None
                 self._active_skill = None
                 self._active_started_at_s = None
@@ -841,17 +858,31 @@ class VisionPolicyWorker:
                 try:
                     frames = self._orient_frames(frames)
                 except Exception as exc:  # noqa: BLE001 - policy must remain alive
-                    self._put_latest(self._error_queue, VisionPolicyError(stage="decision", message=f"frame rotation failed: {exc}"))
+                    self._put_latest(
+                        self._error_queue,
+                        VisionPolicyError(
+                            stage="decision", message=f"frame rotation failed: {exc}"
+                        ),
+                    )
                     await asyncio.sleep(self.interval_s)
                     continue
                 if self.capture is not None and self.capture.available:
                     try:
                         # Freeze JPEG inputs once: saved bytes are passed unchanged to Ollama.
-                        frames = tuple(replace(f, rgb=OllamaVisionInvoker._as_bytes(f.rgb)) for f in frames)
-                        capture_path = await asyncio.to_thread(self.capture.begin, frames)
-                        logging.getLogger("agent.vision_capture").info("saved model inputs: %s", capture_path)
+                        frames = tuple(
+                            replace(f, rgb=OllamaVisionInvoker._as_bytes(f.rgb))
+                            for f in frames
+                        )
+                        capture_path = await asyncio.to_thread(
+                            self.capture.begin, frames
+                        )
+                        logging.getLogger("agent.vision_capture").info(
+                            "saved model inputs: %s", capture_path
+                        )
                     except Exception as exc:  # noqa: BLE001 - capture is optional
-                        logging.getLogger("agent.vision_capture").warning("capture disabled after write failure: %s", exc)
+                        logging.getLogger("agent.vision_capture").warning(
+                            "capture disabled after write failure: %s", exc
+                        )
                         self.capture = None
                 try:
                     robot_state = await self.runtime.robot.get_state()
@@ -878,12 +909,15 @@ class VisionPolicyWorker:
                     )
                     self._record_decision_completion(decided_at_s)
                     model_metrics["decision_rate_hz"] = self._decision_rate_hz()
-                    self._finish_capture(capture_path, {
-                        "decided_at_s": decided_at_s,
-                        "decision": decision.model_dump(),
-                        "model_metrics": model_metrics,
-                        "policy_context": policy_context,
-                    })
+                    self._finish_capture(
+                        capture_path,
+                        {
+                            "decided_at_s": decided_at_s,
+                            "decision": decision.model_dump(),
+                            "model_metrics": model_metrics,
+                            "policy_context": policy_context,
+                        },
+                    )
                     self._put_latest(
                         self._policy_decision_queue,
                         VisionPolicyDecision(
@@ -894,8 +928,14 @@ class VisionPolicyWorker:
                             decision=decision,
                             robot_state=robot_state,
                             policy_context=policy_context,
-                            model_metrics={**model_metrics,
-                                           **({"capture_path": str(capture_path)} if capture_path else {})},
+                            model_metrics={
+                                **model_metrics,
+                                **(
+                                    {"capture_path": str(capture_path)}
+                                    if capture_path
+                                    else {}
+                                ),
+                            },
                             request_id=request_id,
                         ),
                     )
@@ -965,7 +1005,9 @@ class VisionPolicyWorker:
             try:
                 self.capture.finish(path, result)
             except Exception as exc:  # noqa: BLE001 - capture must not stop policy
-                logging.getLogger("agent.vision_capture").warning("could not save capture result: %s", exc)
+                logging.getLogger("agent.vision_capture").warning(
+                    "could not save capture result: %s", exc
+                )
 
     def _orient_frames(self, frames):
         if not self.rotation_deg:
@@ -1069,6 +1111,11 @@ class VisionPolicyWorker:
                     )
                     continue
 
+                if self._active_task is not None and self._active_task.done():
+                    completion = self._active_completion_task
+                    if completion is not None:
+                        await completion
+
                 signature = self._decision_signature(decision)
                 now = time.monotonic()
                 if self._active_signature == signature:
@@ -1117,35 +1164,18 @@ class VisionPolicyWorker:
                     )
                     self._last_selected_at_s = now
                 self._last_action_at[signature] = now
-                self._active_task = asyncio.create_task(
+                active_task = asyncio.create_task(
                     self._execute(decision),
                     name="vision-active-behavior",
                 )
-                try:
-                    skill_result, speech_spoken = await self._active_task
-                except asyncio.CancelledError:
-                    if asyncio.current_task().cancelling():
-                        raise
-                    continue
-                finally:
-                    self._active_task = None
-                    self._active_signature = None
-                    self._active_skill = None
-                    self._active_started_at_s = None
-                    self._active_required_resources = ()
-                self._put_latest(
-                    self._outcome_queue,
-                    self._outcome(
-                        decision,
-                        frames,
-                        robot_state,
-                        request_id=request.request_id,
-                        model_metrics=request.model_metrics,
-                        executed=True,
-                        skill_result=skill_result,
-                        speech_spoken=speech_spoken,
-                    ),
+                self._active_task = active_task
+                completion = asyncio.create_task(
+                    self._complete_active(active_task, request),
+                    name="vision-behavior-completion",
                 )
+                self._completion_tasks.add(completion)
+                self._active_completion_task = completion
+                completion.add_done_callback(self._completion_tasks.discard)
             except Exception as exc:  # noqa: BLE001 - execution worker must survive
                 self._active_task = None
                 self._active_signature = None
@@ -1157,7 +1187,52 @@ class VisionPolicyWorker:
                     VisionPolicyError(stage="execution", message=str(exc)),
                 )
 
-    async def _execute(self, decision: AgentDecision) -> tuple[SkillResult | None, bool]:
+    async def _complete_active(
+        self,
+        active_task: asyncio.Task[tuple[SkillResult | None, bool]],
+        request: _VisionDecisionRequest,
+    ) -> None:
+        try:
+            skill_result, speech_spoken = await active_task
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001 - report and keep worker alive
+            self._put_latest(
+                self._error_queue,
+                VisionPolicyError(stage="execution", message=str(exc)),
+            )
+            return
+        else:
+            if self._active_task is not active_task:
+                return
+            if skill_result is not None:
+                self._last_skill_result = skill_result
+                self._last_skill_result_at_s = time.monotonic()
+            self._put_latest(
+                self._outcome_queue,
+                self._outcome(
+                    request.decision,
+                    request.frames,
+                    request.robot_state,
+                    request_id=request.request_id,
+                    model_metrics=request.model_metrics,
+                    executed=True,
+                    skill_result=skill_result,
+                    speech_spoken=speech_spoken,
+                ),
+            )
+        finally:
+            if self._active_task is active_task:
+                self._active_task = None
+                self._active_completion_task = None
+                self._active_signature = None
+                self._active_skill = None
+                self._active_started_at_s = None
+                self._active_required_resources = ()
+
+    async def _execute(
+        self, decision: AgentDecision
+    ) -> tuple[SkillResult | None, bool]:
         if decision.action == "execute_and_speak":
             if decision.skill is None:
                 raise RuntimeError("validated vision decision is missing a skill")
@@ -1218,9 +1293,7 @@ class VisionPolicyWorker:
         if decision.skill is None:
             return ()
         try:
-            return self.runtime.registry.get(
-                decision.skill
-            ).metadata.required_resources
+            return self.runtime.registry.get(decision.skill).metadata.required_resources
         except KeyError:
             return ()
 
@@ -1244,6 +1317,25 @@ class VisionPolicyWorker:
             "last_decision": (
                 self._last_decision.to_dict()
                 if self._last_decision is not None
+                else None
+            ),
+            "last_skill_result": (
+                {
+                    "success": self._last_skill_result.success,
+                    "status": self._last_skill_result.status.value,
+                    "message": self._last_skill_result.message[:200],
+                    "failure_code": (
+                        self._last_skill_result.failure_code.value
+                        if self._last_skill_result.failure_code is not None
+                        else None
+                    ),
+                }
+                if self._last_skill_result is not None
+                else None
+            ),
+            "seconds_since_last_skill_result": (
+                round(max(0.0, time.monotonic() - self._last_skill_result_at_s), 3)
+                if self._last_skill_result_at_s is not None
                 else None
             ),
             "last_selected_skill": self._last_selected_skill,
@@ -1374,10 +1466,7 @@ class VisionPolicyWorker:
     def _decision_rate_hz(self) -> float:
         if len(self._decision_finished_at_s) < 2:
             return 0.0
-        elapsed_s = (
-            self._decision_finished_at_s[-1]
-            - self._decision_finished_at_s[0]
-        )
+        elapsed_s = self._decision_finished_at_s[-1] - self._decision_finished_at_s[0]
         if elapsed_s <= 0:
             return 0.0
         return round(
@@ -1389,7 +1478,11 @@ class VisionPolicyWorker:
     def _decision_signature(decision: AgentDecision) -> str:
         return json.dumps(
             {
-                "action": ("execute_skill" if decision.skill and decision.action == "execute_and_speak" else decision.action),
+                "action": (
+                    "execute_skill"
+                    if decision.skill and decision.action == "execute_and_speak"
+                    else decision.action
+                ),
                 "skill": (
                     VisionPolicyWorker._canonical_skill_name(decision.skill)
                     if decision.skill is not None

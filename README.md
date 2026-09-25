@@ -73,8 +73,10 @@ sh scripts/run-go2-console.sh
 
 ## 控制台视觉接入
 
-Flutter 控制台已接入滑动视频策略。选择「持续手势交互」并使用本地相机时，才会启动
-持续视觉决策；选择「文本指令」时只把文字交给 Agent。相机预览与模型共享旋转后的
+Flutter 控制台已接入滑动视频策略。选择「持续视觉交互」并使用本地相机时，才会启动
+持续视觉决策；选择「文本指令」时只把文字交给 Agent。Go2 的视觉 Agent 每轮读取
+任务、最近视频窗口、当前动作和上一次 SkillResult，可选择执行技能、说话、继续、
+打断或忽略；已注册且允许的技能由模型按任务选择，不限于预设手势。相机预览与模型共享旋转后的
 JPEG，决策、Skill 结果与状态通过 REST/WebSocket 快照展示。详见
 [前端运行说明](frontend/README.md)。
 
@@ -86,9 +88,14 @@ JPEG，决策、Skill 结果与状态通过 REST/WebSocket 快照展示。详见
   --vision-url http://192.168.31.112:8011 --no-audio
 ```
 
-不要同时启动占用同一相机的 `run-remote-vision.sh`。前端选择手势模式并开始任务才会
+不要同时启动占用同一相机的 `run-remote-vision.sh`。前端选择视觉模式并开始任务才会
 启动视觉决策；停止任务会结束 worker。连接真机由后端 `--hardware --network eth0` 决定，
 软件停止不是物理急停，API 仅用于可信网络。
+
+Go2 的 `front_jump` 等 operator-only 动作默认不进入视觉目录。只有启动时显式加入
+`--include-operator-only-skills`，并且任务提示词明确写出该动作（例如“前跳”或
+`front_jump`），视觉决策才会看到它。模型输出仍需通过本地技能目录校验；
+服务接受动作命令不等于动作已经完成。
 
 Go2 真机直接使用启动脚本。视觉连接局域网 UnifoLM；文字 Agent 仍使用独立的
 Ollama 地址，因此 `OLLAMA_HOST` 必须指向可用的文字推理服务：

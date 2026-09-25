@@ -62,18 +62,30 @@ class VideoBufferTests(unittest.TestCase):
 
         sampled = buffer.sample(4)
 
-        self.assertEqual([frame.observed_at_s for frame in sampled], [0.0, 3.0, 6.0, 9.0])
+        self.assertEqual(
+            [frame.observed_at_s for frame in sampled], [0.0, 3.0, 6.0, 9.0]
+        )
 
 
 class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
     def test_different_generated_speech_cannot_bypass_action_cooldown(self):
         first = AgentDecision(action="execute_and_speak", skill="wave", speech="你好")
-        second = AgentDecision(action="execute_and_speak", skill="wave", speech="很高兴见到你")
+        second = AgentDecision(
+            action="execute_and_speak", skill="wave", speech="很高兴见到你"
+        )
         silent = AgentDecision(action="execute_skill", skill="wave")
-        self.assertEqual(VisionPolicyWorker._decision_signature(first), VisionPolicyWorker._decision_signature(second))
-        self.assertEqual(VisionPolicyWorker._decision_signature(first), VisionPolicyWorker._decision_signature(silent))
+        self.assertEqual(
+            VisionPolicyWorker._decision_signature(first),
+            VisionPolicyWorker._decision_signature(second),
+        )
+        self.assertEqual(
+            VisionPolicyWorker._decision_signature(first),
+            VisionPolicyWorker._decision_signature(silent),
+        )
 
-    async def test_video_frames_and_runtime_context_produce_agent_decision(self) -> None:
+    async def test_video_frames_and_runtime_context_produce_agent_decision(
+        self,
+    ) -> None:
         invoker = FakeVisionInvoker(
             [
                 json.dumps(
@@ -318,6 +330,19 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_policy_context_includes_completed_skill_result(self) -> None:
+        worker = VisionPolicyWorker(
+            SkillRuntime(SimulatedRobotAdapter()),
+            VisionDecisionAgent(invoker=FakeVisionInvoker([{"action": "ignore"}])),
+            VideoBuffer(window_s=2.0, max_frames=60),
+        )
+        worker._last_skill_result = SkillResult.ok("sit command accepted")
+        worker._last_skill_result_at_s = time.monotonic() - 0.2
+        context = worker._build_policy_context()
+        self.assertEqual(context["last_skill_result"]["status"], "succeeded")
+        self.assertIn("sit command accepted", context["last_skill_result"]["message"])
+        self.assertGreaterEqual(context["seconds_since_last_skill_result"], 0.2)
+
     async def test_execution_drops_action_that_ages_in_queue(self) -> None:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
@@ -435,7 +460,9 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("arm_action", [event[0] for event in robot.events])
         self.assertTrue(worker.drain_errors())
 
-    async def test_recent_close_depth_cannot_authorize_malformed_handshake(self) -> None:
+    async def test_recent_close_depth_cannot_authorize_malformed_handshake(
+        self,
+    ) -> None:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
         runtime.register(HandshakeSkill())
@@ -545,10 +572,12 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
             await worker.stop()
 
         self.assertNotIn("arm_action", [event[0] for event in robot.events])
-        self.assertTrue(any(
-            "stale visual decision" in (outcome.suppressed_reason or "")
-            for outcome in worker.drain_outcomes()
-        ))
+        self.assertTrue(
+            any(
+                "stale visual decision" in (outcome.suppressed_reason or "")
+                for outcome in worker.drain_outcomes()
+            )
+        )
 
     async def test_depth_safety_latch_blocks_mobile_base_skill(self) -> None:
         robot = SimulatedRobotAdapter()
@@ -758,6 +787,48 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
             await worker.stop()
 
         self.assertIn("move_velocity", [event[0] for event in robot.events])
+        self.assertIn(("stop", None), robot.events)
+
+    async def test_new_visual_skill_can_replace_running_skill(self) -> None:
+        robot = SimulatedRobotAdapter()
+        worker = VisionPolicyWorker(
+            SkillRuntime(robot),
+            VisionDecisionAgent(invoker=FakeVisionInvoker([{"action": "ignore"}])),
+            VideoBuffer(window_s=2.0, max_frames=60),
+            action_cooldown_s=0,
+        )
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+
+        async def execute(decision: AgentDecision) -> tuple[SkillResult | None, bool]:
+            if decision.skill == "wave":
+                first_started.set()
+                await asyncio.Event().wait()
+            second_started.set()
+            return SkillResult.ok(), False
+
+        worker._execute = execute  # type: ignore[method-assign]
+        state = RobotState(hardware=False, connected=True)
+        frame = camera_frame(time.monotonic())
+
+        def request(skill: str) -> _VisionDecisionRequest:
+            return _VisionDecisionRequest(
+                decision=AgentDecision(action="execute_skill", skill=skill),
+                frames=(frame,),
+                robot_state=state,
+                request_id=skill,
+                model_metrics={},
+            )
+
+        await worker.start()
+        try:
+            await worker._decision_queue.put(request("wave"))
+            await asyncio.wait_for(first_started.wait(), timeout=1)
+            await worker._decision_queue.put(request("sit"))
+            await asyncio.wait_for(second_started.wait(), timeout=1)
+        finally:
+            await worker.stop()
+
         self.assertIn(("stop", None), robot.events)
 
 
