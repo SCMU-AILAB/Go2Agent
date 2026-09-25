@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
@@ -138,6 +139,24 @@ Reply with exactly one label and nothing else. Do not return JSON, markdown,
 coordinates, points, boxes, or an explanation.
 """
 
+_FOLLOW_GOAL_RE = re.compile(
+    r"(?:跟着|跟随|追踪|跟我|跟上).{0,8}(?:人|我|走|移动)?|"
+    r"follow(?:\s+(?:me|the\s+person|person))?",
+    re.IGNORECASE,
+)
+
+
+def _is_follow_goal(text: str) -> bool:
+    """Recognize an explicit persistent-follow goal for the local controller."""
+
+    normalized = re.sub(r"\s+", "", text.strip().casefold())
+    if not normalized or any(
+        marker in normalized
+        for marker in ("不要跟", "别跟", "停止跟", "stopfollowing", "dontfollow")
+    ):
+        return False
+    return bool(_FOLLOW_GOAL_RE.search(normalized))
+
 
 class TaskDrivenObservation(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -242,6 +261,38 @@ class SocialVisionAgent(VisionDecisionAgent):
     ) -> AgentDecision:
         task = self.task_context.strip()
         allowed = self._decision_catalog(skill_catalog, self.operator_instruction)
+        # A persistent follow goal is safety-critical and has a deterministic
+        # local feedback controller.  Do not make it depend on a remote VLM
+        # spelling the tool name correctly (or being reachable at all).
+        follow_skill = next(
+            (skill for skill in allowed if skill.metadata.name == "follow_person"),
+            None,
+        )
+        if follow_skill is not None and _is_follow_goal(self.operator_instruction):
+            if (policy_context or {}).get("active_skill") == "follow_person":
+                return AgentDecision(
+                    action="continue",
+                    reason="local follow controller is active",
+                )
+            observation = frames[-1].observation
+            obstacle_m = frames[-1].nearest_obstacle_distance_m
+            if (
+                observation.person_count == 1
+                and observation.nearest_person_distance_m is not None
+                and observation.person_center_x is not None
+                and obstacle_m is not None
+                and obstacle_m > 0.55
+            ):
+                return AgentDecision(
+                    action="execute_skill",
+                    skill="follow_person",
+                    arguments={},
+                    reason="depth-confirmed follow target",
+                )
+            return AgentDecision(
+                action="ignore",
+                reason="waiting for one depth-confirmed person",
+            )
         offsets = [
             round(frame.observed_at_s - frames[-1].observed_at_s, 3) for frame in frames
         ]

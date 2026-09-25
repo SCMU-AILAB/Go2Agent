@@ -106,7 +106,9 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((first.action, first.skill), ("execute_skill", "follow_person"))
         self.assertEqual(second.action, "continue")
-        self.assertIn("follow_person", invoker.calls[0][1])
+        # Explicit persistent-follow goals use the local depth controller
+        # directly; the remote model is not needed to spell the skill name.
+        self.assertEqual(invoker.calls, [])
 
     async def test_follow_hallucination_on_empty_scene_is_ignored(self):
         agent = SocialVisionAgent(
