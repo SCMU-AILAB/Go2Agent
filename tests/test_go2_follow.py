@@ -50,7 +50,7 @@ class Go2FollowTests(unittest.IsolatedAsyncioTestCase):
             frame(count=2),
             frame(distance=None),
             frame(center=None),
-            frame(obstacle=0.9),
+            frame(obstacle=0.5),
             frame(obstacle=float("nan")),
             frame(age_s=2.0),
         ):
@@ -71,6 +71,25 @@ class Go2FollowTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.06)
             self.assertIn(("stop", None), self.robot.events)
             self.skill.observe_frame(frame(count=0, distance=None, center=None))
+            result = await asyncio.wait_for(task, 1.0)
+            self.assertFalse(result.success)
+            self.assertIn("person lost", result.message)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def test_tolerates_one_hog_miss_but_not_a_stale_target(self) -> None:
+        self.skill.observe_frame(frame())
+        task = asyncio.create_task(self.runtime.execute("follow_person"))
+        try:
+            await asyncio.sleep(0.05)
+            self.skill.observe_frame(frame(count=0, distance=None, center=None))
+            await asyncio.sleep(0.05)
+            self.assertFalse(task.done())
+            self.skill.observe_frame(
+                frame(count=0, distance=None, center=None, age_s=0.4)
+            )
             result = await asyncio.wait_for(task, 1.0)
             self.assertFalse(result.success)
             self.assertIn("person lost", result.message)

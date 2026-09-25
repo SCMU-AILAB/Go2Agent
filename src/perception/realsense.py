@@ -118,7 +118,10 @@ class RealSensePersonDetector:
         fps: int = 30,
         detection_fps: float = 5.0,
         frame_timeout_ms: int = 5000,
-        min_score: float = 0.5,
+        # OpenCV's default people detector returns useful positive scores well
+        # below 0.5 for small/far subjects.  A high threshold made following
+        # look broken even though the VLM could see the person.
+        min_score: float = 0.0,
         max_distance_m: float | None = 4.0,
         rgb_rotation_deg: int = 0,
         bindings: RealSenseBindings | None = None,
@@ -416,10 +419,14 @@ class RealSensePersonDetector:
         height: int,
     ) -> float | None:
         distances: list[float] = []
-        for row in range(7):
-            y = round(height * (0.2 + row * 0.1))
-            for column in range(9):
-                x = round(width * (0.2 + column * 0.075))
+        # Do not sample the bottom edge of the image: on a low-mounted D435i
+        # that region is usually the floor, not a forward obstacle.  Keeping a
+        # central upper/middle band still catches a person or object ahead and
+        # leaves the close-depth safety gate as the final stop authority.
+        for row in range(6):
+            y = round(height * (0.18 + row * 0.08))
+            for column in range(7):
+                x = round(width * (0.25 + column * 0.0833))
                 distance = float(
                     depth_frame.get_distance(
                         min(max(x, 0), width - 1),

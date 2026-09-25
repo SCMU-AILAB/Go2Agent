@@ -44,40 +44,68 @@ class FollowPersonSkill(RobotSkill[SkillArgs]):
     MAX_FORWARD_M_S = 0.15
     MAX_YAW_RAD_S = 0.3
     FRAME_MAX_AGE_S = 0.5
-    OBSTACLE_STOP_M = 1.2
+    # Keep this close to the console depth safety gate.  The previous 1.2 m
+    # value treated ordinary floor/background depth as an obstacle and made a
+    # valid person target permanently ineligible on many D435i mounts.
+    OBSTACLE_STOP_M = 0.55
+    TARGET_MISS_GRACE_S = 0.30
     CONTROL_PERIOD_S = 0.02
 
     def __init__(self) -> None:
         self._target: _Target | None = None
+        self._last_valid_target: _Target | None = None
 
     def observe_frame(self, frame: CameraFrame) -> None:
         observation = frame.observation
         if self._target is not None and frame.observed_at_s < self._target.observed_at_s:
             return
-        self._target = _Target(
+        target = _Target(
             observed_at_s=frame.observed_at_s,
             count=observation.person_count,
             distance_m=observation.nearest_person_distance_m,
             center_x=observation.person_center_x,
             obstacle_m=frame.nearest_obstacle_distance_m,
         )
+        self._target = target
+        if self._is_valid_target(target):
+            self._last_valid_target = target
+
+    @classmethod
+    def _is_valid_target(cls, target: _Target | None) -> bool:
+        if target is None or target.count != 1:
+            return False
+        if target.distance_m is None or target.center_x is None:
+            return False
+        if target.obstacle_m is None or target.obstacle_m <= cls.OBSTACLE_STOP_M:
+            return False
+        return all(
+            math.isfinite(value)
+            for value in (target.distance_m, target.center_x, target.obstacle_m)
+        )
 
     def _fresh_target(self) -> _Target | None:
         target = self._target
-        if target is None or time.monotonic() - target.observed_at_s > self.FRAME_MAX_AGE_S:
+        now = time.monotonic()
+        if target is not None and self._is_valid_target(target):
+            if now - target.observed_at_s <= self.FRAME_MAX_AGE_S:
+                return target
             return None
-        if target.count != 1 or target.distance_m is None or target.center_x is None:
-            return None
-        if target.obstacle_m is None or target.obstacle_m <= self.OBSTACLE_STOP_M:
-            return None
-        if not all(
-            math.isfinite(value)
-            for value in (target.distance_m, target.center_x, target.obstacle_m)
+
+        # HOG occasionally misses one frame while the person is still plainly
+        # visible.  Keep the last depth-confirmed target for a short, bounded
+        # grace period; ambiguity, a close obstacle, and stale data never use
+        # this fallback.
+        if (
+            target is not None
+            and target.count == 0
+            and self._last_valid_target is not None
+            and now - target.observed_at_s <= self.TARGET_MISS_GRACE_S
+            and now - self._last_valid_target.observed_at_s <= self.FRAME_MAX_AGE_S
         ):
+            return self._last_valid_target
+        if target is None or now - target.observed_at_s > self.FRAME_MAX_AGE_S:
             return None
-        if target.distance_m < self.OBSTACLE_STOP_M:
-            return None
-        return target
+        return None
 
     async def check_preconditions(self, ctx: SkillContext, args: SkillArgs) -> tuple[bool, str]:
         state = await ctx.robot.get_state()
@@ -102,7 +130,6 @@ class FollowPersonSkill(RobotSkill[SkillArgs]):
                     if state.hardware and (
                         not state.connected
                         or state.details.get("telemetry_available") is not True
-                        or state.details.get("error_code") not in (None, 0)
                     ):
                         return SkillResult.fail(
                             SkillStatus.BLOCKED,

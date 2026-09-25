@@ -144,10 +144,12 @@ class Detector:
             accepted_scores.append(score)
 
         obstacle_distances = []
-        for row in range(7):
-            sample_y = round(height * (0.2 + row * 0.1))
-            for column in range(9):
-                sample_x = round(width * (0.2 + column * 0.075))
+        # Avoid the lower image edge, which is commonly the floor on a
+        # low-mounted D435i and otherwise blocks follow_person at all times.
+        for row in range(6):
+            sample_y = round(height * (0.18 + row * 0.08))
+            for column in range(7):
+                sample_x = round(width * (0.25 + column * 0.0833))
                 distance = float(depth_frame.get_distance(sample_x, sample_y))
                 if distance > 0:
                     obstacle_distances.append(distance)
