@@ -212,6 +212,15 @@ class SocialVisionAgent(VisionDecisionAgent):
         self._hold_hits = 0
         self._fired_skill: str | None = None
 
+    async def warmup(self) -> None:
+        # follow_person is a local RGB/depth feedback controller.  Starting an
+        # explicit follow task must remain available when the optional remote
+        # VLM is offline; other visual goals still warm up their configured
+        # model normally.
+        if _is_follow_goal(self.operator_instruction):
+            return
+        await super().warmup()
+
     @property
     def last_metrics(self) -> Mapping[str, object]:
         return {

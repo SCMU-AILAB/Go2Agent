@@ -110,6 +110,33 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         # directly; the remote model is not needed to spell the skill name.
         self.assertEqual(invoker.calls, [])
 
+    async def test_follow_goal_does_not_require_remote_vlm_warmup(self):
+        class WarmupInvoker(FakeVisionInvoker):
+            def __init__(self):
+                super().__init__([{"action": "ignore"}])
+                self.warmed = False
+
+            async def warmup(self):
+                self.warmed = True
+
+        follow_invoker = WarmupInvoker()
+        follow_agent = SocialVisionAgent(
+            invoker=follow_invoker,
+            response_format="decision",
+            task_context="跟着前面的人走",
+        )
+        await follow_agent.warmup()
+        self.assertFalse(follow_invoker.warmed)
+
+        other_invoker = WarmupInvoker()
+        other_agent = SocialVisionAgent(
+            invoker=other_invoker,
+            response_format="decision",
+            task_context="看到人就打招呼",
+        )
+        await other_agent.warmup()
+        self.assertTrue(other_invoker.warmed)
+
     async def test_follow_hallucination_on_empty_scene_is_ignored(self):
         agent = SocialVisionAgent(
             invoker=FakeVisionInvoker([{"action": "execute_skill", "skill": "follow_person"}]),
