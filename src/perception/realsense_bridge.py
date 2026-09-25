@@ -152,6 +152,7 @@ class RealSenseBridge:
 
         try:
             distance_value = payload.get("nearest_person_distance_m")
+            center_value = payload.get("person_center_x")
             confidence_value = payload.get("confidence")
             observed_at_s = float(payload["observed_at_s"])
             observation = PerceptionResult(
@@ -159,6 +160,9 @@ class RealSenseBridge:
                 person_count=int(payload["person_count"]),
                 nearest_person_distance_m=(
                     float(distance_value) if distance_value is not None else None
+                ),
+                person_center_x=(
+                    float(center_value) if center_value is not None else None
                 ),
                 confidence=(
                     float(confidence_value) if confidence_value is not None else None

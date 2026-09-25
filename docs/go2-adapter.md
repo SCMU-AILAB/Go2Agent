@@ -100,6 +100,11 @@ Go2 使用 `skills.register_go2_skills()`，不会调用 `register_g1_skills()`�
 周期性刷新的移动/转向技能，以及 `stop` / `stop_move`。`damp` 与
 `recovery_stand` 仅在 `--include-operator-only-skills` 时注册。
 
+`follow_person` 是单目标视觉反馈 Skill：持续收到 D435i 单人检测、有效深度及
+安全空间时维持约 1.5 m；最多 0.15 m/s 前进、0.3 rad/s 转向。丢失、多人、
+障碍、相机过期或取消均调用 `stop()`。目前依赖 HOG 人体框中心，并非身份
+跟踪器；多人交错或遮挡后不能保证继续跟随同一人，不可视为通用导航。
+
 Go2 移动技能会以约 20 ms 间隔刷新 `move` 速度，并在 `finally` / `cleanup()`
 中调用 `stop()`；不要依赖 `close()` 停止运动。G1 的“一次发送 + sleep”
 开环移动技能不会注册到 Go2 目录。
@@ -110,8 +115,10 @@ Go2 移动技能会以约 20 ms 间隔刷新 `move` 速度，并在 `finally` / 
 使用狗端电脑的外接麦克风/扬声器：常驻 Faster Whisper 负责 STT，Piper（或
 `espeak-ng` 回退）负责 TTS。FastAPI 增加 `--voice` 后自动监听，也可由前端 VOICE
 面板调用 `/api/v1/voice/start` 和 `/api/v1/voice/stop` 控制。户外默认增加
-`--voice-agent-backend local_commands`，在狗端解析明确安全动作，不占用负责视觉的
-5070 Ti；`shared` 模式才会复用文本 Agent。
+`--voice-agent-backend vision`，把 ASR 文本作为持续视觉目标发给 5070 Ti 的
+视觉 Agent，由它结合新画面、Skill 目录和执行结果选择动作。明确停止指令在狗端
+优先中断，不等待模型。无视觉服务时可改用 `local_commands` 有限指令集；
+`shared` 模式则复用独立文本 Agent。
 
 ## 扩展动作目录
 
@@ -139,8 +146,9 @@ await runtime.execute("pose", flag=False)
 ```
 
 比心也可通过 `POST /api/v1/skills/heart/execute`、请求体 `{"arguments":{}}` 调用。
-文本 Agent 的工具目录从 Registry 自动生成；原有社交视觉分类器仍只映射其支持的
-手势，注册新 Skill 不会自动扩展视觉手势识别类别。
+文本 Agent 和 Go2 持续视觉 Agent 的工具目录都从 Registry 生成。视觉模型可以
+按开放目标选择当前允许的 Skill；注册新 Skill 会进入候选目录，但是否能正确理解
+目标仍取决于模型与现场验证，不能绕过本地参数、感知和安全校验。
 
 本次补齐的是上述原生动作，不含 `euler`、`speed_level`、`switch_joystick`、
 `auto_recover_set/get` 等控制/查询接口。返回成功表示 SDK 接受命令，
@@ -157,12 +165,12 @@ ruff check src/robot/go2_adapter.py src/robot/__init__.py tests/test_go2_adapter
 
 ## 文本指令与真实相机独立（2026-09-17）
 
-控制台任务面板现在显式选择「文本指令」或「持续手势交互」，默认文本指令。
+控制台任务面板现在显式选择「文本指令」或「持续视觉交互」，默认文本指令。
 相机来源只控制预览输入，真实相机开启时也可以发送「比心」「坐下」「跳舞」。
 Go2 已注册原生 `heart`、`sit`、`dance1/dance2`，无需替换成 `hello`。
 文本 Agent 不接收图像，不提供视觉导航或避障保证；移动维持原有短距限制。
-Go2 手势模式可明确选择挥手后 `wave → hello` 或 `heart` 比心回应，握手/击掌安全忽略，
-文字仅作为交互偏好，回应动作由选项指定；不会执行任意文本动作或移动命令。
+Go2 持续视觉模式将文字作为目标，结合画面与执行结果选择当前可用 Skill，
+不再局限于手势映射。未注册和危险的 operator-only 动作默认不可选。
 
 API 提交文本任务并保留相机预览：
 
@@ -170,8 +178,8 @@ API 提交文本任务并保留相机预览：
 {"instruction":"给我比个心","cameraSource":"local","taskMode":"text"}
 ```
 
-持续手势任务用 `taskMode: "gesture"`，必须选择 `local`。
-旧客户端省略 `taskMode` 时保持历史行为（local=手势，demo=文本），需要更新前端
+持续视觉任务仍用兼容字段 `taskMode: "gesture"`，必须选择 `local`。
+旧客户端省略 `taskMode` 时保持历史行为（local=持续视觉，demo=文本），需要更新前端
 才能看到模式选项。相机预览正常不代表已经选择了文本模式。
 
 现场排查：检查 `/api/v1/console` 的 `robot.details.robot_model` 为 `go2`，
@@ -189,9 +197,9 @@ SDK 接受命令不等于真机动作完成；固件不支持时应显示返回�
 
 必须确认文本模型地址与型号可用；只配置 `--vision-url` 不会自动配置文本 Agent。
 
-手势任务示例：`{"instruction":"有人打招呼就打招呼，有人比心就比心","cameraSource":"local","taskMode":"gesture"}`。
-已确认手势按 1:1 映射技能（`wave`→`wave`/`hello`，`heart`→`heart`）；任务文字只影响视觉偏好，
-不会执行未注册技能。旧字段 `waveResponse` 已忽略。
+持续视觉任务示例：`{"instruction":"跟着前面的人走，保持距离","cameraSource":"local","taskMode":"gesture"}`。
+Agent 根据任务与视频选择已注册 Skill，`follow_person` 在狗端使用 D435i 深度反馈；
+旧字段 `waveResponse` 已忽略。
 
 本机可用 `sh scripts/run-go2-console.sh` 重启同样配置的控制台。
 脚本连接真机但不会提交动作任务；网卡默认 eth0，可用 GO2_NETWORK 覆盖。

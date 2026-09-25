@@ -89,8 +89,9 @@ TTS成功返回不等于麦克风确认播报完成。模拟后端不连接真�
 实机须先完成现场检查、备好急停，再在后端命令增加 `--hardware --network eth0`，
 Go2 外接麦克风和扬声器时增加 `--voice --audio-input-device pulse
 --audio-output-device pulse`；若提供 Piper 中文模型，再增加 `--piper-model PATH`。
-5070 Ti 专用于视觉时增加 `--voice-agent-backend local_commands`，语音动作在狗端解析，
-仍经 `SkillRuntime` 执行，不会占用远程视觉推理槽。
+语音自然语言目标使用 `--voice-agent-backend vision`，会占用远端视觉推理槽，
+但与前端视觉任务共用同一条 latest-only 决策链。无远端视觉服务时可改用
+`--voice-agent-backend local_commands`，仅支持固定离线命令。
 前端 VOICE 面板可查看最新转写/回复并启停监听。不要同时运行独立视觉CLI和控制台后端。
 API目前无身份认证，仅限可信网络，不能开放到公网。
 

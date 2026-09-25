@@ -4,6 +4,7 @@ import asyncio
 import io
 import time
 import unittest
+from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -284,6 +285,38 @@ class ConsoleVisionTests(unittest.TestCase):
             )
             client.put("/api/v1/camera/source", json={"source": "demo"})
             self.assertEqual(len(backend._video_buffer), 0)
+
+
+class VisionVoiceGoalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_spoken_goal_routes_to_continuous_vision_not_keyword_skills(self):
+        backend = ConsoleBackend(
+            BackendConfig(
+                robot_model="go2",
+                voice_agent_backend="vision",
+                camera_source="local",
+                audio_enabled=False,
+            ),
+            agent_factory=fake_agent_factory,
+        )
+        backend.camera_status = "ready"
+        backend.submit_task = AsyncMock()
+        reply = await backend._route_voice_goal_to_vision("跟着前面的人走")
+        self.assertIn("持续观察", reply)
+        backend.submit_task.assert_awaited_once_with(
+            "跟着前面的人走", camera_source="local", task_mode="gesture"
+        )
+
+    async def test_spoken_stop_cancels_current_goal_without_model(self):
+        backend = ConsoleBackend(
+            BackendConfig(robot_model="go2", voice_agent_backend="vision"),
+            agent_factory=fake_agent_factory,
+        )
+        backend.cancel_task = AsyncMock()
+        backend.submit_task = AsyncMock()
+        reply = await backend._route_voice_goal_to_vision("停止跟随")
+        self.assertIn("停止", reply)
+        backend.cancel_task.assert_awaited_once()
+        backend.submit_task.assert_not_awaited()
 
 
 class ConsoleCameraConcurrencyTests(unittest.IsolatedAsyncioTestCase):

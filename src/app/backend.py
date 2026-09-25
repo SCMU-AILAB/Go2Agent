@@ -180,7 +180,7 @@ class BackendConfig:
     host_audio_device: str | None = None
     host_tts_voice: str = "cmn"
     voice_enabled: bool = False
-    voice_agent_backend: Literal["shared", "local_commands"] = "shared"
+    voice_agent_backend: Literal["shared", "local_commands", "vision"] = "shared"
     voice_record_seconds: float = 3.0
     voice_language: str | None = "zh"
     voice_model: str = "small"
@@ -215,6 +215,8 @@ class BackendConfig:
             raise ValueError("camera detection FPS must be positive")
         if self.voice_record_seconds < 0.5:
             raise ValueError("voice record window must be at least 0.5 seconds")
+        if self.voice_agent_backend == "vision" and self.robot_model != "go2":
+            raise ValueError("vision voice goals currently require Go2")
         if (
             self.vision_max_age_s <= 0
             or self.vision_window_s <= 0
@@ -498,11 +500,14 @@ class ConsoleBackend(SkillToolObserver):
                     self.system_prompt,
                     self,
                 )
-                self._voice_agent = (
-                    LocalVoiceCommandAgent(self.runtime, tool_observer=self)
-                    if self.config.voice_agent_backend == "local_commands"
-                    else self._agent
-                )
+                if self.config.voice_agent_backend == "local_commands":
+                    self._voice_agent = LocalVoiceCommandAgent(
+                        self.runtime, tool_observer=self
+                    )
+                elif self.config.voice_agent_backend == "shared":
+                    self._voice_agent = self._agent
+                else:
+                    self._voice_agent = None
                 self.backend = True
                 self.starting = False
                 self.session_id = uuid.uuid4().hex[:6].upper()
@@ -579,7 +584,9 @@ class ConsoleBackend(SkillToolObserver):
         self._voice_agent = None
 
     async def start_voice(self) -> ConsoleSnapshot:
-        if not self.backend or self._voice_agent is None:
+        if not self.backend or (
+            self._voice_agent is None and self.config.voice_agent_backend != "vision"
+        ):
             raise BackendNotRunning("backend session is not running")
         if self._voice_task is not None and not self._voice_task.done():
             return self.snapshot()
@@ -670,11 +677,14 @@ class ConsoleBackend(SkillToolObserver):
                     self.voice_status = "thinking"
                     self._emit_state()
                     await self._log("INFO", "voice.stt", f"识别到：{text}")
-                    agent = self._voice_agent
-                    if agent is None:
-                        raise BackendNotRunning("Agent is not initialized")
-                    async with self._agent_lock:
-                        reply = await agent.chat(text)
+                    if self.config.voice_agent_backend == "vision":
+                        reply = await self._route_voice_goal_to_vision(text)
+                    else:
+                        agent = self._voice_agent
+                        if agent is None:
+                            raise BackendNotRunning("Agent is not initialized")
+                        async with self._agent_lock:
+                            reply = await agent.chat(text)
                     self.voice_reply = reply
                     await self._log("INFO", "voice.agent", f"回复：{reply}")
                     if self._audio is not None:
@@ -704,6 +714,21 @@ class ConsoleBackend(SkillToolObserver):
             if self.voice_status != "error":
                 self.voice_status = "stopped"
             self._emit_state()
+
+    async def _route_voice_goal_to_vision(self, text: str) -> str:
+        normalized = text.strip().lower().strip("。！？,.!?")
+        if normalized in {
+            "停", "停止", "停下", "停下来", "别动", "急停", "stop",
+            "停止跟随", "别跟了", "不要跟了", "别再跟了",
+        }:
+            await self.cancel_task("语音停止指令")
+            return "好的，已停止当前任务。"
+        if self.camera_source != "local" or self.camera_status != "ready":
+            return "视觉任务需要先开启本地 D435i 相机。"
+        if self.busy:
+            await self.cancel_task("收到新的语音目标")
+        await self.submit_task(text, camera_source="local", task_mode="gesture")
+        return "好的，我会持续观察并按目标行动。"
 
     async def update_system_prompt(self, prompt: str) -> ConsoleSnapshot:
         prompt = prompt.strip()
@@ -805,6 +830,17 @@ class ConsoleBackend(SkillToolObserver):
                 # The preview and model receive the same oriented JPEG bytes.
                 frame = replace(frame, rgb=self.latest_frame)
                 self._video_buffer.push(frame)
+                # Text/voice can also start following while no vision worker runs.
+                if self._vision_worker is None:
+                    try:
+                        follow_skill = self.runtime.registry.get("follow_person")
+                    except KeyError:
+                        pass
+                    else:
+                        from skills.motions.go2_follow import FollowPersonSkill
+
+                        if isinstance(follow_skill, FollowPersonSkill):
+                            follow_skill.observe_frame(frame)
                 transition = self._safety_gate.update(frame.nearest_obstacle_distance_m)
                 worker = self._vision_worker
                 if worker is not None:

@@ -54,16 +54,24 @@ class Go2LlmHintTests(unittest.TestCase):
             with self.subTest(tool=name):
                 self.assertIn("OPERATOR-ONLY", description)
 
-    def test_go2_system_prompt_mapping_and_anti_hello_rule(self) -> None:
+    def test_go2_system_prompt_uses_live_catalog_and_goal_reasoning(self) -> None:
         self.assertEqual(system_prompt_for("go2"), GO2_SYSTEM_PROMPT)
         for phrase in (
-            "比心 / 送心 / heart -> heart",
-            "站起来 / 起身 / stand up -> stand_up",
-            "Never substitute hello/wave",
-            "stand_up first",
+            "live registered tool descriptions",
+            "After each result, decide whether another step is needed",
+            "persistent goal like following a person",
+            "receives no camera images",
             "Operator-only tools",
         ):
             self.assertIn(phrase, GO2_SYSTEM_PROMPT)
+        self.assertNotIn("Canonical mapping:", GO2_SYSTEM_PROMPT)
+
+    def test_follow_is_discoverable_from_dynamic_skill_catalog(self) -> None:
+        self.assertIn("follow_person", self.tools)
+        description = self.tools["follow_person"].description or ""
+        self.assertIn("跟着人走", description)
+        self.assertIn("D435i", description)
+        self.assertNotIn("follow_person", GO2_SYSTEM_PROMPT)
 
     def test_pose_flag_description_documents_boolean(self) -> None:
         description = self.tools["pose"].description or ""

@@ -12,6 +12,7 @@ class PerceptionResult:
     observed_at_s: float
     person_count: int = 0
     nearest_person_distance_m: float | None = None
+    person_center_x: float | None = None
     confidence: float | None = None
     source: str = "camera"
 
@@ -27,6 +28,8 @@ class PerceptionResult:
             raise ValueError("nearest person distance must be greater than zero")
         if self.confidence is not None and not 0 <= self.confidence <= 1:
             raise ValueError("confidence must be between zero and one")
+        if self.person_center_x is not None and not 0 <= self.person_center_x <= 1:
+            raise ValueError("person_center_x must be between zero and one")
         if not self.source.strip():
             raise ValueError("perception source must not be empty")
 
@@ -40,6 +43,7 @@ class PerceptionResult:
         *,
         person_count: int = 0,
         nearest_person_distance_m: float | None = None,
+        person_center_x: float | None = None,
         confidence: float | None = None,
         source: str = "camera",
     ) -> PerceptionResult:
@@ -47,6 +51,7 @@ class PerceptionResult:
             observed_at_s=time.monotonic(),
             person_count=person_count,
             nearest_person_distance_m=nearest_person_distance_m,
+            person_center_x=person_center_x,
             confidence=confidence,
             source=source,
         )
@@ -57,6 +62,7 @@ class PerceptionResult:
             "person_detected": self.person_detected,
             "person_count": self.person_count,
             "nearest_person_distance_m": self.nearest_person_distance_m,
+            "person_center_x": self.person_center_x,
             "confidence": self.confidence,
             "source": self.source,
         }

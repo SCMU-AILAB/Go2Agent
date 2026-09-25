@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from agent.social_vision import SocialVisionAgent
+from perception import PerceptionResult
 from robot import RobotState
 from skills import build_go2_all_skills, build_go2_autonomy_skills
 from tests.test_vision_policy import FakeVisionInvoker, camera_frame
@@ -72,6 +74,54 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((decision.action, decision.skill), ("execute_skill", "sit"))
         self.assertIn("last_skill_result", invoker.calls[-1][1])
         self.assertIn("看到人坐下时也坐下", invoker.calls[-1][1])
+
+    async def test_follow_goal_selects_persistent_skill_and_then_continues(self):
+        invoker = FakeVisionInvoker([
+            {"action": "execute_skill", "skill": "follow_person"},
+            {"action": "execute_skill", "skill": "follow_person"},
+        ])
+        agent = SocialVisionAgent(
+            invoker=invoker,
+            response_format="decision",
+            task_context="跟着前面的人走，保持距离",
+            confirm_hold_s=0,
+        )
+        state = RobotState(hardware=False, connected=True)
+        skills = build_go2_autonomy_skills()
+        def person_frame(at_s):
+            return replace(
+                camera_frame(at_s),
+                observation=PerceptionResult(
+                    observed_at_s=at_s,
+                    person_count=1,
+                    nearest_person_distance_m=2.0,
+                    person_center_x=0.5,
+                ),
+            )
+
+        first = await agent.decide([person_frame(1), person_frame(2)], state, skills)
+        second = await agent.decide(
+            [person_frame(3), person_frame(4)], state, skills,
+            policy_context={"active_skill": "follow_person"},
+        )
+        self.assertEqual((first.action, first.skill), ("execute_skill", "follow_person"))
+        self.assertEqual(second.action, "continue")
+        self.assertIn("follow_person", invoker.calls[0][1])
+
+    async def test_follow_hallucination_on_empty_scene_is_ignored(self):
+        agent = SocialVisionAgent(
+            invoker=FakeVisionInvoker([{"action": "execute_skill", "skill": "follow_person"}]),
+            response_format="decision",
+            task_context="跟着人走",
+            confirm_hold_s=0,
+        )
+        decision = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
+        )
+        self.assertEqual(decision.action, "ignore")
+        self.assertIn("depth-confirmed", decision.reason)
 
     async def test_open_decision_supports_speech_and_interrupt(self):
         agent = SocialVisionAgent(

@@ -319,11 +319,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--voice-agent-backend",
-        choices=("shared", "local_commands"),
+        choices=("shared", "local_commands", "vision"),
         default="shared",
         help=(
-            "shared uses the text LLM; local_commands keeps explicit safe Go2 "
-            "voice commands offline without consuming the vision GPU"
+            "shared uses the text LLM; vision sends spoken goals to continuous "
+            "camera/vision policy; local_commands uses explicit offline commands"
         ),
     )
     parser.add_argument("--record-seconds", type=float, default=3.0)

@@ -118,6 +118,7 @@ class Detector:
             scores = self.cached_scores
         accepted_scores = []
         distances = []
+        target = None
         width = color_frame.get_width()
         height = color_frame.get_height()
         for rectangle, score_value in zip(rectangles, scores):
@@ -138,6 +139,8 @@ class Detector:
                 ):
                     continue
                 distances.append(distance)
+                if target is None or distance < target[0]:
+                    target = (distance, (center_x + 0.5) / width)
             accepted_scores.append(score)
 
         obstacle_distances = []
@@ -158,6 +161,7 @@ class Detector:
             "observed_at_s": time.monotonic(),
             "person_count": len(accepted_scores),
             "nearest_person_distance_m": min(distances) if distances else None,
+            "person_center_x": target[1] if target is not None else None,
             "confidence": (
                 confidence(max(accepted_scores)) if accepted_scores else None
             ),

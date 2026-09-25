@@ -298,6 +298,7 @@ class RealSensePersonDetectorTests(unittest.TestCase):
         self.assertEqual(depth.queries, [(30, 50), (120, 130)])
         self.assertEqual(result.person_count, 1)
         self.assertEqual(result.nearest_person_distance_m, 1.5)
+        self.assertAlmostEqual(result.person_center_x, 30.5 / 640)
         self.assertEqual(result.source, "realsense:camera-1")
         self.assertIsNotNone(result.confidence)
         self.assertEqual(pipeline.stop_count, 1)

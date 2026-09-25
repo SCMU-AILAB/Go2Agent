@@ -71,7 +71,7 @@ class TaskInputPanel extends StatelessWidget {
               decoration: InputDecoration(
                 hintText: controller.gestureMode
                     ? (controller.robotModel == 'GO2'
-                          ? '描述目标或触发条件（例如：有人靠近就退后，看到比耶就比心）。模型会持续观察并选择已注册技能。'
+                          ? '描述持续目标或触发条件（例如：跟着前面的人走，保持距离）。模型会持续观察并选择已注册技能。'
                           : '持续观察画面，按任务提示与技能目录回应；不执行任意文本动作。')
                     : '告诉机器人要做什么…',
                 fillColor: ConsoleColors.field,

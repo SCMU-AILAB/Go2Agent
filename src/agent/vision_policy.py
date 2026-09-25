@@ -20,6 +20,7 @@ from core.runtime import SkillRuntime
 from core.skill import RobotSkill
 from perception import CameraFrame, VideoBuffer
 from robot import RobotState
+from skills.motions.go2_follow import FollowPersonSkill
 
 from .decision import AgentDecision, DecisionAgentError
 from .vision_capture import VisionCapture
@@ -714,6 +715,7 @@ class VisionPolicyWorker:
         self._last_decision: AgentDecision | None = None
         self._last_skill_result: SkillResult | None = None
         self._last_skill_result_at_s: float | None = None
+        self._recent_actions: deque[dict[str, object]] = deque(maxlen=5)
         self._last_selected_skill: str | None = None
         self._last_selected_at_s: float | None = None
         self._last_close_obstacle_at_s: float | None = None
@@ -739,6 +741,13 @@ class VisionPolicyWorker:
         self._safety_latched = latched
 
     def observe_frame(self, frame: CameraFrame) -> None:
+        try:
+            follow_skill = self.runtime.registry.get("follow_person")
+        except KeyError:
+            pass
+        else:
+            if isinstance(follow_skill, FollowPersonSkill):
+                follow_skill.observe_frame(frame)
         distance_m = frame.nearest_obstacle_distance_m
         if distance_m is not None and distance_m <= _HANDSHAKE_CONFIRMATION_DISTANCE_M:
             self._last_close_obstacle_at_s = frame.observed_at_s
@@ -1208,6 +1217,14 @@ class VisionPolicyWorker:
             if skill_result is not None:
                 self._last_skill_result = skill_result
                 self._last_skill_result_at_s = time.monotonic()
+                self._recent_actions.append(
+                    {
+                        "skill": request.decision.skill,
+                        "arguments": request.decision.arguments,
+                        "status": skill_result.status.value,
+                        "message": skill_result.message[:160],
+                    }
+                )
             self._put_latest(
                 self._outcome_queue,
                 self._outcome(
@@ -1339,6 +1356,7 @@ class VisionPolicyWorker:
                 else None
             ),
             "last_selected_skill": self._last_selected_skill,
+            "recent_actions": list(self._recent_actions),
             "safety_latched": self._safety_latched,
         }
         if self._last_selected_at_s is not None:

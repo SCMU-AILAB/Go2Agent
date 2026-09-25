@@ -370,6 +370,7 @@ class RealSensePersonDetector:
     ) -> PerceptionResult:
         accepted_scores: list[float] = []
         distances: list[float] = []
+        target: tuple[float, float] | None = None
         width = color_frame.get_width()
         height = color_frame.get_height()
 
@@ -390,6 +391,8 @@ class RealSensePersonDetector:
                 if self.max_distance_m is not None and distance > self.max_distance_m:
                     continue
                 distances.append(distance)
+                if target is None or distance < target[0]:
+                    target = (distance, (center_x + 0.5) / width)
             accepted_scores.append(score)
 
         confidence = (
@@ -401,6 +404,7 @@ class RealSensePersonDetector:
             ),
             person_count=len(accepted_scores),
             nearest_person_distance_m=min(distances) if distances else None,
+            person_center_x=target[1] if target is not None else None,
             confidence=confidence,
             source=f"realsense:{self.serial or 'D435i'}",
         )

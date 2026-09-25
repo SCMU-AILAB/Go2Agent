@@ -5,21 +5,21 @@
 
 Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、`--robot go2` 装配路径
 （CLI / FastAPI / perception）、`register_go2_skills()`、周期刷新的移动技能、
-原生动作目录（比心/跳舞等）以及文本/手势任务模式。Go2 语音使用主机外接麦克风和
+原生动作目录（比心/跳舞等）以及文本/持续视觉任务模式。Go2 语音使用主机外接麦克风和
 扬声器，不依赖 G1 `AudioClient`。详见 [Go2 Adapter 说明](docs/go2-adapter.md)。
 
-## 控制台任务模式（文本 / 手势）
+## 控制台任务模式（文本 / 持续视觉）
 
 新版控制台任务面板显式选择任务模式：
 
 | 模式 | 行为 |
 | --- | --- |
 | **文本指令**（默认） | 把指令交给文本 Agent 调工具；开启真实相机也可发送「比心」「坐下」「跳舞」 |
-| **持续手势交互** | 启动视觉 worker；必须 `cameraSource=local` |
+| **持续视觉交互** | 视觉 Agent 根据实时画面、目标和 SkillResult 选工具；必须 `cameraSource=local` |
 
-- 旧客户端省略 `taskMode` 时保持历史行为：`local` → 手势，`demo` → 文本。
-- 手势模式按**已确认手势 1:1** 映射技能：`wave`→`wave`（Go2 底层 `hello`）、`heart`→`heart`；
-  握手/击掌未注册则忽略。任务框文字只作视觉偏好上下文，**不会**发明未注册技能。
+- API 为兼容旧客户端仍使用 `taskMode="gesture"` 表示持续视觉模式。
+- Go2 视觉模式不依赖固定手势标签；模型按任务从当前注册且允许的 Skill 目录选工具。
+  不会凭提示词发明未注册 Skill，具体动作仍受本地安全前提限制。
 - 文本 Agent **不接收图像**，即使预览开着也不会“看见”人或障碍。
 - 相机预览正常 ≠ 已选择文本模式。
 
@@ -63,12 +63,12 @@ Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、`--robot go2` 装�
 
 ## 一键启动 Go2 控制台
 
-此脚本连真机但**不会**自动提交动作任务。默认使用狗端离线语音命令模式，5070 Ti
-只处理视觉，不需要为语音准备 Ollama：
+此脚本连真机但**不会**自动提交动作任务。默认语音把转写结果作为持续视觉目标，
+5070 Ti 负责视觉决策，不需要另备文本 Ollama：
 
 ```bash
 sh scripts/run-go2-console.sh
-# 默认：真机 + 本地相机 + 外接麦克风/扬声器 + local_commands
+# 默认：真机 + 本地相机 + 外接麦克风/扬声器 + vision 语音目标
 # 网卡可用 GO2_NETWORK 覆盖；视觉服务用 GO2_VISION_URL 覆盖
 ```
 
@@ -98,8 +98,16 @@ Go2 的 `front_jump` 等 operator-only 动作默认不进入视觉目录。只�
 `front_jump`），视觉决策才会看到它。模型输出仍需通过本地技能目录校验；
 服务接受动作命令不等于动作已经完成。
 
-Go2 真机直接使用启动脚本。视觉连接局域网 UnifoLM；默认的离线语音命令
-不依赖 Ollama。若改用 Ollama 文本 Agent，需配置可用的 `OLLAMA_HOST`：
+Go2 `test` 分支包含第一版 `follow_person`：前端选择「本地相机」和
+「持续视觉交互」，输入“跟着前面的人走，保持距离”。视觉 Agent 决定是否
+开始/继续/中断；狗端 D435i 根据单个人体框中心及对齐深度，以最多 0.15 m/s
+前进、最多 0.3 rad/s 转向，目标约 1.5 m。目标丢失、多人、深度无效、画面
+超过 0.5 秒未更新或障碍过近均停止。停止任务/急停也会取消动作。
+它还不是身份追踪或避障导航；请在开阔平地、遥控器在手的条件下验收。
+需要完全离线的有限动作词表时，可改用 `GO2_VOICE_AGENT=local_commands`。
+
+Go2 真机直接使用启动脚本。视觉和默认语音目标都连接局域网 UnifoLM；
+若改用 Ollama 文本 Agent，需配置可用的 `OLLAMA_HOST`：
 
 ```bash
 GO2_VISION_URL=http://192.168.31.112:8011 sh scripts/run-go2-console.sh
@@ -327,7 +335,7 @@ FastAPI 与前端一起使用：
   --robot go2 --hardware --network eth0 \
   --camera-source local --vision-rotation-deg 0 \
   --vision-backend unifolm --vision-url http://192.168.31.112:8011 \
-  --voice --voice-agent-backend local_commands --record-seconds 3 \
+  --voice --voice-agent-backend vision --record-seconds 3 \
   --whisper-model /home/cf/Go2Agent/models/faster-whisper-small \
   --whisper-device cpu --whisper-compute-type int8 \
   --audio-input-device pulse --audio-output-device pulse \
@@ -338,15 +346,23 @@ FastAPI 与前端一起使用：
 如果尚未放置 Piper 中文 `.onnx` 和同名 `.onnx.json`，去掉 `--piper-model`，系统会
 使用 `espeak-ng`。不加 `--voice` 时也可以在前端的 VOICE 面板手动启动监听。
 
-语音路径固定为：
+`vision` 模式下，ASR 识别的自然语言是持续视觉 Agent 的目标，不经过固定动作
+关键词表；每次新语音目标会先停止旧任务，明确的停止指令直接本地中断。
+例如说“跟着前面的人走”会让视觉模型从实时画面和技能目录中选择
+`follow_person`，狗端再做深度反馈控制。该模式需要 D435i 和可用的视觉服务。
+语音路径为：
 
 ```text
-外接麦克风 -> Faster Whisper -> 本地安全指令解析 -> SkillRuntime -> Go2
-                                           |
-                                           -> 结果回复 -> Piper -> 外接扬声器
+外接麦克风 -> Faster Whisper -> 持续视觉 Agent -> SkillRuntime -> Go2
+                                      ^             |
+                                      |             v
+                                  最新画面       SkillResult
+                                      |             |
+                                      +-------------+
+                        简短回应 -> Piper -> 外接扬声器
 ```
 
-`local_commands` 支持明确的比心、打招呼、坐下、站起、趴下、伸懒腰、跳舞、短距离
+备用 `local_commands` 支持明确的比心、打招呼、坐下、站起、趴下、伸懒腰、跳舞、短距离
 移动/转向和停止指令；未知语句不会猜动作。回复是按实际 `SkillResult` 生成的确定性短句，
 不是开放式聊天。需要独立文本 LLM 时可改为 `--voice-agent-backend shared`，但不要让它
 和单 in-flight 的视觉 UnifoLM 共用同一服务。机器人动作始终只能通过 `SkillRuntime`。
@@ -432,9 +448,9 @@ sh scripts/run-jetson-unifolm-vision.sh --hardware --network eth0
 
 仓库保留文字 Agent 的 Ollama/Qwen 链路，并用 `--vision-backend unifolm` 单独连接
 视觉服务。当前局域网服务位于 `http://192.168.31.112:8011`。UnifoLM 对 JSON 提示
-容易输出定位坐标，因此该后端使用严格的单标签手势协议；狗端再按操作员任务把
-`wave`、`peace_sign`、`heart` 映射到已注册的安全 Skill。未知标签、坐标或未请求的
-手势都会被拒绝，决策仍经过 Skill catalog、时效门和深度安全。
+曾使用单标签手势协议；当前 Go2 默认改为开放的结构化动作决策。模型每轮读取
+视觉目标、最新画面、D435i 本地观测、可用 Skill 目录和执行历史，再输出执行、
+说话、继续、打断或忽略。模型输出不能跳过本地 Skill、深度和时效校验。
 
 视觉服务器健康检查：
 
