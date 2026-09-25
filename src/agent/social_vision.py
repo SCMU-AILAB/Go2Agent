@@ -146,7 +146,7 @@ _FOLLOW_GOAL_RE = re.compile(
 )
 
 
-def _is_follow_goal(text: str) -> bool:
+def is_follow_goal(text: str) -> bool:
     """Recognize an explicit persistent-follow goal for the local controller."""
 
     normalized = re.sub(r"\s+", "", text.strip().casefold())
@@ -217,7 +217,7 @@ class SocialVisionAgent(VisionDecisionAgent):
         # explicit follow task must remain available when the optional remote
         # VLM is offline; other visual goals still warm up their configured
         # model normally.
-        if _is_follow_goal(self.operator_instruction):
+        if is_follow_goal(self.operator_instruction):
             return
         await super().warmup()
 
@@ -277,7 +277,7 @@ class SocialVisionAgent(VisionDecisionAgent):
             (skill for skill in allowed if skill.metadata.name == "follow_person"),
             None,
         )
-        if follow_skill is not None and _is_follow_goal(self.operator_instruction):
+        if follow_skill is not None and is_follow_goal(self.operator_instruction):
             if (policy_context or {}).get("active_skill") == "follow_person":
                 return AgentDecision(
                     action="continue",
