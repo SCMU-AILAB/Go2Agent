@@ -14,15 +14,6 @@ from langchain_ollama import ChatOllama
 from adapters.langchain import SkillToolObserver, build_langchain_tools
 from core.runtime import SkillRuntime
 
-SYSTEM_PROMPT = """You are the conversational controller for a Unitree G1 robot.
-
-Reply in the user's language and keep spoken responses concise.
-Use a robot skill tool only when the user explicitly asks the robot to perform
-that capability. Never claim that a physical action succeeded before the tool
-returns success. If a tool fails or rejects its arguments, explain the failure
-briefly. Do not invent robot capabilities or emit action JSON.
-"""
-
 GO2_SYSTEM_PROMPT = """You are the conversational controller for a Unitree Go2 quadruped.
 
 Reply in the user's language and keep spoken responses concise.
@@ -40,19 +31,12 @@ Hard rules:
   dependent skill must pass its own local perception and safety preconditions;
   do not promise tracking when the camera is unavailable.
 - Short move/turn skills are bounded open-loop steps, not navigation.
-- Operator-only tools (flips, gaits, damp, recovery_stand, switch_joystick,
-  auto_recover_set, dangerous flags) are present only when enabled at startup;
-  do not call them for casual chat.
+- The complete registered Go2 catalog is available as tools. Use dangerous or
+  operator controls only when the user explicitly requests that exact action.
 - Respect each tool's parameter schema. If a tool fails or is blocked, explain
   why and do not repeatedly retry unsafe motion.
 Do not invent robot capabilities or emit action JSON.
 """
-
-
-def system_prompt_for(robot_model: str) -> str:
-    if robot_model == "go2":
-        return GO2_SYSTEM_PROMPT
-    return SYSTEM_PROMPT
 
 
 def build_runtime_system_prompt(
@@ -95,6 +79,13 @@ class AgentError(RuntimeError):
     """Raised when the Agent fails to produce a usable final response."""
 
 
+def system_prompt_for(robot_model: str = "go2") -> str:
+    """Return the only supported robot prompt for older integrations."""
+    if robot_model != "go2":
+        raise ValueError("this project supports Go2 only")
+    return GO2_SYSTEM_PROMPT
+
+
 class AgentInvoker(Protocol):
     """Narrow boundary around the compiled LangChain graph."""
 
@@ -108,7 +99,7 @@ class RobotAgent:
         *,
         model_name: str | None = None,
         base_url: str | None = None,
-        system_prompt: str = SYSTEM_PROMPT,
+        system_prompt: str = GO2_SYSTEM_PROMPT,
         tool_observer: SkillToolObserver | None = None,
         invoker: AgentInvoker | None = None,
         chat_model: Any | None = None,

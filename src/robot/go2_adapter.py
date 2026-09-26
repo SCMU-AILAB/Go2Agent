@@ -16,8 +16,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, TypeVar, cast
 
-from .base import ActionVerification, RobotCommandError, RobotState
-from .unitree_adapter import ChannelApi
+from .base import RobotCommandError, RobotState
+
+
+class ChannelApi(Protocol):
+    def initialize(self, domain_id: int = 0, network_interface: str = "") -> None: ...
+
+    def release(self) -> None: ...
+
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -81,7 +87,7 @@ class UnitreeGo2Config:
                 raise ValueError(f"{name} must be finite and greater than zero")
 
 
-# Only verified Go2 method names; no G1 FSM IDs or arbitrary getattr dispatch.
+# Only verified Go2 method names; no arbitrary SDK dispatch.
 _LOCO_ACTIONS = frozenset(
     {
         "stand_up",
@@ -112,15 +118,24 @@ _LOCO_ACTIONS = frozenset(
     }
 )
 
-_FLAG_ACTIONS = frozenset({
-    "pose", "hand_stand", "free_bound", "free_jump", "free_avoid",
-    "classic_walk", "walk_upright", "cross_step",
-    "switch_joystick", "auto_recover_set",
-})
+_FLAG_ACTIONS = frozenset(
+    {
+        "pose",
+        "hand_stand",
+        "free_bound",
+        "free_jump",
+        "free_avoid",
+        "classic_walk",
+        "walk_upright",
+        "cross_step",
+        "switch_joystick",
+        "auto_recover_set",
+    }
+)
 
 
 class UnitreeGo2Adapter:
-    """Implement RobotAdapter with explicit rejection of G1 arm operations.
+    """Implement the Go2 RobotAdapter over SportClient.
 
     connect/close only initialize/release communication, never command motion.
     connected reports local initialization, not remote liveness. move_velocity
@@ -232,7 +247,6 @@ class UnitreeGo2Adapter:
                     "completion_feedback_available": telemetry_available,
                     **details,
                     "supported_loco_actions": sorted(_LOCO_ACTIONS | _FLAG_ACTIONS),
-                    "arm_action_presets": False,
                 },
             )
 
@@ -311,7 +325,9 @@ class UnitreeGo2Adapter:
         parameters = dict(arguments or {})
         if action in _FLAG_ACTIONS:
             if set(parameters) != {"flag"} or type(parameters["flag"]) is not bool:
-                raise RobotCommandError(f"Go2 {action} requires exactly one boolean flag")
+                raise RobotCommandError(
+                    f"Go2 {action} requires exactly one boolean flag"
+                )
         elif parameters:
             raise RobotCommandError(f"Go2 {action} does not accept arguments")
 
@@ -323,40 +339,6 @@ class UnitreeGo2Adapter:
             self._require_success(action, status)
 
         await self._run_native(action, execute)
-
-    @staticmethod
-    def _unsupported_arm() -> RobotCommandError:
-        return RobotCommandError(
-            "Go2 does not support G1 arm actions; use Go2 loco action 'hello' "
-            "for its native greeting, not G1 wave/handshake/high_five"
-        )
-
-    async def wave(self, arm: str) -> None:
-        raise self._unsupported_arm()
-
-    async def wait_for_wave_completion(
-        self, arm: str, timeout_s: float
-    ) -> ActionVerification:
-        raise self._unsupported_arm()
-
-    async def execute_arm_action(self, action_id: int, action_name: str) -> None:
-        raise self._unsupported_arm()
-
-    async def execute_custom_arm_action(self, action_name: str) -> None:
-        raise self._unsupported_arm()
-
-    async def stop_custom_arm_action(self) -> None:
-        raise self._unsupported_arm()
-
-    async def wait_for_arm_action_completion(
-        self, action_id: int, action_name: str, timeout_s: float
-    ) -> ActionVerification:
-        raise self._unsupported_arm()
-
-    async def release_arm(self) -> None:
-        # No arm exists to release. This permits the shared StopSkill to finish
-        # after StopMove without issuing an unrelated quadruped posture command.
-        return None
 
     @staticmethod
     def _load_bindings() -> Go2Bindings:

@@ -9,10 +9,10 @@ from collections import Counter
 from pathlib import Path
 
 from agent.social_vision import SocialVisionAgent
-from agent.vision_policy import OllamaVisionInvoker
+from agent.vision_policy import DEFAULT_VISION_GOAL, OllamaVisionInvoker
 from perception import CameraFrame, PerceptionResult
 from robot import RobotState
-from skills import build_g1_autonomy_skills
+from skills import build_go2_all_skills
 
 
 class RecordingInvoker(OllamaVisionInvoker):
@@ -31,6 +31,7 @@ async def main():
     parser.add_argument("--profile", choices=("legacy", "egocentric"), default="egocentric")
     parser.add_argument("--no-think", action="store_true")
     parser.add_argument("--speech", action="store_true", help="evaluate model-generated speech as well as gestures")
+    parser.add_argument("--task", default=DEFAULT_VISION_GOAL)
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
     invoker = RecordingInvoker(args.model, base_url="http://127.0.0.1:11435",
@@ -40,7 +41,8 @@ async def main():
     import ollama
     invoker._client = ollama.AsyncClient(host="http://127.0.0.1:11435", trust_env=False)
     agent = SocialVisionAgent(invoker=invoker, model_name=args.model,
-                              prompt_profile=args.profile, generate_speech=args.speech, timeout_s=90)
+                              prompt_profile=args.profile, generate_speech=args.speech,
+                              task_context=args.task, timeout_s=90)
     rows = []
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x", encoding="utf-8") as output:
@@ -58,7 +60,7 @@ async def main():
             row = {"case": case, "model": args.model, "profile": args.profile}
             try:
                 result = await agent.decide(frames, RobotState(hardware=False, connected=True),
-                                            build_g1_autonomy_skills())
+                                            build_go2_all_skills())
                 predicted = result.skill if result.action in ("execute_skill", "execute_and_speak") else "none"
                 row.update(decision=result.model_dump(), predicted=predicted,
                            correct=predicted in case["allowed_decisions"],

@@ -9,8 +9,7 @@ from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from agent.social_vision import SocialVisionAgent
-from agent.social_vision import _OPEN_DECISION_PROMPT
+from agent.social_vision import _OPEN_DECISION_PROMPT, SocialVisionAgent
 from app.api import create_app
 from app.backend import BackendConfig, ConsoleBackend
 from perception import CameraFrame, PerceptionResult
@@ -162,7 +161,7 @@ class ConsoleVisionTests(unittest.TestCase):
         agent = backend._build_vision_agent("看到人坐下就坐下")
         self.assertEqual(agent.response_format, "decision")
         self.assertIn("看到人坐下就坐下", agent.task_context)
-        self.assertFalse(agent.allow_operator_skills)
+        self.assertTrue(agent.allow_operator_skills)
         self.assertEqual(backend.config.vision_confirm_hold_s, 0.5)
         self.assertIn("registered `wave`", _OPEN_DECISION_PROMPT)
 
@@ -186,6 +185,7 @@ class ConsoleVisionTests(unittest.TestCase):
             agent_factory=fake_agent_factory,
             camera_factory=lambda: camera,
             vision_agent_factory=lambda text: SocialVisionAgent(
+                response_format="json",
                 invoker=invoker,
                 prompt_profile="egocentric",
                 generate_speech=True,
@@ -214,7 +214,7 @@ class ConsoleVisionTests(unittest.TestCase):
             )
             self.assertTrue(snap["busy"])
             self.assertEqual(audio.spoken, ["你好呀！"])
-            self.assertIn(("wave", "right"), backend.robot.events)
+            self.assertIn(("loco_action", ("hello", {})), backend.robot.events)
             self.assertIn("回应挥手", invoker.calls[0][1])
             self.assertIn("请用中文", invoker.calls[0][1])
             self.assertGreaterEqual(len(invoker.calls[0][0]), 2)

@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
-from adapters.unitree_audio import SpeechOutput
+from adapters.host_audio import SpeechOutput
 from core.models import SkillArgs, SkillResult
 from core.runtime import SkillRuntime
 from core.skill import RobotSkill
@@ -27,20 +27,15 @@ from .vision_capture import VisionCapture
 
 DEFAULT_VISION_MODEL = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
 DEFAULT_VISION_GOAL = (
-    "Respond to explicit social gestures. Prefer handshake for an extended "
-    "hand, and do not wave merely because a person is visible."
+    "Respond to the operator's explicit visual task using the registered Go2 "
+    "skills. Do not act merely because a person is visible."
 )
 
 _CANONICAL_SKILL_NAMES = {
-    "wave_hand": "wave",
-    "shake_hand": "handshake",
     "stop_move": "stop",
 }
-_HANDSHAKE_CONFIRMATION_DISTANCE_M = 0.5
-_HANDSHAKE_CONFIRMATION_MAX_AGE_S = 1.0
-_RECOVERED_HANDSHAKE_CONFIRMATION_MAX_AGE_S = 5.0
 
-_VISION_SYSTEM_PROMPT = """You are the real-time visual decision module for a Unitree G1.
+_VISION_SYSTEM_PROMPT = """You are the real-time visual decision module for a Unitree Go2.
 The supplied images are ordered frames sampled from the robot's most recent
 video window. Decide only the robot's next action now.
 
@@ -50,24 +45,11 @@ Omit unused skill, arguments, speech, and reason fields. Use continue while the
 current behavior should keep running. Use interrupt only when the current
 behavior must stop immediately. Keep reason under four words when included.
 The skill catalog is reference documentation. Never copy catalog definitions
-into arguments. arguments contains only actual values for the one selected
-skill, for example {"arm":"right"} or {"distance_m":0.2}.
-If a person clearly extends a hand toward the robot to shake hands, select the
-handshake skill immediately; do not wait for another confirmation. A handshake
-offer usually reaches toward the camera around waist or lower-chest height. A
-high five is normally a raised open palm around shoulder/head height. Use motion
-across the window when multiple frames exist, and pose/height when there is only
-one frame.
-Decision priority is safety interrupt, handshake, high five, explicit wave,
-then ignore. Merely seeing a person is not a reason to wave or speak. Select
-wave only when the person's hand is visibly waving side-to-side or they make an
-unambiguous greeting gesture. If policy_context says wave was recently selected,
-the person is already greeted; do not wave again, but still select handshake if
-they now extend a hand.
-For no response, use action ignore. For a handshake, use action execute_skill
-and skill handshake. Usually omit arguments so the registered safe defaults are
-used. Never output JSON Schema objects or keys such as type, default, const,
-minimum, or maximum inside arguments.
+into arguments. Arguments contain only actual values for the one selected skill.
+Use the operator task, visual evidence and active skill state to choose any
+registered Go2 skill. Merely seeing a person is not a reason to act. For no
+response, use action ignore. Never output JSON Schema objects or keys such as
+type, default, const, minimum, or maximum inside arguments.
 Do not describe the video and do not predict far into the future. Use only the
 registered skills and their argument schemas. Keep speech brief.
 """
@@ -308,11 +290,7 @@ def _skill_catalog_payload(
     skill_catalog: Sequence[RobotSkill[SkillArgs]],
 ) -> list[dict[str, object]]:
     catalog: list[dict[str, object]] = []
-    registered_names = {skill.metadata.name for skill in skill_catalog}
     for skill in skill_catalog:
-        canonical_name = _CANONICAL_SKILL_NAMES.get(skill.metadata.name)
-        if canonical_name is not None and canonical_name in registered_names:
-            continue
         schema = skill.args_model.model_json_schema()
         raw_properties = schema.get("properties", {})
         raw_required = schema.get("required", [])
@@ -498,18 +476,11 @@ class VisionDecisionAgent:
     def _recoverable_skill_names(
         skill_catalog: Sequence[RobotSkill[SkillArgs]],
     ) -> set[str]:
-        recoverable: set[str] = set()
-        for skill in skill_catalog:
-            tags = set(skill.metadata.tags)
-            schema = skill.args_model.model_json_schema()
-            required = schema.get("required", [])
-            if (
-                "dangerous" not in tags
-                and "operator_only" not in tags
-                and (not isinstance(required, list) or not required)
-            ):
-                recoverable.add(skill.metadata.name)
-        return recoverable
+        # The visual Agent receives the same complete Registry as the text
+        # Agent. Malformed model output is still rejected by the decision
+        # parser; this set is retained only for the parser's compatibility
+        # hook and must not hide registered Go2 skills.
+        return {skill.metadata.name for skill in skill_catalog}
 
     @staticmethod
     def _parse_output(
@@ -747,7 +718,6 @@ class VisionPolicyWorker:
         self._recent_actions: deque[dict[str, object]] = deque(maxlen=5)
         self._last_selected_skill: str | None = None
         self._last_selected_at_s: float | None = None
-        self._last_close_obstacle_at_s: float | None = None
         self._last_action_at: dict[str, float] = {}
         self._request_sequence = 0
         self._decision_finished_at_s: deque[float] = deque(maxlen=32)
@@ -777,9 +747,6 @@ class VisionPolicyWorker:
         else:
             if isinstance(follow_skill, FollowPersonSkill):
                 follow_skill.observe_frame(frame)
-        distance_m = frame.nearest_obstacle_distance_m
-        if distance_m is not None and distance_m <= _HANDSHAKE_CONFIRMATION_DISTANCE_M:
-            self._last_close_obstacle_at_s = frame.observed_at_s
 
     async def start(self) -> None:
         if self.running:
@@ -1132,23 +1099,6 @@ class VisionPolicyWorker:
                     )
                     continue
 
-                if self._recovered_handshake_lacks_recent_proximity(decision):
-                    self._put_latest(
-                        self._outcome_queue,
-                        self._outcome(
-                            decision,
-                            frames,
-                            robot_state,
-                            request_id=request.request_id,
-                            model_metrics=request.model_metrics,
-                            suppressed_reason=(
-                                "recovered handshake lacks recent close-range "
-                                "depth evidence"
-                            ),
-                        ),
-                    )
-                    continue
-
                 if self._active_task is not None and self._active_task.done():
                     completion = self._active_completion_task
                     if completion is not None:
@@ -1188,6 +1138,42 @@ class VisionPolicyWorker:
                     continue
                 if self._active_task is not None and not self._active_task.done():
                     await self.interrupt("switching vision behavior")
+
+                # The previous behavior's cancellation and SDK stop can take
+                # longer than the frame validity window.
+                if (
+                    self.max_decision_age_s is not None
+                    and self._decision_requires_fresh_frames(decision)
+                    and frames
+                    and time.monotonic() - frames[-1].observed_at_s
+                    > self.max_decision_age_s
+                ):
+                    self._put_latest(
+                        self._outcome_queue,
+                        self._outcome(
+                            decision, frames, robot_state,
+                            request_id=request.request_id,
+                            model_metrics=request.model_metrics,
+                            suppressed_reason="stale visual decision after behavior switch",
+                        ),
+                    )
+                    continue
+                if (
+                    self._safety_latched
+                    and decision.action in {"execute_skill", "execute_and_speak"}
+                    and self._decision_uses_mobile_base(decision)
+                    and decision.skill not in {"stop", "stop_move"}
+                ):
+                    self._put_latest(
+                        self._outcome_queue,
+                        self._outcome(
+                            decision, frames, robot_state,
+                            request_id=request.request_id,
+                            model_metrics=request.model_metrics,
+                            suppressed_reason="depth safety latch blocks mobile-base skills",
+                        ),
+                    )
+                    continue
 
                 self._active_signature = signature
                 self._active_skill = decision.skill
@@ -1393,50 +1379,7 @@ class VisionPolicyWorker:
                 max(0.0, time.monotonic() - self._last_selected_at_s),
                 3,
             )
-        if self._last_close_obstacle_at_s is not None:
-            context["seconds_since_close_obstacle"] = round(
-                max(0.0, time.monotonic() - self._last_close_obstacle_at_s),
-                3,
-            )
         return context
-
-    def _recovered_handshake_lacks_recent_proximity(
-        self,
-        decision: AgentDecision,
-    ) -> bool:
-        if (
-            self._canonical_skill_name(decision.skill or "") != "handshake"
-            or decision.reason != "recovered truncated model JSON"
-        ):
-            return False
-        return not self._has_recent_close_obstacle(
-            now_s=time.monotonic(),
-            max_age_s=_RECOVERED_HANDSHAKE_CONFIRMATION_MAX_AGE_S,
-        )
-
-    def _stale_handshake_has_fresh_confirmation(
-        self,
-        decision: AgentDecision,
-        *,
-        decided_at_s: float,
-    ) -> bool:
-        if self._canonical_skill_name(decision.skill or "") != "handshake":
-            return False
-        return self._has_recent_close_obstacle(
-            now_s=decided_at_s,
-            max_age_s=_HANDSHAKE_CONFIRMATION_MAX_AGE_S,
-        )
-
-    def _has_recent_close_obstacle(
-        self,
-        *,
-        now_s: float,
-        max_age_s: float,
-    ) -> bool:
-        if self._last_close_obstacle_at_s is None:
-            return False
-        age_s = max(0.0, now_s - self._last_close_obstacle_at_s)
-        return age_s <= max_age_s
 
     @staticmethod
     def _canonical_skill_name(skill_name: str) -> str:

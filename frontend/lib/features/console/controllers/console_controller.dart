@@ -17,7 +17,7 @@ class ConsoleController extends ChangeNotifier {
 
   final systemPromptController = TextEditingController(
     text:
-        '你是 G1 机器人的任务助手。\n先观察摄像头画面，再规划任务。\n调用工具与技能时，输出执行状态。\n遇到障碍或不确定情况时，停止并报告。',
+        '你是 Go2 机器人的任务助手。\n先观察摄像头画面，再规划任务。\n调用工具与技能时，输出执行状态。\n遇到障碍或不确定情况时，停止并报告。',
   );
   final taskController = TextEditingController();
   final searchController = TextEditingController();
@@ -112,7 +112,7 @@ class ConsoleController extends ChangeNotifier {
     systemPromptController.addListener(onPromptChanged);
     taskController.addListener(refresh);
     searchController.addListener(_onLogFilterChanged);
-    addLog('INFO', 'console', '正在连接 G1 FastAPI 后端。', refresh: false);
+    addLog('INFO', 'console', '正在连接 Go2 FastAPI 后端。', refresh: false);
     clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!isActive) return;
       now = DateTime.now();
@@ -496,6 +496,11 @@ class ConsoleController extends ChangeNotifier {
       onMessage('已急停');
       return;
     } catch (error) {
+      if (error is! ConsoleApiException || error.statusCode != 404) {
+        addLog('ERROR', 'executor', '急停失败：$error');
+        onMessage('急停失败：$error');
+        return;
+      }
       addLog('WARN', 'executor', '急停接口不可用，尝试停止任务：$error');
     }
     // Fallback for older backends without /robot/emergency-stop.

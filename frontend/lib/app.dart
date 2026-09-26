@@ -4,8 +4,8 @@ import 'core/theme/app_theme.dart';
 import 'features/console/presentation/console_page.dart';
 import 'features/console/services/console_api.dart';
 
-class G1ConsoleApp extends StatelessWidget {
-  const G1ConsoleApp({super.key, this.api});
+class Go2ConsoleApp extends StatelessWidget {
+  const Go2ConsoleApp({super.key, this.api});
 
   final ConsoleApi? api;
 
@@ -17,7 +17,7 @@ class G1ConsoleApp extends StatelessWidget {
       theme: AppTheme.dark,
       darkTheme: AppTheme.dark,
       themeMode: ThemeMode.dark,
-      home: G1ConsolePage(api: api),
+      home: Go2ConsolePage(api: api),
     );
   }
 }

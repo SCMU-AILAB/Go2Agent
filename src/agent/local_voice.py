@@ -73,8 +73,14 @@ class LocalVoiceCommandAgent:
         normalized = cls._normalize(text)
 
         # Safety commands always win over any other word in the utterance.
+        if cls._has(normalized, "不要停", "别停", "不许停") and not cls._has(
+            normalized, "急停", "马上停止", "立刻停止"
+        ):
+            return None
         if cls._has(normalized, "急停", "停止", "停下", "别动", "stop"):
             return _VoiceCommand("stop", {}, "好的，已经停止。")
+        if cls._has(normalized, "不要", "别", "不许", "禁止", "别再", "不用", "not", "don't"):
+            return None
         if cls._has(normalized, "比心", "比个心", "爱心", "送心", "heart"):
             return _VoiceCommand("heart", {}, "好的，比心指令已发送。")
         if cls._has(normalized, "伸懒腰", "伸个懒腰", "拉伸", "stretch"):

@@ -65,7 +65,7 @@ class Go2LlmHintTests(unittest.TestCase):
             "After each result, decide whether another step is needed",
             "persistent goal like following a person",
             "receives no camera images",
-            "Operator-only tools",
+            "operator controls only when the user explicitly requests",
         ):
             self.assertIn(phrase, GO2_SYSTEM_PROMPT)
         self.assertNotIn("Canonical mapping:", GO2_SYSTEM_PROMPT)

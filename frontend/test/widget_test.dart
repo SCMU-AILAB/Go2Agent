@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:g1_frontend/app.dart';
+import 'package:go2_frontend/app.dart';
 
 import 'support/fake_console_api.dart';
 
@@ -51,7 +51,7 @@ void main() {
       await api.dispose();
     });
 
-    await tester.pumpWidget(G1ConsoleApp(api: api));
+    await tester.pumpWidget(Go2ConsoleApp(api: api));
     await tester.pump();
 
     expect(find.text('机器人控制台'), findsOneWidget);
@@ -77,7 +77,7 @@ void main() {
       await api.dispose();
     });
 
-    await tester.pumpWidget(G1ConsoleApp(api: api));
+    await tester.pumpWidget(Go2ConsoleApp(api: api));
     await tester.pump();
 
     AnimatedCrossFade fade() =>
@@ -107,7 +107,7 @@ void main() {
       await api.dispose();
     });
 
-    await tester.pumpWidget(G1ConsoleApp(api: api));
+    await tester.pumpWidget(Go2ConsoleApp(api: api));
     await tester.pump();
 
     expect(find.text('机器人控制台'), findsOneWidget);
@@ -127,7 +127,7 @@ void main() {
       await api.dispose();
     });
 
-    await tester.pumpWidget(G1ConsoleApp(api: api));
+    await tester.pumpWidget(Go2ConsoleApp(api: api));
     await tester.pump();
     await tester.ensureVisible(find.text('打招呼'));
     await tester.pump();

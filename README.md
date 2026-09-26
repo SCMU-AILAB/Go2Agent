@@ -1,12 +1,12 @@
 # Go2 Agent
 
 以 **Robot Skill Runtime** 为唯一动作执行边界。文本、麦克风和视觉都不能直接分发
-机器人动作。支持 `--robot g1|go2`（默认仍是 G1）。
+机器人动作。仓库专门支持 Go2，文本与视觉 Agent 共享完整的 Go2 技能注册表。
 
-Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、`--robot go2` 装配路径
+Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、Go2 专用装配路径
 （CLI / FastAPI / perception）、`register_go2_skills()`、周期刷新的移动技能、
 原生动作目录（比心/跳舞等）以及文本/持续视觉任务模式。Go2 语音使用主机外接麦克风和
-扬声器，不依赖 G1 `AudioClient`。详见 [Go2 Adapter 说明](docs/go2-adapter.md)。
+扬声器，通过本地主机 TTS 播报。详见 [Go2 Adapter 说明](docs/go2-adapter.md)。
 
 ## 控制台任务模式（文本 / 持续视觉）
 
@@ -30,10 +30,10 @@ Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、`--robot go2` 装�
 
 ## Go2 原生动作目录（`register_go2_skills`）
 
-与 G1 手臂动作隔离；只注册与 SportClient 语义一致的 Skill。SDK `status=0` 仅表示
+只注册与 Go2 SportClient 语义一致的 Skill。SDK `status=0` 仅表示
 命令被接受，**不代表物理动作完成**；是否支持取决于真机固件。
 
-**默认自主目录（文本 Agent / API 可见）**
+**常用目录（文本 Agent / 视觉 Agent / API 可见）**
 
 | 类别 | Skills |
 | --- | --- |
@@ -44,13 +44,14 @@ Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、`--robot go2` 装�
 | 短距移动 | `move_forward` / `move_backward` / `move_left` / `move_right` / `turn_left` / `turn_right` / `move` |
 | 停止 | `stop` / `stop_move` |
 
-**Operator-only（需 `--include-operator-only-skills`）**
+**控制与特技目录（同样默认注册）**
 
 - 危险动作：`damp`、`front_flip`、`front_jump`、`front_pounce`、`left_flip`、`back_flip`，以及 flag 类 `hand_stand` / `free_bound` / `free_jump` / `walk_upright` / `switch_joystick`
 - 步态/模式：`recovery_stand`、`free_walk`、`static_walk`、`trot_run`、`economic_gait`、`switch_avoid_mode`，以及 `free_avoid` / `classic_walk` / `cross_step` / `auto_recover_set`
 
-该开关会把这些工具同时暴露给文本 Agent 和 API；operator-only 是**启动时目录划分**，
-不是额外的运行时权限检查。正常视觉自治不要打开。
+`register_go2_skills()` 默认注册全部 46 个技能，文本 Agent、视觉 Agent 和 API
+使用同一 Registry。`operator_only` 和 `dangerous` 标签是动作提示，不是视觉目录过滤器；
+参数校验、资源锁、感知前提和深度停止继续生效。
 
 文本 Agent 不依赖一份固定的中文动作映射；它读取当前 Registry 自动生成的工具描述和
 参数 schema，再按用户目标选择一个或多个 Skill。`local_commands` 仅是无模型离线备用模式，
@@ -60,7 +61,7 @@ Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、`--robot go2` 装�
 **遥测**：Go2 Adapter 订阅 `rt/sportmodestate`，`get_state().details` 含 `mode`、
 `gait_type`、位置/速度/姿态、`error_code`；`telemetry_available` 仅在最近 2 秒有数据时为 true。
 
-**语音**：Go2 无 G1 `AudioClient` TTS；`VuiClient` 只有开关/音量/亮度，不能当 TTS。
+**语音**：Go2 使用主机 TTS；`VuiClient` 只有开关/音量/亮度，不能当 TTS。
 
 ## 一键启动 Go2 控制台
 
@@ -94,12 +95,10 @@ JPEG，决策、Skill 结果与状态通过 REST/WebSocket 快照展示。详见
 启动视觉决策；停止任务会结束 worker。连接真机由后端 `--hardware --network eth0` 决定，
 软件停止不是物理急停，API 仅用于可信网络。
 
-Go2 的 `front_jump` 等 operator-only 动作默认不进入视觉目录。只有启动时显式加入
-`--include-operator-only-skills`，并且任务提示词明确写出该动作（例如“前跳”或
-`front_jump`），视觉决策才会看到它。模型输出仍需通过本地技能目录校验；
-服务接受动作命令不等于动作已经完成。
+Go2 的 `front_jump` 等动作也会进入完整视觉目录。视觉模型按任务与画面选择技能，
+模型输出仍需通过本地技能目录和参数校验；服务接受动作命令不等于动作已经完成。
 
-Go2 `test` 分支包含第一版 `follow_person`：前端选择「本地相机」和
+Go2 目录包含 `follow_person`：前端选择「本地相机」和
 「持续视觉交互」，输入“跟着前面的人走，保持距离”。视觉 Agent 决定是否
 开始/继续/中断；狗端 D435i 根据单个人体框中心及对齐深度，以 0.20--0.30 m/s
 前进、最多 0.3 rad/s 转向，目标约 1.5 m。目标丢失、多人、深度无效、画面
@@ -114,12 +113,12 @@ Go2 真机直接使用启动脚本。视觉和默认语音目标都连接局域�
 GO2_VISION_URL=http://192.168.31.112:8011 sh scripts/run-go2-console.sh
 ```
 
-架构上文本/麦克风路径示意如下（Go2 时 TTS 段会禁用；Adapter 换成 Go2）：
+文本/麦克风路径如下：
 
 ```text
 文本输入 ──────────────────────┐
                               v
-麦克风 -> Whisper ASR -> LangChain Agent -> 最终回复 -> AudioClient TTS
+麦克风 -> Whisper ASR -> LangChain Agent -> 最终回复 -> 主机 TTS
                               |
                               v
                        LangChain tools
@@ -129,12 +128,12 @@ GO2_VISION_URL=http://192.168.31.112:8011 sh scripts/run-go2-console.sh
                               |
                          RobotSkill
                               |
-                UnitreeG1Adapter / UnitreeGo2Adapter
+                         UnitreeGo2Adapter
                               |
                unitree_sdk2_cpp bindings
 ```
 
-当前视觉入口默认运行 2 秒滑动视频窗口策略；原来的稀疏事件 Agent 仍可作为
+当前视觉入口使用滑动视频窗口策略；原来的稀疏事件 Agent 仍可作为
 回退模式：
 
 ```text
@@ -142,11 +141,11 @@ GO2_VISION_URL=http://192.168.31.112:8011 sh scripts/run-go2-console.sh
 RealSense -> CameraFrame -----|
                               └-> HOG/depth safety
                                       |
-                 AgentDecision -> SkillRuntime -> G1 / Go2
+                 AgentDecision -> SkillRuntime -> Go2
 ```
 
-相机持续采集 30 FPS，环形缓冲只保留最近 2 秒；视频策略默认以 500 ms 为目标间隔，
-从窗口中均匀抽取 8 帧进行一次判断。VLM 推理、Skill 执行和相机采集相互解耦，
+相机持续采集 30 FPS。CLI 默认保留最近 2 秒并取最新 1 帧，控制台默认保留
+0.8 秒并取 3 帧；视频策略以 500 ms 为目标间隔。VLM 推理、Skill 执行和相机采集相互解耦，
 模型不会逐帧运行。如果一次推理超过 500 ms，策略不会并发堆积请求，而是在本次
 推理完成后再开始下一次。HOG/WorldEvent 保留用于可观测性，中心区域深度安全停止
 不等待 VLM。
@@ -157,46 +156,27 @@ RealSense -> CameraFrame -----|
 src/
 ├── agent/       # 对话 Agent、事件 Decision Agent 和决策执行闭环
 ├── app/         # 文本/麦克风 CLI 入口
-├── adapters/    # LangChain tools、Whisper 输入、Unitree AudioClient
+├── adapters/    # LangChain tools、Whisper 输入、主机语音输出
 ├── core/        # Skill Runtime 核心协议与执行器
 ├── perception/  # D435i 取流、人员检测、最小状态和事件检测
-├── robot/       # RobotAdapter、G1/Go2 SDK 适配器、模拟适配器、factory
-└── skills/      # 具体 Robot Skill（g1_catalog / go2_catalog）
+├── robot/       # RobotAdapter、Go2 SDK 适配器、模拟适配器、factory
+└── skills/      # Go2 Robot Skill（go2_catalog）
 
 frontend/        # Flutter 控制台（暗色 Mission Control UI）
 ```
 
-## Wave 闭环验收
+## 单技能验收
 
-先完全绕过 Agent 和 Ollama，直接验证唯一 Runtime 入口：
-
-```bash
-uv run g1-wave
-```
-
-默认使用模拟适配器，输出至少包含：
-
-```json
-{"success": true, "status": "succeeded"}
-```
-
-在机器人主机上直接跑真实 G1：
+完全绕过 Agent 和模型，通过 Runtime 直接执行 Go2 技能：
 
 ```bash
-uv run g1-wave --hardware --network eth0
+uv run go2-action hello
+uv run go2-action pose --arguments '{"flag":true}'
 ```
 
-这个命令的完整路径是
-`SkillRuntime -> SkillExecutor -> SkillRegistry -> WaveSkill -> UnitreeG1Adapter -> bindings`，
-不导入 Agent，也不调用 LLM。`--hardware` 会直接连接真机，没有二次交互确认。
-
-SkillExecutor 会在同一资源锁和执行超时内运行 `execute() -> verify() -> cleanup()`。
-真机 Wave 从 `rt/arm/action/state` 依次观察到 `face wave`（动作 ID `25`）和
-`release arm`（动作 ID `99`）后标记 `completion_verified=true`。部分 G1 固件在
-物理执行动作时始终发布空闲状态 `id=0`；这种情况下 SDK 接受命令后仍返回
-`succeeded`，但在 1 秒反馈探测后标记 `completion_verified=false`。已经观察到动作
-25 后发生中断或在 6 秒内没有完成时，才返回 `verification_failed`。
-Wave 的总 Skill 超时为 20 秒，覆盖最长 10 秒的 SDK RPC 和随后的反馈验证。
+默认使用模拟 Go2；真机调用增加 `--hardware --network eth0`。
+SkillExecutor 在同一资源锁和超时内运行 `execute() -> verify() -> cleanup()`；
+Go2 原生姿态成功表示 SDK 接受命令，不保证物理动作已完成。
 
 ## 安装
 
@@ -223,25 +203,23 @@ python3 -m pip install -e ~/unitree_sdk2/unitree_sdk2_bindings
 代码直接使用 bindings 中的：
 
 - `unitree_sdk2_cpp.channel.initialize/release`
-- `unitree_sdk2_cpp.robot.g1.LocoClient`
-- `unitree_sdk2_cpp.robot.g1.G1ArmActionClient`
-- `unitree_sdk2_cpp.robot.g1.AudioClient`
+- `unitree_sdk2_cpp.robot.go2.SportClient`
+- `unitree_sdk2_cpp.idl.go2.SportModeState`
 
 ## Flutter 控制台 FastAPI 后端
 
-`g1-api` 提供与仓库内 `frontend/` 的 `ConsoleController` 状态字段对齐的 REST 和
+`go2-api` 提供与仓库内 `frontend/` 的 `ConsoleController` 状态字段对齐的 REST 和
 WebSocket 接口。默认绑定 `0.0.0.0:8000`、使用模拟机器人，并在进程启动时自动
 创建后端会话：
 
 ```bash
-uv run g1-api
+uv run go2-api
 ```
 
-真机运行时只需增加 `--hardware`，不再要求现场输入二次确认；TTS 继续使用宇树
-SDK 的 `AudioClient`：
+真机运行时增加 `--hardware`；TTS 使用主机外接扬声器：
 
 ```bash
-uv run g1-api \
+uv run go2-api \
   --hardware \
   --network eth0
 ```
@@ -250,7 +228,7 @@ uv run g1-api \
 后端的主机，启动时选择真实相机：
 
 ```bash
-uv run g1-api --camera-source local
+uv run go2-api --camera-source local
 ```
 
 主要接口：
@@ -292,7 +270,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/tasks \
 所有 API 触发的动作仍只走：
 
 ```text
-FastAPI -> RobotAgent / SkillRuntime -> RobotSkill -> RobotAdapter -> G1
+FastAPI -> RobotAgent / SkillRuntime -> RobotSkill -> RobotAdapter -> Go2
 ```
 
 API 路由不会直接调用 Unitree SDK。
@@ -302,12 +280,12 @@ API 路由不会直接调用 Unitree SDK。
 无硬件时使用模拟 `RobotAdapter`，便于验证 Agent 和工具调用：
 
 ```bash
-uv run g1agent --input text
+uv run go2agent --input text
 ```
 
 文本会先送入 LangChain `create_agent`。例如用户要求挥手时，Agent 调用 `wave`
 工具，工具只调用 `SkillRuntime.execute()`，不会生成或解析 action 字符串。
-模拟模式只打印 Agent 回复，不调用任何本机系统 TTS。
+增加 `--no-audio` 可禁用主机 TTS。
 
 ## 狗端本地语音对话
 
@@ -333,7 +311,7 @@ FastAPI 与前端一起使用：
 
 ```bash
 .venv/bin/python -m app.api \
-  --robot go2 --hardware --network eth0 \
+  --hardware --network eth0 \
   --camera-source local --vision-rotation-deg 0 \
   --vision-backend unifolm --vision-url http://192.168.31.112:8011 \
   --voice --voice-agent-backend vision --record-seconds 3 \
@@ -375,7 +353,7 @@ FastAPI 与前端一起使用：
 ```bash
 sudo apt install alsa-utils ffmpeg
 
-uv run g1agent --input microphone \
+uv run go2agent --input microphone \
   --whisper-bin whisper-cli \
   --whisper-model /opt/models/ggml-base.bin \
   --language zh \
@@ -388,7 +366,7 @@ USB 麦克风不是默认设备时增加 `--audio-device hw:2,0`。ASR 的输出
 ## 连接真机
 
 ```bash
-uv run g1agent \
+uv run go2agent \
   --hardware \
   --network eth0 \
   --input microphone \
@@ -400,16 +378,11 @@ uv run g1agent \
 指定 `--hardware` 后程序会直接连接机器人。连接顺序为：
 
 ```text
-初始化 DDS -> LocoClient.init() -> AudioClient.init() -> Agent 循环
+初始化 DDS -> SportClient.init() -> 主机 TTS 初始化 -> Agent 循环
 ```
 
-Agent 的最终文字回复通过 `AudioClient.tts_maker(text, speaker_id)` 播放。默认
-`speaker_id` 为 `0`，可以用 `--speaker-id` 修改；`--no-audio` 可以禁用语音输出。
-`AudioClient` 复用 `UnitreeG1Adapter` 已初始化的 DDS channel，不会重复初始化或
-释放全局 channel。
-
-`connect()` 不调用 `start()` 或运动命令，`close()` 只释放 DDS。`wave` 与显式
-`stop()` 都会改变实体机器人状态；真机运行前必须完成现场安全检查并准备物理急停。
+Agent 的最终文字回复通过主机 Piper 或 espeak-ng 播放。`--no-audio` 禁用语音输出。
+`connect()` 不下发运动命令，`close()` 只释放通信资源；移动技能在清理时请求停止。
 
 ## D435i 视觉闭环
 
@@ -490,19 +463,19 @@ Faster Whisper、独立 Ollama 和 Piper。
 不是独立准确率评测。结果保存于 `debug/vision/eval-speaking-20260912-v2-retry.jsonl`。
 该次云端往返中位数6.826秒，部分响应中 `load_s` 占主要耗时，实时性能尚待排查；
 不要提高动作时效上限来绕过过期拦截。
-`execute_and_speak` 会并发启动 Skill 与 AudioClient TTS，让动作和语音同时进行；
+`execute_and_speak` 会并发启动 Skill 与主机 TTS，让动作和语音同时进行；
 因此动作最终失败时，已经开始的语音不会回滚。相同动作即使文字不同也共享冷却限制，
 未确认或正在进行的动作不重复说话。
 增加 `--no-audio` 可静音但保留模型生成文字。日志 `speech_spoken=true` 表示 TTS 调用
 成功返回，不代表已通过麦克风验证声音播放完成。
 
-远端 `g1-vision-ollama.service` 是当前用户的临时 systemd 服务，监听
+远端 `go2-vision-ollama.service` 是当前用户的临时 systemd 服务，监听
 `127.0.0.1:11435`，远程脚本默认模型为 `qwen3.5:9b`，使用 `egocentric` 第一视角
 提示词并关闭思考输出。保留原 `qwen2.5vl:3b` 供回退。不需要修改 frpc 或开放推理公网端口。
 服务器重启后需要重新启动该服务：
 
 ```bash
-systemd-run --user --unit=g1-vision-ollama \
+systemd-run --user --unit=go2-vision-ollama \
   --setenv=OLLAMA_HOST=127.0.0.1:11435 \
   --setenv=OLLAMA_NUM_PARALLEL=1 /usr/local/bin/ollama serve
 ```
@@ -543,8 +516,8 @@ sh scripts/run-remote-vision.sh --hardware --network eth0
 ```
 
 图片和模型提示词通过 SSH 加密发送至服务器，本地保留深度安全和 SkillRuntime。
-远程脚本默认启用 `--vision-task social`：最近 0.8 秒取 3 帧，只识别握手、
-挥手、击掌或不确定，使用结构化输出并在本地映射 Skill。模糊、遮挡、非面向机器人、
+远程脚本默认启用 `--vision-task social`：最近 0.8 秒取 3 帧，使用开放
+`AgentDecision` 结构化输出，从完整 Go2 Registry 选择技能。模糊、遮挡、非面向机器人、
 最新帧已收手及非法输出不会触发动作；过期决策也不会因近距离物体而放行。
 全部 Skills 仍保留，通用视觉策略可用 `--vision-task general` 切回。
 当前远端约束解码出现 `Unexpected empty grammar stack`，因此脚本使用
@@ -587,7 +560,7 @@ sh scripts/run-remote-vision.sh --model qwen2.5vl:3b \
 [`docs/vision-latency.md`](docs/vision-latency.md)。
 
 D435i 通过 USB 直接连接运行本程序的 Linux 主机。相机取流使用
-`pyrealsense2`，不经过 Unitree SDK；Unitree bindings 仍只负责 G1 动作。
+`pyrealsense2`，不经过 Unitree SDK；Unitree bindings 负责 Go2 动作。
 
 安装可选视觉依赖：
 
@@ -617,7 +590,7 @@ OpenCV，不会为每帧重启进程。先验证系统 Python 环境：
 ```
 
 如果 binding 安装在其他解释器中，可传入 `--camera-python /path/to/python`，或设置
-`G1_REALSENSE_PYTHON`。不要为此升级 JetPack 5 的系统 glibc。
+`GO2_REALSENSE_PYTHON`。不要为此升级 JetPack 5 的系统 glibc。
 
 默认视频模型是：
 
@@ -634,7 +607,7 @@ HF_HUB_DISABLE_XET=1 hf download \
 ```
 
 只有一台 D435i 时无需传 `--camera-serial`。先使用模拟机器人验证真实摄像头和
-CUDA VLM，不会连接或驱动实体 G1：
+CUDA VLM，不会连接或驱动实体 Go2：
 
 ```bash
 .venv/bin/python -m app.perception --once --no-audio
@@ -652,9 +625,8 @@ CUDA VLM，不会连接或驱动实体 G1：
   --vision-frame-count 1
 ```
 
-需要保留两帧时可显式传 `--vision-frame-count 2`，但不适合低延迟握手响应。
-深度安全锁只停止和阻止使用 `mobile_base` 的移动/姿态动作；`handshake`、`wave`
-等仅使用 `upper_body` 的原地动作不会因为人手伸入 0.4 m 安全区而被取消。
+需要保留两帧时可显式传 `--vision-frame-count 2`，但会增加延迟。
+Go2 动作使用 `mobile_base`，深度安全锁阻止相应动作；`stop` / `stop_move` 仍可调用。
 
 完成现场安全检查后，才显式增加真机参数：
 
@@ -671,7 +643,7 @@ CUDA VLM，不会连接或驱动实体 G1：
 ollama serve
 ollama pull qwen2.5vl:3b
 
-uv run --extra perception g1-perception \
+uv run --extra perception go2-perception \
   --hardware \
   --network eth0 \
   --camera-serial <front-camera-serial> \
@@ -691,7 +663,7 @@ interrupt -> 取消当前可中断 Skill，并调用机器人软件 stop
 `--action-cooldown-s` 调整。旧事件策略仍可运行：
 
 ```bash
-uv run --extra perception g1-perception \
+uv run --extra perception go2-perception \
   --policy event \
   --model qwen3:1.7b
 ```
@@ -711,7 +683,7 @@ person_too_close -> Decision Agent -> move_backward / speech / ignore
 所有运行日志使用固定 JSON Lines envelope：
 
 ```json
-{"schema":"g1agent.log.v1","timestamp":"...","level":"info","type":"vision_decision","owner":"agent.vision_policy","data":{}}
+{"schema":"go2agent.log.v1","timestamp":"...","level":"info","type":"vision_decision","owner":"agent.vision_policy","data":{}}
 ```
 
 每一行都会显示 `owner`。启动日志的 `data.owners` 会列出完整 owner 清单；主要值为
@@ -720,78 +692,30 @@ person_too_close -> Decision Agent -> move_backward / speech / ignore
 状态变化和每 5 秒一条心跳；`--verbose-observations` 恢复逐帧输出，
 `--observation-interval-s <seconds>` 可调整心跳间隔。
 
-连接真实 G1 并使用旧事件策略：
+连接真实 Go2 并使用旧事件策略：
 
 ```bash
-uv run --extra perception g1-perception \
+uv run --extra perception go2-perception \
   --policy event \
   --hardware \
   --network eth0
 ```
 
-真机模式下，Decision Agent 的 `speech` 通过现有 Unitree `AudioClient` 播放；
+Decision Agent 的 `speech` 通过主机 TTS 播放；
 `--no-audio` 可以关闭。动作决策仍先经过 Pydantic `AgentDecision` 校验，然后只调用
 `SkillRuntime.execute()`，不会让模型直接访问 Unitree SDK。
 
 Decision Agent 的技能目录由当前 `SkillRegistry` 动态生成，新增 Skill 后不需要再
 维护另一份硬编码的技能白名单；每个动作的参数仍由对应 Skill 的 `SkillArgs` 校验。
 
-当前 **G1** 动作 Skill 由 `skills.register_g1_skills()` 统一注册（Go2 请用上文
-`register_go2_skills()` 与原生动作目录，二者不会混用）。G1 安全自治目录包括：
-
-```text
-手臂预设：wave / wave_hand / handshake / shake_hand / two_hand_kiss / left_kiss /
-right_kiss / hands_up / clap / high_five / hug / heart / right_heart / reject /
-right_hand_up / x_ray / high_wave / release_arm
-姿态：squat / sit / stand_up / high_stand / low_stand / balance_stand
-移动：move / move_forward / move_backward / move_left / move_right /
-turn_left / turn_right / stop / stop_move
-```
-
-SDK 里同样存在但不默认暴露给视觉模型的 operator-only Skill 为：
-`start`、`damp`、`zero_torque`、`wave_with_turn`、`continuous_gait`、
-`switch_move_mode`、`set_speed_mode`、`set_fsm_id`、`set_balance_mode`、
-`set_swing_height`、`set_stand_height`、`set_velocity`、`set_task_id`、
-`move_sdk`、
-`switch_to_user_ctrl`、`switch_to_internal_ctrl`、`fsm_api`、
-`execute_custom_arm_action`、`stop_custom_arm_action`。通过
-`register_g1_skills(runtime, include_operator_only=True)` 才会加入这些控制；
-如果需要拿到完整目录而不注册，可调用 `build_g1_all_skills()`。
-命令行显式加载完整目录时增加 `--include-operator-only-skills`。例如：
-
-```bash
-.venv/bin/python -m app.perception \
-  --hardware --network eth0 --no-audio \
-  --include-operator-only-skills
-```
-
-这个开关会把危险控制也加入模型可见目录，只用于人工监管测试；正常视觉自治不要加。
-其中 `damp`、`zero_torque`、显式 FSM/任务 ID、控制模式切换、原始 `fsm_api` 和
-自定义手臂动作会改变控制状态，不能让 VLM 自主选择。`set_velocity` 也只在
-operator-only 目录中提供；默认视觉目录使用带硬限幅和软件 stop 的
-`move`/方向移动 Skills。
-SDK 头文件把 `left kiss` 与 `right kiss` 都映射为动作 ID `12`，代码保持这个
-真实映射而不是伪造两个不同的底层动作。`handshake` 优先使用 arm preset ID `27`，
-没有 `G1ArmActionClient` 时回退到 SDK 示例的 `shake_hand(0)`，持续有限时间后用
-`shake_hand(1)` 释放。
-
-`wave` 使用 G1 `G1ArmActionClient` 的内置 `face wave`（动作 ID `25`）；如果当前
-bindings 没有该客户端，则回退到 `LocoClient.wave_hand()`。内置手臂动作只支持
-FSM `500`、`501`、`801`（FSM `801` 还要求 mode `0` 或 `3`）。SDK 返回 `0` 只表示
-命令被服务接受，不表示动作已经完成；程序会把非零状态转换成可读的失败原因，并
-尽量通过 `rt/arm/action/state` 完成后置验证。旧 bindings 或始终报告 `id=0` 的固件
-会返回成功并标记 `completion_verified=false`，不会把未验证误报成已完成验证。
-
 多台 RealSense 同时连接时可增加 `--camera-serial <serial>`。默认读取
 `640x480@30 FPS` 的彩色和深度流，将深度对齐到彩色画面，并忽略有效深度超过
 `4` 米的检测。当前第一版使用 OpenCV HOG 全身检测器，适合验证闭环；实际场地
 仍需根据视角、光照和人员距离调整阈值并做真机验收。
 
-`move_backward` 将距离限制在 `0.05 <= distance_m <= 0.3` 米，并把速度限制在
-`0.1` 到 `0.3` 米/秒。它使用 SDK 的非连续一秒运动命令作为硬件侧超时兜底，并且
-只有 `stop_move()` 成功后才返回成功；异常、超时或取消仍会在 Skill 清理阶段再次
-请求停止。当前距离来自速度乘时间的开环估计，不是定位系统提供的精确位移；真机
-测试必须使用隔离场地并准备物理急停。
+`move_backward` 将距离限制在 `0.05 <= distance_m <= 0.3` 米，使用 `0.1` 到
+`0.3` 米/秒的速度，约每 20 ms 刷新指令；结束、异常、超时或取消均请求停止。
+当前距离来自速度乘时间的开环估计，不是定位系统提供的精确位移。
 
 ## 类型检查与测试
 

@@ -36,6 +36,20 @@ for line in sys.stdin:
 
 
 class CudaVisionInvokerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_late_response_after_timeout_is_skipped(self) -> None:
+        invoker = CudaVisionInvoker("fake-model", inference_timeout_s=0.01)
+        with self.assertRaisesRegex(Exception, "timed out"):
+            await invoker._read_response_async(
+                expected_type="result", request_id=1, timeout_s=0.01
+            )
+        invoker._lines.put(json.dumps({"type": "result", "request_id": 1}))
+        invoker._lines.put(json.dumps({"type": "result", "request_id": 2}))
+
+        result = await invoker._read_response_async(
+            expected_type="result", request_id=2, timeout_s=0.1
+        )
+        self.assertEqual(result["request_id"], 2)
+
     async def test_persistent_worker_warms_up_invokes_and_closes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

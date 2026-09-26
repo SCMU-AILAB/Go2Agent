@@ -55,7 +55,6 @@ class ConsoleSnapshot {
     final robotDetails = _asMap(robot['details']);
     final rawModel = (robotDetails['robot_model'] as String?)?.toLowerCase();
     final robotModel = switch (rawModel) {
-      'g1' => 'G1',
       'go2' => 'GO2',
       _ => null,
     };

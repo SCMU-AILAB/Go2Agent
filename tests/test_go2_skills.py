@@ -11,7 +11,6 @@ from robot import (
 )
 from skills import (
     build_go2_autonomy_skills,
-    register_g1_skills,
     register_go2_skills,
 )
 from skills.go2_catalog import (
@@ -73,14 +72,11 @@ class RecordingGo2Adapter:
 
 
 class Go2FactoryTests(unittest.TestCase):
-    def test_factory_builds_go2_and_g1_hardware(self) -> None:
+    def test_factory_builds_go2_hardware(self) -> None:
         go2 = create_hardware_robot("go2", network_interface="eth0", domain_id=1)
         self.assertIsInstance(go2, UnitreeGo2Adapter)
         self.assertEqual(go2.config.network_interface, "eth0")
         self.assertEqual(go2.config.domain_id, 1)
-
-        g1 = create_hardware_robot("g1", network_interface="eth0")
-        self.assertEqual(type(g1).__name__, "UnitreeG1Adapter")
 
         sim = create_simulated_robot("go2")
         self.assertFalse(sim.events)
@@ -91,7 +87,7 @@ class Go2FactoryTests(unittest.TestCase):
 
 
 class Go2CatalogTests(unittest.TestCase):
-    def test_autonomy_catalog_excludes_g1_only_skills(self) -> None:
+    def test_autonomy_catalog_excludes_operator_only_skills(self) -> None:
         names = {skill.metadata.name for skill in build_go2_autonomy_skills()}
         self.assertIn("stand_up", names)
         self.assertIn("hello", names)
@@ -137,14 +133,6 @@ class Go2CatalogTests(unittest.TestCase):
         damp = runtime.registry.get("damp")
         self.assertIn("operator_only", damp.metadata.tags)
         self.assertIn("dangerous", damp.metadata.tags)
-
-    def test_g1_catalog_does_not_register_go2_hello(self) -> None:
-        robot = RecordingGo2Adapter()
-        runtime = SkillRuntime(robot)  # type: ignore[arg-type]
-        register_g1_skills(runtime)
-        names = {skill.metadata.name for skill in runtime.registry.list()}
-        self.assertNotIn("hello", names)
-        self.assertIn("wave", names)
 
 
 class Go2SkillExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -194,10 +182,10 @@ class Go2SkillExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertEqual(self.robot.events, [("loco", ("stand_up", {}))])
 
-    async def test_stop_stops_and_releases_arm(self) -> None:
+    async def test_stop_stops_go2(self) -> None:
         result = await self.runtime.execute("stop")
         self.assertTrue(result.success)
-        self.assertEqual(self.robot.events, [("stop", None), ("release_arm", None)])
+        self.assertEqual(self.robot.events, [("stop", None)])
 
     async def test_move_refreshes_velocity_periodically_and_stops(self) -> None:
         started = time.monotonic()

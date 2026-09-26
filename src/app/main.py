@@ -1,4 +1,4 @@
-"""Text or microphone input -> Agent -> SkillRuntime -> G1, then AudioClient TTS."""
+"""Text or microphone input -> Agent -> SkillRuntime -> Go2."""
 
 from __future__ import annotations
 
@@ -13,20 +13,17 @@ from adapters import (
     HostSpeechOutput,
     MicrophoneASR,
     SpeechOutput,
-    UnitreeAudioOutput,
 )
 from agent import AgentError, RobotAgent
-from agent.service import system_prompt_for
+from agent.service import GO2_SYSTEM_PROMPT
 from core.runtime import SkillRuntime
 from robot import (
-    ROBOT_MODELS,
     HardwareRobot,
     RobotAdapter,
-    RobotModel,
     create_hardware_robot,
     create_simulated_robot,
 )
-from skills import register_g1_skills, register_go2_skills
+from skills import register_go2_skills
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input",
         choices=("text", "microphone"),
-        default=os.getenv("G1_INPUT_MODE", "text"),
+        default=os.getenv("GO2_INPUT_MODE", "text"),
     )
     parser.add_argument("--model", default=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"))
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_HOST"))
@@ -43,22 +40,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--domain-id", type=int, default=0)
     parser.add_argument("--hardware", action="store_true")
-    parser.add_argument(
-        "--robot",
-        choices=ROBOT_MODELS,
-        default=os.getenv("G1_ROBOT_MODEL", "g1"),
-        help="robot model to assemble; go2 uses SportClient and a reduced skill catalog",
-    )
-    parser.add_argument(
-        "--include-operator-only-skills",
-        action="store_true",
-        help="register low-level and dangerous SDK controls for explicit operator use",
-    )
     parser.add_argument("--no-audio", action="store_true", help="disable speech output")
-    parser.add_argument("--speaker-id", type=int, default=0)
     parser.add_argument(
         "--host-audio-device",
-        default=os.getenv("G1_AUDIO_DEVICE"),
+        default=os.getenv("GO2_AUDIO_DEVICE"),
         help="ALSA/Pulse device for Go2 external speaker TTS",
     )
     parser.add_argument("--host-tts-voice", default="cmn")
@@ -68,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language", default=None)
     parser.add_argument("--whisper-device", default="auto")
     parser.add_argument("--whisper-compute-type", default="default")
-    parser.add_argument("--audio-device", default=os.getenv("G1_AUDIO_DEVICE", "pulse"))
+    parser.add_argument("--audio-device", default=os.getenv("GO2_AUDIO_DEVICE", "pulse"))
     parser.add_argument("--audio-output-device", default="pulse")
     parser.add_argument("--piper-model")
     parser.add_argument("--piper-config")
@@ -98,7 +83,7 @@ async def run(args: argparse.Namespace) -> None:
     hardware_robot: HardwareRobot | None = None
     audio: SpeechOutput | None = None
     robot: RobotAdapter
-    robot_model: RobotModel = args.robot
+    robot_model = "go2"
 
     if args.hardware:
         hardware_robot = create_hardware_robot(
@@ -111,16 +96,12 @@ async def run(args: argparse.Namespace) -> None:
         robot = create_simulated_robot(robot_model)
 
     runtime = SkillRuntime(robot)
-    include_operator_only = getattr(args, "include_operator_only_skills", False)
-    if robot_model == "go2":
-        register_go2_skills(runtime, include_operator_only=include_operator_only)
-    else:
-        register_g1_skills(runtime, include_operator_only=include_operator_only)
+    register_go2_skills(runtime)
     agent = RobotAgent(
         runtime,
         model_name=args.model,
         base_url=args.ollama_url,
-        system_prompt=system_prompt_for(robot_model),
+        system_prompt=GO2_SYSTEM_PROMPT,
     )
     microphone = None
     if args.input == "microphone":
@@ -145,19 +126,12 @@ async def run(args: argparse.Namespace) -> None:
     try:
         if hardware_robot is not None:
             await hardware_robot.connect()
-        if robot_model == "go2":
-            if not args.no_audio:
-                audio = HostSpeechOutput(
-                    audio_device=args.host_audio_device or args.audio_output_device,
-                    piper_model=args.piper_model,
-                    piper_config=args.piper_config,
-                    fallback_voice=args.host_tts_voice,
-                )
-                await audio.connect()
-        elif hardware_robot is not None and not args.no_audio:
-            audio = UnitreeAudioOutput(
-                hardware_robot,
-                speaker_id=args.speaker_id,
+        if not args.no_audio:
+            audio = HostSpeechOutput(
+                audio_device=args.host_audio_device or args.audio_output_device,
+                piper_model=args.piper_model,
+                piper_config=args.piper_config,
+                fallback_voice=args.host_tts_voice,
             )
             await audio.connect()
 

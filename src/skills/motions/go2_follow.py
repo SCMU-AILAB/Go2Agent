@@ -102,6 +102,9 @@ class FollowPersonSkill(RobotSkill[SkillArgs]):
         if (
             target is not None
             and target.count == 0
+            and target.obstacle_m is not None
+            and math.isfinite(target.obstacle_m)
+            and target.obstacle_m > self.OBSTACLE_STOP_M
             and self._last_valid_target is not None
             and now - target.observed_at_s <= self.TARGET_MISS_GRACE_S
             and now - self._last_valid_target.observed_at_s <= self.FRAME_MAX_AGE_S

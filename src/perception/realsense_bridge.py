@@ -50,7 +50,7 @@ class RealSenseBridge:
         self.max_distance_m = max_distance_m
         self.rgb_rotation_deg = rgb_rotation_deg
         self.python_executable = python_executable or os.getenv(
-            "G1_REALSENSE_PYTHON", "/usr/bin/python3"
+            "GO2_REALSENSE_PYTHON", "/usr/bin/python3"
         )
         self.worker_path = worker_path or Path(__file__).with_name(
             "_realsense_worker.py"

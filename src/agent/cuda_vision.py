@@ -44,7 +44,7 @@ class CudaVisionInvoker:
         self.model_name = model_name
         self.max_new_tokens = max_new_tokens
         self.python_executable = python_executable or os.getenv(
-            "G1_VISION_PYTHON", "/usr/bin/python3"
+            "GO2_VISION_PYTHON", "/usr/bin/python3"
         )
         self.packages_path = packages_path or project_root / ".cuda-packages"
         self.worker_path = worker_path or Path(__file__).with_name(
@@ -324,6 +324,13 @@ class CudaVisionInvoker:
                 continue
             response = cast(dict[str, object], decoded)
             response_type = response.get("type")
+            response_id = response.get("request_id")
+            if (
+                request_id is not None
+                and isinstance(response_id, int)
+                and response_id < request_id
+            ):
+                continue
             if isinstance(response_type, str) and response_type in (
                 discard_types or set()
             ):

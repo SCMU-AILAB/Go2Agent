@@ -2,8 +2,8 @@
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, UTC
 from uuid import uuid4
 
 
@@ -34,7 +34,7 @@ class VisionCapture:
             entries.append({"file": filename, "observed_at_s": frame.observed_at_s,
                             "sha256": hashlib.sha256(data).hexdigest()})
         self._write(folder / "input.json", {
-            "schema": "g1agent.vision_capture.v1", "frames": entries,
+            "schema": "go2agent.vision_capture.v1", "frames": entries,
             "note": "Exact JPEG inputs sent to Ollama, chronological order; not action execution evidence",
         })
         return folder

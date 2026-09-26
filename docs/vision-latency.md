@@ -19,7 +19,7 @@ Ollama:      OLLAMA_NUM_PARALLEL=1
 The API can replay the previous input size without a source edit:
 
 ```bash
-uv run --locked --extra perception --extra vision g1-api \
+uv run --locked --extra perception --extra vision go2-api \
   --vision-window-s 2.0 --vision-frame-count 8
 ```
 
@@ -95,7 +95,7 @@ The dedicated vision instance must remain isolated from the system Ollama
 instance and use one parallel slot:
 
 ```bash
-systemd-run --user --unit=g1-vision-ollama \
+systemd-run --user --unit=go2-vision-ollama \
   --setenv=OLLAMA_HOST=127.0.0.1:11435 \
   --setenv=OLLAMA_NUM_PARALLEL=1 /usr/local/bin/ollama serve
 ```

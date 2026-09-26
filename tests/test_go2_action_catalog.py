@@ -39,7 +39,7 @@ FLAG_ACTIONS = {
     "switch_joystick",
     "auto_recover_set",
 }
-DEFAULT_ACTIONS = {"stretch", "content", "heart", "scrape", "dance1", "dance2", "pose"}
+DEFAULT_ACTIONS = NO_ARG_ACTIONS | FLAG_ACTIONS
 
 
 class Go2ActionCatalogTests(unittest.IsolatedAsyncioTestCase):
@@ -91,7 +91,7 @@ class Go2ActionCatalogTests(unittest.IsolatedAsyncioTestCase):
         register_go2_skills(runtime)
         names = {tool.name for tool in build_langchain_tools(runtime)}
         self.assertTrue(DEFAULT_ACTIONS <= names)
-        self.assertFalse((NO_ARG_ACTIONS | FLAG_ACTIONS) - DEFAULT_ACTIONS & names)
+        self.assertTrue(DEFAULT_ACTIONS <= names)
         for name in FLAG_ACTIONS:
             schema = self.tools[name].args_schema.model_json_schema()
             self.assertEqual(schema["properties"]["flag"]["type"], "boolean")

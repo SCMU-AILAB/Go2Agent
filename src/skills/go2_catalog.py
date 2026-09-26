@@ -1,8 +1,4 @@
-"""Go2 skill catalog: only SportClient capabilities with matching semantics.
-
-Do not reuse register_g1_skills() for Go2. Arm presets, FSM controls, and G1-only
-postures are intentionally omitted. damp and recovery_stand stay operator-only.
-"""
+"""Complete Go2 SportClient skill catalog."""
 
 from __future__ import annotations
 
@@ -25,9 +21,8 @@ from .motions import (
     Go2MoveSkill,
     Go2TurnLeftSkill,
     Go2TurnRightSkill,
-    StopMoveSkill,
-    StopSkill,
 )
+from .motions.go2_controls import StopMoveSkill, StopSkill
 from .motions.go2_follow import FollowPersonSkill
 from .posture import PostureSkill, PostureSpec
 
@@ -144,7 +139,7 @@ GO2_OPERATOR_POSTURES = (
         "damp",
         (
             "OPERATOR-ONLY dangerous: switch Go2 to damping mode (阻尼). "
-            "Never call from casual chat; operator control only."
+            "Only use when the operator explicitly requests damping mode."
         ),
         operator_only=True,
         dangerous=True,
@@ -163,23 +158,23 @@ GO2_OPERATOR_POSTURES = (
         for name, description in (
             (
                 "front_flip",
-                "OPERATOR-ONLY dangerous: Go2 front flip (前空翻). Not for chat agent.",
+                "OPERATOR-ONLY dangerous: Go2 front flip (前空翻). Use only for an explicit operator request.",
             ),
             (
                 "front_jump",
-                "OPERATOR-ONLY dangerous: Go2 front jump (前跳). Not for chat agent.",
+                "OPERATOR-ONLY dangerous: Go2 front jump (前跳). Use only for an explicit operator request.",
             ),
             (
                 "front_pounce",
-                "OPERATOR-ONLY dangerous: Go2 front pounce (前扑). Not for chat agent.",
+                "OPERATOR-ONLY dangerous: Go2 front pounce (前扑). Use only for an explicit operator request.",
             ),
             (
                 "left_flip",
-                "OPERATOR-ONLY dangerous: Go2 left flip (左侧翻). Not for chat agent.",
+                "OPERATOR-ONLY dangerous: Go2 left flip (左侧翻). Use only for an explicit operator request.",
             ),
             (
                 "back_flip",
-                "OPERATOR-ONLY dangerous: Go2 back flip (后空翻). Not for chat agent.",
+                "OPERATOR-ONLY dangerous: Go2 back flip (后空翻). Use only for an explicit operator request.",
             ),
         )
     ),
@@ -313,7 +308,7 @@ class Go2FlagSkill(RobotSkill[Go2FlagArgs]):
 def _go2_wave_hello_skill() -> PostureSkill:
     """Social-vision skill name 'wave' backed by the native Go2 hello action.
 
-    The vision policy looks up skills by gesture name. Go2 has no G1 arm wave;
+    The vision policy looks up skills by gesture name. Go2 has no arm wave;
     this skill keeps the wave gesture actionable while documenting the real
     SportClient call. handshake and high_five remain unregistered on purpose.
     """
@@ -415,12 +410,15 @@ def build_go2_all_skills() -> tuple[RobotSkill[SkillArgs], ...]:
 def register_go2_skills(
     runtime: SkillRuntime,
     *,
-    include_operator_only: bool = False,
+    include_operator_only: bool = True,
 ) -> None:
-    skills = (
-        build_go2_all_skills() if include_operator_only else build_go2_autonomy_skills()
-    )
-    for skill in skills:
+    """Register every Go2 skill for both text and vision agents.
+
+    ``include_operator_only`` remains as a compatibility keyword for old
+    launchers, but the Go2-only runtime intentionally exposes the full catalog.
+    """
+    del include_operator_only
+    for skill in build_go2_all_skills():
         runtime.register(skill)
 
 

@@ -12,8 +12,8 @@ from adapters.langchain import SkillToolObserver
 from app.api import _build_parser, create_app
 from app.backend import AgentFactory, BackendConfig, ConsoleBackend
 from core.runtime import SkillRuntime
-from robot import SimulatedRobotAdapter
-from skills import build_go2_autonomy_skills
+from robot import RobotCommandError, SimulatedRobotAdapter
+from skills import build_go2_all_skills
 
 
 class FakeAgent:
@@ -121,22 +121,26 @@ class ApiTests(unittest.TestCase):
 
         self.assertFalse(backend.backend)
 
-    def test_go2_config_registers_reduced_catalog(self) -> None:
+    def test_go2_config_registers_complete_catalog(self) -> None:
         backend = ConsoleBackend(
             BackendConfig(audio_enabled=False, robot_model="go2"),
             agent_factory=fake_agent_factory,
         )
         registered = {skill.metadata.name for skill in backend.runtime.registry.list()}
-        expected = {skill.metadata.name for skill in build_go2_autonomy_skills()}
+        expected = {skill.metadata.name for skill in build_go2_all_skills()}
         self.assertEqual(registered, expected)
         self.assertIn("hello", registered)
-        self.assertNotIn("handshake", registered)
+        self.assertIn("damp", registered)
         self.assertTrue(
             backend.system_prompt.startswith(
                 "You are the conversational controller for a Unitree Go2"
             )
         )
         self.assertEqual(backend.config.robot_model, "go2")
+
+    def test_config_rejects_other_robot_models(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Go2 only"):
+            BackendConfig(robot_model="unsupported")  # type: ignore[arg-type]
 
     def test_vision_window_cli_defaults_and_overrides(self) -> None:
         parser = _build_parser()
@@ -200,7 +204,7 @@ class ApiTests(unittest.TestCase):
             catalog = client.get("/api/v1/skills")
             execution = client.post(
                 "/api/v1/skills/wave/execute",
-                json={"arguments": {"arm": "right"}},
+                json={"arguments": {}},
             )
 
             self.assertEqual(catalog.status_code, 200)
@@ -215,7 +219,7 @@ class ApiTests(unittest.TestCase):
         robot = backend.robot
         self.assertIsInstance(robot, SimulatedRobotAdapter)
         simulated = cast(SimulatedRobotAdapter, robot)
-        self.assertIn(("wave", "right"), simulated.events)
+        self.assertIn(("loco_action", ("hello", {})), simulated.events)
 
     def test_task_runs_in_background_and_updates_console(self) -> None:
         with TestClient(create_app(backend=self.build_backend())) as client:
@@ -323,6 +327,110 @@ class ApiTests(unittest.TestCase):
 
         robot = cast(SimulatedRobotAdapter, backend.robot)
         self.assertIn(("loco_action", ("heart", {})), robot.events)
+
+
+class EmergencyStopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_spoken_stop_preempts_text_agent(self) -> None:
+        entered = asyncio.Event()
+
+        class WaitingAgent:
+            async def chat(self, text: str) -> str:
+                entered.set()
+                await asyncio.Event().wait()
+                return "done"
+
+            def reset(self) -> None:
+                pass
+
+        backend = ConsoleBackend(
+            BackendConfig(audio_enabled=False),
+            agent_factory=lambda *args: WaitingAgent(),
+            asr_factory=lambda: FakeRecognizer("停止"),
+        )
+        await backend.start()
+        try:
+            await backend.submit_task("持续动作")
+            await asyncio.wait_for(entered.wait(), 1.0)
+            await backend.start_voice()
+            async with asyncio.timeout(1.0):
+                while backend.voice_reply != "好的，已停止当前任务。":
+                    await asyncio.sleep(0.01)
+            self.assertFalse(backend.busy)
+            self.assertIn(("stop", None), backend.robot.events)
+        finally:
+            await backend.stop()
+
+    async def test_emergency_stop_cancels_independent_voice_turn(self) -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class WaitingVoiceAgent:
+            async def chat(self, text: str) -> str:
+                entered.set()
+                await release.wait()
+                await backend.runtime.execute("hello")
+                return "done"
+
+            def reset(self) -> None:
+                pass
+
+        backend = ConsoleBackend(
+            BackendConfig(audio_enabled=False, voice_enabled=True),
+            agent_factory=lambda *args: WaitingVoiceAgent(),
+            asr_factory=FakeRecognizer,
+        )
+        await backend.start()
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            await backend.emergency_stop()
+            release.set()
+            await asyncio.sleep(0.03)
+            self.assertFalse(backend.voice_enabled)
+            self.assertNotIn(("loco_action", ("hello", {})), backend.robot.events)
+        finally:
+            await backend.stop()
+
+    async def test_emergency_stop_cancels_manual_motion_and_latches(self) -> None:
+        backend = ConsoleBackend(
+            BackendConfig(audio_enabled=False), agent_factory=fake_agent_factory
+        )
+        await backend.start()
+        try:
+            request = asyncio.create_task(
+                backend.execute_skill("move", {"duration_s": 1.0})
+            )
+            await asyncio.sleep(0.04)
+            await backend.emergency_stop()
+            mark = len(backend.robot.events)
+            await asyncio.sleep(0.06)
+            self.assertTrue(request.cancelled())
+            self.assertFalse(any(
+                name == "move_velocity" for name, _ in backend.robot.events[mark:]
+            ))
+            with self.assertRaisesRegex(Exception, "latched"):
+                await backend.execute_skill("move", {})
+        finally:
+            await backend.stop()
+
+    async def test_failed_stop_is_not_reported_as_success(self) -> None:
+        backend = ConsoleBackend(
+            BackendConfig(audio_enabled=False), agent_factory=fake_agent_factory
+        )
+        await backend.start()
+        original_stop = backend.robot.stop
+
+        async def fail_stop() -> None:
+            raise RobotCommandError("SDK rejected stop")
+
+        backend.robot.stop = fail_stop  # type: ignore[method-assign]
+        try:
+            with self.assertRaisesRegex(RobotCommandError, "SDK rejected stop"):
+                await backend.emergency_stop()
+            self.assertEqual(backend.skill_status, "FAILED")
+            self.assertEqual(backend.model_status, "急停失败")
+        finally:
+            backend.robot.stop = original_stop  # type: ignore[method-assign]
+            await backend.stop()
 
 
 if __name__ == "__main__":

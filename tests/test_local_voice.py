@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import unittest
 from collections.abc import Iterable
 from pathlib import Path
@@ -23,6 +24,29 @@ class _Model:
 
 
 class LocalVoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_speech_terminates_playback_process(self) -> None:
+        output = HostSpeechOutput()
+        started = asyncio.Event()
+        original = asyncio.create_subprocess_exec
+        processes: list[asyncio.subprocess.Process] = []
+
+        async def launch(*command: str, **kwargs: object) -> asyncio.subprocess.Process:
+            del command
+            process = await original(
+                sys.executable, "-c", "import time; time.sleep(60)", **kwargs
+            )
+            processes.append(process)
+            started.set()
+            return process
+
+        with patch("adapters.host_audio.asyncio.create_subprocess_exec", side_effect=launch):
+            task = asyncio.create_task(output.speak("hello"))
+            await asyncio.wait_for(started.wait(), timeout=2.0)
+            task.cancel()
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 2.0)
+            self.assertTrue(output._audio_lock.locked() is False)
+            self.assertIsNotNone(processes[0].returncode)
+
     async def test_faster_whisper_model_is_loaded_once_and_reused(self) -> None:
         loads = 0
 
@@ -58,16 +82,23 @@ class LocalVoiceTests(unittest.IsolatedAsyncioTestCase):
         output = HostSpeechOutput(audio_lock=lock)
         calls: list[list[str]] = []
 
-        def fake_run(command: list[str], **kwargs: object) -> object:
+        class FakeProcess:
+            returncode = 0
+
+            async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
+                del input
+                return b"", b""
+
+        async def fake_exec(*command: str, **kwargs: object) -> FakeProcess:
             del kwargs
-            calls.append(command)
+            calls.append(list(command))
             if "-w" in command:
                 Path(command[command.index("-w") + 1]).write_bytes(b"RIFF")
-            return object()
+            return FakeProcess()
 
         with (
             patch("adapters.host_audio.shutil.which", side_effect=lambda name: name),
-            patch("adapters.host_audio.subprocess.run", side_effect=fake_run),
+            patch("adapters.host_audio.asyncio.create_subprocess_exec", side_effect=fake_exec),
         ):
             await output.connect()
             await lock.acquire()

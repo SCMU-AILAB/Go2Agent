@@ -179,7 +179,7 @@ class MicrophoneASR:
         if not recorder:
             raise ASRError("找不到 arecord 或 ffmpeg，无法录音。")
 
-        with tempfile.TemporaryDirectory(prefix="g1-asr-") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="go2-asr-") as temp_dir:
             wav_path = Path(temp_dir) / "input.wav"
             self._record(recorder, wav_path)
             return self._transcribe(wav_path, Path(temp_dir)).strip()

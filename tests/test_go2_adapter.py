@@ -121,7 +121,7 @@ class Go2AdapterTests(unittest.IsolatedAsyncioTestCase):
             await self.robot.execute_loco_action(action)
             method.assert_called_once_with()
 
-    async def test_g1_actions_unknown_arguments_and_missing_methods_rejected(
+    async def test_unsupported_actions_and_arguments_are_rejected(
         self,
     ) -> None:
         await self.robot.connect()
@@ -135,21 +135,15 @@ class Go2AdapterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RobotCommandError, "do not provide hello"):
             await self.robot.execute_loco_action("hello")
 
-    async def test_arm_operations_fail_and_release_is_a_noop(self) -> None:
+    async def test_adapter_exposes_only_go2_operations(self) -> None:
         await self.robot.connect()
-        self.sport.reset_mock()
-        for command in (
-            self.robot.wave("right"),
-            self.robot.wait_for_wave_completion("right", 1),
-            self.robot.execute_arm_action(27, "handshake"),
-            self.robot.execute_custom_arm_action("custom"),
-            self.robot.stop_custom_arm_action(),
-            self.robot.wait_for_arm_action_completion(25, "wave", 1),
+        for name in (
+            "wave",
+            "execute_arm_action",
+            "execute_custom_arm_action",
+            "release_arm",
         ):
-            with self.assertRaisesRegex(RobotCommandError, "does not support G1 arm"):
-                await command
-        await self.robot.release_arm()
-        self.assertEqual(self.sport.mock_calls, [])
+            self.assertFalse(hasattr(self.robot, name))
 
     async def test_cancelled_native_move_finishes_before_stop(self) -> None:
         await self.robot.connect()

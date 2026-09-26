@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from adapters import AudioOutputError, UnitreeAudioOutput
+from adapters import AudioOutputError, HostSpeechOutput, SpeechOutput
 from agent import (
     DEFAULT_LLAMA_CPP_MODEL,
     DEFAULT_LLAMA_CPP_URL,
@@ -32,10 +32,7 @@ from agent import (
     VisionPolicyWorker,
 )
 from agent.decision import AgentDecision
-from agent.social_vision import (
-    SocialVisionAgent,
-    TaskDrivenObservation,
-)
+from agent.social_vision import SocialVisionAgent
 from agent.vision_capture import VisionCapture
 from core.runtime import SkillRuntime
 from perception import (
@@ -48,15 +45,13 @@ from perception import (
     WorldState,
 )
 from robot import (
-    ROBOT_MODELS,
     HardwareRobot,
     RobotAdapter,
     RobotCommandError,
-    RobotModel,
     create_hardware_robot,
     create_simulated_robot,
 )
-from skills import register_g1_skills, register_go2_skills
+from skills import register_go2_skills
 
 from .structured_log import configure_structured_logging, emit_log
 
@@ -81,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hardware",
         action="store_true",
-        help="connect to a physical G1 instead of the simulated adapter",
+        help="connect to a physical Go2 instead of the simulated adapter",
     )
     parser.add_argument(
         "--network",
@@ -89,12 +84,6 @@ def parse_args() -> argparse.Namespace:
         help="Unitree DDS interface, e.g. eth0",
     )
     parser.add_argument("--domain-id", type=int, default=0)
-    parser.add_argument(
-        "--robot",
-        choices=ROBOT_MODELS,
-        default=os.getenv("G1_ROBOT_MODEL", "g1"),
-        help="robot model to assemble; go2 uses SportClient and a reduced skill catalog",
-    )
     parser.add_argument(
         "--vision-generate-speech",
         action="store_true",
@@ -128,7 +117,7 @@ def parse_args() -> argparse.Namespace:
         "--vision-task",
         choices=("general", "social"),
         default="general",
-        help="social classifies gestures only; general exposes the skill catalog",
+        help="social uses task-driven decisions; both modes expose the full Go2 catalog",
     )
     parser.add_argument(
         "--vision-social-profile",
@@ -141,14 +130,6 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="disable Ollama thinking output for supported models such as Qwen3.5",
-    )
-    parser.add_argument(
-        "--include-operator-only-skills",
-        action="store_true",
-        help=(
-            "expose low-level and dangerous SDK controls to the policy; "
-            "disabled by default"
-        ),
     )
     parser.add_argument(
         "--policy",
@@ -239,7 +220,6 @@ def parse_args() -> argparse.Namespace:
         help="minimum interval before an identical action may execute again",
     )
     parser.add_argument("--no-audio", action="store_true")
-    parser.add_argument("--speaker-id", type=int, default=0)
     parser.add_argument("--camera-serial", help="D435i serial number")
     parser.add_argument(
         "--camera-python",
@@ -562,7 +542,6 @@ async def run_vision_perception_loop(
                         "threshold_m": safety_gate.stop_distance_m,
                         "interrupted_active_behavior": interrupted,
                         "scope": "mobile_base",
-                        "upper_body_actions_preserved": True,
                     },
                 )
             elif safety_transition == "released":
@@ -630,10 +609,10 @@ async def run_vision_perception_loop(
 
 async def _run(args: argparse.Namespace) -> int:
     hardware_robot: HardwareRobot | None = None
-    audio: UnitreeAudioOutput | None = None
+    audio: SpeechOutput | None = None
     vision_agent: VisionDecisionAgent | None = None
     robot: RobotAdapter
-    robot_model: RobotModel = args.robot
+    robot_model = "go2"
     if args.hardware:
         hardware_robot = create_hardware_robot(
             robot_model,
@@ -645,11 +624,7 @@ async def _run(args: argparse.Namespace) -> int:
         robot = create_simulated_robot(robot_model)
 
     runtime = SkillRuntime(robot)
-    include_operator_only = getattr(args, "include_operator_only_skills", False)
-    if robot_model == "go2":
-        register_go2_skills(runtime, include_operator_only=include_operator_only)
-    else:
-        register_g1_skills(runtime, include_operator_only=include_operator_only)
+    register_go2_skills(runtime)
     camera = RealSensePersonDetector(
         serial=args.camera_serial,
         width=args.width,
@@ -702,7 +677,7 @@ async def _run(args: argparse.Namespace) -> int:
                 args.max_decision_age_s if args.policy == "vision" else None
             ),
             "owners": list(_LOG_OWNERS),
-            "log_schema": "g1agent.log.v1",
+            "log_schema": "go2agent.log.v1",
         },
     )
 
@@ -735,11 +710,7 @@ async def _run(args: argparse.Namespace) -> int:
                     selected_model,
                     base_url=args.ollama_url,
                     output_schema=(
-                        (
-                            AgentDecision.model_json_schema()
-                            if robot_model == "go2"
-                            else TaskDrivenObservation.model_json_schema()
-                        )
+                        AgentDecision.model_json_schema()
                         if args.vision_task == "social"
                         else None
                     ),
@@ -767,11 +738,7 @@ async def _run(args: argparse.Namespace) -> int:
                 )
             elif args.vision_backend == "llamacpp":
                 llama_output_schema = (
-                    (
-                        AgentDecision.model_json_schema()
-                        if robot_model == "go2"
-                        else TaskDrivenObservation.model_json_schema()
-                    )
+                    AgentDecision.model_json_schema()
                     if args.vision_task == "social"
                     else None
                 )
@@ -801,10 +768,8 @@ async def _run(args: argparse.Namespace) -> int:
                         "generate_speech": args.vision_generate_speech,
                         "task_context": args.vision_goal,
                         "operator_instruction": args.vision_goal,
-                        "response_format": (
-                            "decision" if robot_model == "go2" else "json"
-                        ),
-                        "allow_operator_skills": include_operator_only,
+                        "response_format": "decision",
+                        "allow_operator_skills": True,
                     }
                     if args.vision_task == "social"
                     else {}
@@ -846,26 +811,15 @@ async def _run(args: argparse.Namespace) -> int:
                     "robot_model": robot_model,
                 },
             )
-            if robot_model == "go2":
-                if not args.no_audio:
-                    emit_log(
-                        owner="robot.audio",
-                        event_type="audio_skipped",
-                        data={
-                            "reason": "go2_has_no_g1_audio_client",
-                            "speaker_id": args.speaker_id,
-                        },
-                    )
-            elif not args.no_audio:
-                audio = UnitreeAudioOutput(
-                    hardware_robot,
-                    speaker_id=args.speaker_id,
+            if not args.no_audio:
+                audio = HostSpeechOutput(
+                    audio_device=os.getenv("GO2_AUDIO_DEVICE", "pulse"),
                 )
                 await audio.connect()
                 emit_log(
                     owner="robot.audio",
                     event_type="audio_ready",
-                    data={"speaker_id": args.speaker_id},
+                    data={"device": os.getenv("GO2_AUDIO_DEVICE", "pulse")},
                 )
         if decision_agent is not None:
             decision_loop = AutonomousDecisionLoop(

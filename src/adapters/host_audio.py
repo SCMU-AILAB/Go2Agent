@@ -8,8 +8,15 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Protocol
 
-from .unitree_audio import AudioOutputError
+
+class AudioOutputError(RuntimeError):
+    """Raised when host TTS initialization or playback fails."""
+
+
+class SpeechOutput(Protocol):
+    async def speak(self, text: str) -> None: ...
 
 
 class HostSpeechOutput:
@@ -63,56 +70,67 @@ class HostSpeechOutput:
         if not text:
             return
         async with self._audio_lock:
-            await asyncio.to_thread(self._speak_sync, text)
-
-    def _speak_sync(self, text: str) -> None:
-        with tempfile.TemporaryDirectory(prefix="go2-tts-") as temp_dir:
-            wav_path = Path(temp_dir) / "speech.wav"
-            try:
+            with tempfile.TemporaryDirectory(prefix="go2-tts-") as temp_dir:
+                wav_path = Path(temp_dir) / "speech.wav"
                 if self.engine == "piper":
-                    self._run_piper(text, wav_path)
+                    command = [
+                        self._piper_bin or "piper",
+                        "--model",
+                        self.piper_model or "",
+                        "--output_file",
+                        str(wav_path),
+                    ]
+                    if self.piper_config:
+                        command.extend(("--config", self.piper_config))
+                    await self._run_command(command, timeout_s=120, input_text=text)
                 else:
-                    self._run_espeak(text, wav_path)
-                subprocess.run(
+                    await self._run_command(
+                        [
+                            "espeak-ng", "-v", self.fallback_voice, "-s", "165",
+                            "-w", str(wav_path), text,
+                        ],
+                        timeout_s=60,
+                    )
+                await self._run_command(
                     ["aplay", "-q", "-D", self.audio_device, str(wav_path)],
-                    check=True,
-                    timeout=120,
+                    timeout_s=120,
                 )
-            except (OSError, subprocess.SubprocessError) as exc:
-                raise AudioOutputError(f"本地 TTS 播放失败：{exc}") from exc
 
-    def _run_piper(self, text: str, wav_path: Path) -> None:
-        command = [
-            self._piper_bin or "piper",
-            "--model",
-            self.piper_model or "",
-            "--output_file",
-            str(wav_path),
-        ]
-        if self.piper_config:
-            command.extend(["--config", self.piper_config])
-        subprocess.run(
-            command,
-            input=text,
-            text=True,
-            check=True,
-            capture_output=True,
-            timeout=120,
-        )
-
-    def _run_espeak(self, text: str, wav_path: Path) -> None:
-        subprocess.run(
-            [
-                "espeak-ng",
-                "-v",
-                self.fallback_voice,
-                "-s",
-                "165",
-                "-w",
-                str(wav_path),
-                text,
-            ],
-            check=True,
-            capture_output=True,
-            timeout=60,
-        )
+    @staticmethod
+    async def _run_command(
+        command: list[str], *, timeout_s: float, input_text: str | None = None
+    ) -> None:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as exc:
+            raise AudioOutputError(f"本地 TTS 启动失败：{exc}") from exc
+        try:
+            _, stderr = await asyncio.wait_for(
+                process.communicate(
+                    input_text.encode("utf-8") if input_text is not None else None
+                ),
+                timeout=timeout_s,
+            )
+        except (asyncio.CancelledError, TimeoutError) as exc:
+            if process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                except TimeoutError:
+                    process.kill()
+                    await process.wait()
+            if isinstance(exc, TimeoutError):
+                raise AudioOutputError(
+                    f"本地 TTS 命令超时：{command[0]}"
+                ) from exc
+            raise
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace")[:300]
+            raise AudioOutputError(
+                f"本地 TTS 命令失败 ({process.returncode}): {detail}"
+            )

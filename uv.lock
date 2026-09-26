@@ -322,7 +322,7 @@ wheels = [
 ]
 
 [[package]]
-name = "g1agent"
+name = "go2agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

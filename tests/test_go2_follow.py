@@ -103,15 +103,15 @@ class Go2FollowTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.gather(task, return_exceptions=True)
 
     async def test_lost_or_ambiguous_target_and_obstacle_stop_motion(self) -> None:
-        for unsafe in (
-            frame(count=2),
-            frame(obstacle=0.8),
+        for unsafe_args in (
+            {"count": 2},
+            {"obstacle": 0.2},
         ):
-            with self.subTest(unsafe=unsafe):
+            with self.subTest(unsafe=unsafe_args):
                 self.skill.observe_frame(frame())
                 task = asyncio.create_task(self.runtime.execute("follow_person"))
                 await asyncio.sleep(0.05)
-                self.skill.observe_frame(unsafe)
+                self.skill.observe_frame(frame(**unsafe_args))
                 result = await asyncio.wait_for(task, 1.0)
                 self.assertFalse(result.success)
                 self.assertEqual(self.robot.events[-1], ("stop", None))
@@ -122,6 +122,17 @@ class Go2FollowTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.05)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        self.assertEqual(self.robot.events[-1], ("stop", None))
+
+    async def test_person_miss_does_not_ignore_new_close_obstacle(self) -> None:
+        self.skill.observe_frame(frame())
+        task = asyncio.create_task(self.runtime.execute("follow_person"))
+        await asyncio.sleep(0.05)
+        self.skill.observe_frame(
+            frame(count=0, distance=None, center=None, obstacle=0.2)
+        )
+        result = await asyncio.wait_for(task, 1.0)
+        self.assertFalse(result.success)
         self.assertEqual(self.robot.events[-1], ("stop", None))
 
     async def test_hardware_requires_fresh_telemetry(self) -> None:

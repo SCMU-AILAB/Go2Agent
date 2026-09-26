@@ -2,23 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from collections.abc import Callable
-from unittest.mock import AsyncMock, patch
 
 from core.context import SkillContext
 from core.models import SkillArgs, SkillMetadata, SkillResult
 from core.registry import SkillRegistry
+from core.resources import ResourceManager
 from core.runtime import SkillRuntime
 from core.skill import RobotSkill
 from core.types import FailureCode, SkillStatus
-from robot.base import ActionVerification, RobotCommandError, RobotState
-from robot.unitree_adapter import (
-    UnitreeBindings,
-    UnitreeG1Adapter,
-    UnitreeG1Config,
-)
-from skills.motions import MoveBackwardSkill, WaveSkill
-from skills.motions.wave import WAVE_VERIFICATION_TIMEOUT_S
+from robot import SimulatedRobotAdapter
+from robot.base import RobotCommandError, RobotState
+from skills import register_go2_skills
+from tests.go2_helpers import go2_skill
 
 
 class FakeRobotAdapter:
@@ -29,18 +24,11 @@ class FakeRobotAdapter:
         connected: bool = False,
         wave_error: bool = False,
         move_error: bool = False,
-        wave_verification: ActionVerification | None = None,
     ) -> None:
         self.hardware = hardware
         self.connected = connected
         self.wave_error = wave_error
         self.move_error = move_error
-        self.wave_verification = wave_verification or ActionVerification(
-            completed=True,
-            observable=True,
-            message="wave completion verified",
-            details={"method": "fake"},
-        )
         self.waves: list[str] = []
         self.velocity_commands: list[tuple[float, float, float]] = []
         self.stop_count = 0
@@ -51,17 +39,10 @@ class FakeRobotAdapter:
     async def stop(self) -> None:
         self.stop_count += 1
 
-    async def wave(self, arm: str) -> None:
+    async def execute_loco_action(self, action: str, arguments=None) -> None:
         if self.wave_error:
-            raise RobotCommandError("wave command rejected")
-        self.waves.append(arm)
-
-    async def wait_for_wave_completion(
-        self,
-        arm: str,
-        timeout_s: float,
-    ) -> ActionVerification:
-        return self.wave_verification
+            raise RobotCommandError("hello command rejected")
+        self.waves.append(action)
 
     async def move_velocity(
         self,
@@ -69,9 +50,7 @@ class FakeRobotAdapter:
         lateral_m_s: float,
         yaw_rad_s: float,
     ) -> None:
-        self.velocity_commands.append(
-            (forward_m_s, lateral_m_s, yaw_rad_s)
-        )
+        self.velocity_commands.append((forward_m_s, lateral_m_s, yaw_rad_s))
         if self.move_error:
             raise RobotCommandError("move command rejected")
 
@@ -147,40 +126,54 @@ class VerificationSkill(RobotSkill[EmptyArgs]):
 
 
 class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
-    def test_wave_timeout_budget_includes_feedback_verification(self) -> None:
-        self.assertGreater(
-            WaveSkill.metadata.timeout_s,
-            10.0 + WAVE_VERIFICATION_TIMEOUT_S,
-        )
+    async def test_cancel_waiting_for_second_resource_releases_first(self) -> None:
+        resources = ResourceManager()
+        async with resources.acquire(("b",)):
+            async def wait_for_b() -> None:
+                async with resources.acquire(("a", "b")):
+                    pass
+
+            waiter = asyncio.create_task(wait_for_b())
+            await asyncio.sleep(0)
+            self.assertTrue(resources._locks["a"].locked())
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+        async with asyncio.timeout(0.1):
+            async with resources.acquire(("a",)):
+                pass
+
+    async def test_stop_preempts_active_motion(self) -> None:
+        robot = SimulatedRobotAdapter()
+        runtime = SkillRuntime(robot)
+        register_go2_skills(runtime)
+        moving = asyncio.create_task(runtime.execute("move", duration_s=1.0))
+        await asyncio.sleep(0.04)
+
+        stopped = await asyncio.wait_for(runtime.execute("stop"), 0.3)
+        self.assertTrue(stopped.success)
+        self.assertTrue(moving.done())
+        after_stop = len(robot.events)
+        await asyncio.sleep(0.05)
+        self.assertFalse(any(name == "move_velocity" for name, _ in robot.events[after_stop:]))
 
     async def test_wave_runs_through_runtime(self) -> None:
         robot = FakeRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(WaveSkill())
+        runtime.register(go2_skill("wave"))
 
-        result = await runtime.execute("wave", arm="right")
+        result = await runtime.execute("wave")
 
         self.assertTrue(result.success)
         self.assertEqual(result.status, SkillStatus.SUCCEEDED)
-        self.assertEqual(
-            result.data,
-            {
-                "arm": "right",
-                "command_accepted": True,
-                "completion_verified": True,
-            },
-        )
-        self.assertEqual(
-            result.verification,
-            {"observable": True, "completed": True, "method": "fake"},
-        )
-        self.assertEqual(robot.waves, ["right"])
+        self.assertEqual(result.data["sdk_action"], "hello")
+        self.assertEqual(result.verification, {})
+        self.assertEqual(robot.waves, ["hello"])
         self.assertIsNotNone(result.duration_s)
 
     async def test_wave_rejects_unsupported_arm(self) -> None:
         robot = FakeRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(WaveSkill())
+        runtime.register(go2_skill("wave"))
 
         result = await runtime.execute("wave", arm="left")
 
@@ -191,7 +184,7 @@ class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_wave_requires_connected_hardware(self) -> None:
         robot = FakeRobotAdapter(hardware=True, connected=False)
         runtime = SkillRuntime(robot)
-        runtime.register(WaveSkill())
+        runtime.register(go2_skill("wave"))
 
         result = await runtime.execute("wave")
 
@@ -202,31 +195,12 @@ class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_robot_error_is_structured_without_implicit_stop(self) -> None:
         robot = FakeRobotAdapter(wave_error=True)
         runtime = SkillRuntime(robot)
-        runtime.register(WaveSkill())
+        runtime.register(go2_skill("wave"))
 
         result = await runtime.execute("wave")
 
         self.assertEqual(result.failure_code, FailureCode.ROBOT_ERROR)
         self.assertEqual(robot.stop_count, 0)
-
-    async def test_wave_requires_observed_completion(self) -> None:
-        robot = FakeRobotAdapter(
-            wave_verification=ActionVerification(
-                completed=False,
-                observable=True,
-                message="wave completion feedback timed out",
-                details={"wave_observed": True},
-            )
-        )
-        runtime = SkillRuntime(robot)
-        runtime.register(WaveSkill())
-
-        result = await runtime.execute("wave")
-
-        self.assertFalse(result.success)
-        self.assertEqual(result.status, SkillStatus.VERIFICATION_FAILED)
-        self.assertEqual(result.failure_code, FailureCode.VERIFICATION_FAILED)
-        self.assertTrue(result.verification["wave_observed"])
 
     async def test_verify_runs_before_cleanup(self) -> None:
         runtime = SkillRuntime(FakeRobotAdapter())
@@ -270,25 +244,21 @@ class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_move_backward_is_bounded_and_always_stops(self) -> None:
         robot = FakeRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(MoveBackwardSkill())
+        runtime.register(go2_skill("move_backward"))
 
-        with patch(
-            "skills.motions.move_backward.asyncio.sleep",
-            new=AsyncMock(),
-        ):
-            result = await runtime.execute(
-                "move_backward",
-                distance_m=0.2,
-            )
+        result = await runtime.execute("move_backward", distance_m=0.05)
 
         self.assertTrue(result.success)
-        self.assertEqual(robot.velocity_commands, [(-0.2, 0.0, 0.0)])
+        self.assertGreater(len(robot.velocity_commands), 1)
+        self.assertTrue(
+            all(command == (-0.1, 0.0, 0.0) for command in robot.velocity_commands)
+        )
         self.assertEqual(robot.stop_count, 1)
 
     async def test_move_backward_stops_after_command_error(self) -> None:
         robot = FakeRobotAdapter(move_error=True)
         runtime = SkillRuntime(robot)
-        runtime.register(MoveBackwardSkill())
+        runtime.register(go2_skill("move_backward"))
 
         result = await runtime.execute("move_backward")
 
@@ -298,7 +268,7 @@ class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_move_backward_rejects_unsafe_distance(self) -> None:
         robot = FakeRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(MoveBackwardSkill())
+        runtime.register(go2_skill("move_backward"))
 
         result = await runtime.execute("move_backward", distance_m=2.0)
 
@@ -325,436 +295,7 @@ class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     def test_registry_rejects_duplicate_names(self) -> None:
         registry = SkillRegistry()
-        registry.register(WaveSkill())
+        registry.register(go2_skill("wave"))
 
         with self.assertRaisesRegex(ValueError, "duplicate skill"):
-            registry.register(WaveSkill())
-
-
-class FakeChannel:
-    def __init__(self) -> None:
-        self.initialize_calls: list[tuple[int, str]] = []
-        self.release_count = 0
-
-    def initialize(
-        self,
-        domain_id: int = 0,
-        network_interface: str = "",
-    ) -> None:
-        self.initialize_calls.append((domain_id, network_interface))
-
-    def release(self) -> None:
-        self.release_count += 1
-
-
-class FakeLocoClient:
-    def __init__(self) -> None:
-        self.timeout_s: float | None = None
-        self.init_count = 0
-        self.init_error: RuntimeError | None = None
-        self.fsm_status = 0
-        self.fsm_id = 500
-        self.wave_status = 0
-        self.wave_flags: list[bool] = []
-        self.stop_status = 0
-        self.stop_count = 0
-        self.move_status = 0
-        self.move_calls: list[tuple[float, float, float, bool]] = []
-
-    def set_timeout(self, seconds: float) -> None:
-        self.timeout_s = seconds
-
-    def init(self) -> None:
-        self.init_count += 1
-        if self.init_error is not None:
-            raise self.init_error
-
-    def get_fsm_id(self) -> tuple[int, int]:
-        return self.fsm_status, self.fsm_id
-
-    def wave_hand(self, turn_flag: bool = False) -> int:
-        self.wave_flags.append(turn_flag)
-        return self.wave_status
-
-    def stop_move(self) -> int:
-        self.stop_count += 1
-        return self.stop_status
-
-    def move(
-        self,
-        vx: float,
-        vy: float,
-        vyaw: float,
-        continous_move: bool,
-    ) -> int:
-        self.move_calls.append((vx, vy, vyaw, continous_move))
-        return self.move_status
-
-
-class PartialStateLocoClient(FakeLocoClient):
-    def get_fsm_mode(self) -> tuple[int, int]:
-        return 0, 3
-
-    def get_balance_mode(self) -> tuple[int, int]:
-        return 7301, 0
-
-
-class FakeArmActionClient:
-    def __init__(self) -> None:
-        self.timeout_s: float | None = None
-        self.init_count = 0
-        self.action_ids: list[int] = []
-        self.action_status = 0
-        self.on_execute: Callable[[int], None] | None = None
-
-    def set_timeout(self, seconds: float) -> None:
-        self.timeout_s = seconds
-
-    def init(self) -> None:
-        self.init_count += 1
-
-    def execute_action(self, action_id: int) -> int:
-        self.action_ids.append(action_id)
-        if self.action_status == 0 and self.on_execute is not None:
-            self.on_execute(action_id)
-        return self.action_status
-
-
-class FakeArmActionMonitor:
-    def __init__(self, callback: Callable[[str], None]) -> None:
-        self.callback = callback
-        self.init_count = 0
-        self.close_count = 0
-
-    def init_channel(self) -> None:
-        self.init_count += 1
-
-    def close_channel(self) -> None:
-        self.close_count += 1
-
-    def emit(self, payload: str) -> None:
-        self.callback(payload)
-
-
-class UnitreeG1AdapterTests(unittest.IsolatedAsyncioTestCase):
-    def build_adapter(
-        self,
-        channel: FakeChannel,
-        client: FakeLocoClient,
-    ) -> UnitreeG1Adapter:
-        return UnitreeG1Adapter(
-            UnitreeG1Config(
-                network_interface="eth0",
-                domain_id=7,
-                timeout_s=4.0,
-            ),
-            bindings=UnitreeBindings(
-                channel=channel,
-                create_loco_client=lambda: client,
-            ),
-        )
-
-    async def test_legacy_wave_succeeds_with_unverified_completion(self) -> None:
-        channel = FakeChannel()
-        client = FakeLocoClient()
-        adapter = self.build_adapter(channel, client)
-        runtime = SkillRuntime(adapter)
-        runtime.register(WaveSkill())
-
-        await adapter.connect()
-        result = await runtime.execute("wave", arm="right")
-        state = await adapter.get_state()
-        await adapter.close()
-
-        self.assertTrue(result.success)
-        self.assertFalse(result.data["completion_verified"])
-        self.assertFalse(result.verification["observable"])
-        self.assertEqual(channel.initialize_calls, [(7, "eth0")])
-        self.assertEqual(channel.release_count, 1)
-        self.assertEqual(client.timeout_s, 4.0)
-        self.assertEqual(client.init_count, 1)
-        self.assertEqual(client.wave_flags, [False])
-        self.assertEqual(client.stop_count, 0)
-        self.assertEqual(state.details, {"fsm_id": 500})
-        self.assertFalse(adapter.connected)
-
-    async def test_optional_loco_state_failure_does_not_block_state_read(self) -> None:
-        channel = FakeChannel()
-        client = PartialStateLocoClient()
-        adapter = self.build_adapter(channel, client)
-
-        await adapter.connect()
-        state = await adapter.get_state()
-        await adapter.close()
-
-        self.assertTrue(state.connected)
-        self.assertEqual(state.details["fsm_id"], 500)
-        self.assertEqual(state.details["fsm_mode"], 3)
-        self.assertEqual(
-            state.details["unavailable_state_fields"],
-            {
-                "balance_mode": {
-                    "status": 7301,
-                    "reason": "LocoState is not available",
-                }
-            },
-        )
-
-    async def test_wave_prefers_g1_arm_action_preset(self) -> None:
-        channel = FakeChannel()
-        loco = FakeLocoClient()
-        arm = FakeArmActionClient()
-        monitor: FakeArmActionMonitor | None = None
-
-        def create_monitor(callback: Callable[[str], None]) -> FakeArmActionMonitor:
-            nonlocal monitor
-            monitor = FakeArmActionMonitor(callback)
-
-            def publish_action_states(action_id: int) -> None:
-                if monitor is None:
-                    return
-                monitor.emit(
-                    f'{{"holding":false,"id":{action_id},"name":"face wave"}}'
-                )
-                monitor.emit(
-                    '{"holding":false,"id":99,"name":"release arm"}'
-                )
-
-            arm.on_execute = publish_action_states
-            return monitor
-
-        adapter = UnitreeG1Adapter(
-            UnitreeG1Config(network_interface="eth0"),
-            bindings=UnitreeBindings(
-                channel=channel,
-                create_loco_client=lambda: loco,
-                create_arm_action_client=lambda: arm,
-                create_arm_action_monitor=create_monitor,
-            ),
-        )
-        runtime = SkillRuntime(adapter)
-        runtime.register(WaveSkill())
-
-        await adapter.connect()
-        result = await runtime.execute("wave")
-        await adapter.close()
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.message, "wave completion verified")
-        self.assertEqual(result.verification["action_id"], 25)
-        self.assertEqual(arm.action_ids, [25])
-        self.assertEqual(loco.wave_flags, [])
-        self.assertIsNotNone(monitor)
-        if monitor is not None:
-            self.assertEqual(monitor.init_count, 1)
-            self.assertEqual(monitor.close_count, 1)
-
-    async def test_wave_succeeds_without_arm_action_monitor(self) -> None:
-        channel = FakeChannel()
-        loco = FakeLocoClient()
-        arm = FakeArmActionClient()
-        adapter = UnitreeG1Adapter(
-            UnitreeG1Config(network_interface="eth0"),
-            bindings=UnitreeBindings(
-                channel=channel,
-                create_loco_client=lambda: loco,
-                create_arm_action_client=lambda: arm,
-            ),
-        )
-        runtime = SkillRuntime(adapter)
-        runtime.register(WaveSkill())
-
-        await adapter.connect()
-        result = await runtime.execute("wave")
-        await adapter.close()
-
-        self.assertTrue(result.success)
-        self.assertFalse(result.data["completion_verified"])
-        self.assertFalse(result.verification["observable"])
-
-    async def test_idle_feedback_is_not_action_completion_feedback(self) -> None:
-        channel = FakeChannel()
-        loco = FakeLocoClient()
-        arm = FakeArmActionClient()
-
-        def create_monitor(callback: Callable[[str], None]) -> FakeArmActionMonitor:
-            monitor = FakeArmActionMonitor(callback)
-            arm.on_execute = lambda _: monitor.emit(
-                '{"holding":false,"id":0,"name":""}'
-            )
-            return monitor
-
-        adapter = UnitreeG1Adapter(
-            bindings=UnitreeBindings(
-                channel=channel,
-                create_loco_client=lambda: loco,
-                create_arm_action_client=lambda: arm,
-                create_arm_action_monitor=create_monitor,
-            )
-        )
-
-        adapter._connect_sync()
-        adapter._wave_sync()
-        verification = adapter._wait_for_wave_completion_sync(0.01)
-        adapter._close_sync()
-
-        self.assertFalse(verification.completed)
-        self.assertFalse(verification.observable)
-        self.assertFalse(verification.details["wave_observed"])
-
-    async def test_wave_fails_verification_when_another_action_interrupts(self) -> None:
-        channel = FakeChannel()
-        loco = FakeLocoClient()
-        arm = FakeArmActionClient()
-
-        def create_monitor(callback: Callable[[str], None]) -> FakeArmActionMonitor:
-            monitor = FakeArmActionMonitor(callback)
-
-            def publish_interruption(action_id: int) -> None:
-                monitor.emit(
-                    f'{{"holding":false,"id":{action_id},"name":"face wave"}}'
-                )
-                monitor.emit(
-                    '{"holding":false,"id":23,"name":"right hand up"}'
-                )
-                monitor.emit(
-                    '{"holding":false,"id":99,"name":"release arm"}'
-                )
-
-            arm.on_execute = publish_interruption
-            return monitor
-
-        adapter = UnitreeG1Adapter(
-            bindings=UnitreeBindings(
-                channel=channel,
-                create_loco_client=lambda: loco,
-                create_arm_action_client=lambda: arm,
-                create_arm_action_monitor=create_monitor,
-            )
-        )
-        runtime = SkillRuntime(adapter)
-        runtime.register(WaveSkill())
-
-        await adapter.connect()
-        result = await runtime.execute("wave")
-        await adapter.close()
-
-        self.assertEqual(result.status, SkillStatus.VERIFICATION_FAILED)
-        self.assertEqual(result.verification["interrupting_action_id"], 23)
-
-    async def test_arm_action_fsm_error_is_explained(self) -> None:
-        channel = FakeChannel()
-        loco = FakeLocoClient()
-        arm = FakeArmActionClient()
-        arm.action_status = 7404
-        adapter = UnitreeG1Adapter(
-            UnitreeG1Config(network_interface="eth0"),
-            bindings=UnitreeBindings(
-                channel=channel,
-                create_loco_client=lambda: loco,
-                create_arm_action_client=lambda: arm,
-            ),
-        )
-        runtime = SkillRuntime(adapter)
-        runtime.register(WaveSkill())
-
-        await adapter.connect()
-        result = await runtime.execute("wave")
-        await adapter.close()
-
-        self.assertFalse(result.success)
-        self.assertIn("FSM 500, 501, or 801", result.message)
-
-    async def test_disconnected_adapter_fails_wave_precondition(self) -> None:
-        channel = FakeChannel()
-        client = FakeLocoClient()
-        adapter = self.build_adapter(channel, client)
-        runtime = SkillRuntime(adapter)
-        runtime.register(WaveSkill())
-
-        result = await runtime.execute("wave")
-
-        self.assertEqual(result.status, SkillStatus.PRECONDITION_FAILED)
-        self.assertEqual(client.wave_flags, [])
-
-    async def test_wave_rejects_unsupported_fsm(self) -> None:
-        channel = FakeChannel()
-        client = FakeLocoClient()
-        client.fsm_id = 1
-        adapter = self.build_adapter(channel, client)
-        runtime = SkillRuntime(adapter)
-        runtime.register(WaveSkill())
-
-        await adapter.connect()
-        result = await runtime.execute("wave")
-        await adapter.close()
-
-        self.assertFalse(result.success)
-        self.assertIn("does not support arm actions", result.message)
-        self.assertEqual(client.wave_flags, [])
-
-    async def test_nonzero_wave_status_becomes_robot_error(self) -> None:
-        channel = FakeChannel()
-        client = FakeLocoClient()
-        client.wave_status = 42
-        adapter = self.build_adapter(channel, client)
-        runtime = SkillRuntime(adapter)
-        runtime.register(WaveSkill())
-        await adapter.connect()
-
-        result = await runtime.execute("wave")
-        await adapter.close()
-
-        self.assertEqual(result.failure_code, FailureCode.ROBOT_ERROR)
-        self.assertIn("SDK status 42", result.message)
-        self.assertEqual(client.stop_count, 0)
-
-    async def test_stop_is_an_explicit_sdk_command(self) -> None:
-        channel = FakeChannel()
-        client = FakeLocoClient()
-        adapter = self.build_adapter(channel, client)
-        await adapter.connect()
-
-        await adapter.stop()
-        await adapter.close()
-
-        self.assertEqual(client.stop_count, 1)
-
-    async def test_move_velocity_uses_noncontinuous_sdk_failsafe(self) -> None:
-        channel = FakeChannel()
-        client = FakeLocoClient()
-        adapter = self.build_adapter(channel, client)
-        await adapter.connect()
-
-        await adapter.move_velocity(-0.2, 0.0, 0.0)
-        await adapter.stop()
-        await adapter.close()
-
-        self.assertEqual(client.move_calls, [(-0.2, 0.0, 0.0, False)])
-        self.assertEqual(client.stop_count, 1)
-
-    async def test_connect_and_close_are_idempotent(self) -> None:
-        channel = FakeChannel()
-        client = FakeLocoClient()
-        adapter = self.build_adapter(channel, client)
-
-        await adapter.connect()
-        await adapter.connect()
-        await adapter.close()
-        await adapter.close()
-
-        self.assertEqual(channel.initialize_calls, [(7, "eth0")])
-        self.assertEqual(channel.release_count, 1)
-        self.assertEqual(client.init_count, 1)
-
-    async def test_connect_failure_releases_initialized_channel(self) -> None:
-        channel = FakeChannel()
-        client = FakeLocoClient()
-        client.init_error = RuntimeError("client init failed")
-        adapter = self.build_adapter(channel, client)
-
-        with self.assertRaisesRegex(RobotCommandError, "client init failed"):
-            await adapter.connect()
-
-        self.assertEqual(channel.release_count, 1)
-        self.assertFalse(adapter.connected)
+            registry.register(go2_skill("wave"))

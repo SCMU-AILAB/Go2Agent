@@ -6,10 +6,9 @@ from typing import Literal, Protocol, runtime_checkable
 
 from .go2_adapter import UnitreeGo2Adapter, UnitreeGo2Config
 from .simulated_adapter import SimulatedRobotAdapter
-from .unitree_adapter import UnitreeG1Adapter, UnitreeG1Config
 
-RobotModel = Literal["g1", "go2"]
-ROBOT_MODELS: tuple[RobotModel, ...] = ("g1", "go2")
+RobotModel = Literal["go2"]
+ROBOT_MODELS: tuple[RobotModel, ...] = ("go2",)
 
 
 @runtime_checkable
@@ -30,21 +29,14 @@ def create_hardware_robot(
     network_interface: str = "",
     domain_id: int = 0,
 ) -> HardwareRobot:
-    if model == "go2":
-        return UnitreeGo2Adapter(
-            UnitreeGo2Config(
-                network_interface=network_interface,
-                domain_id=domain_id,
-            )
+    if model != "go2":
+        raise ValueError(f"unsupported robot model: {model}; this project targets Go2")
+    return UnitreeGo2Adapter(
+        UnitreeGo2Config(
+            network_interface=network_interface,
+            domain_id=domain_id,
         )
-    if model == "g1":
-        return UnitreeG1Adapter(
-            UnitreeG1Config(
-                network_interface=network_interface,
-                domain_id=domain_id,
-            )
-        )
-    raise ValueError(f"unsupported robot model: {model}")
+    )
 
 
 def create_simulated_robot(model: RobotModel) -> SimulatedRobotAdapter:

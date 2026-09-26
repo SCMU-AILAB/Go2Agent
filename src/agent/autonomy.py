@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from adapters.unitree_audio import SpeechOutput
+from adapters.host_audio import SpeechOutput
 from core.models import SkillResult
 from core.runtime import SkillRuntime
 from perception import EventDetector, PerceptionResult, WorldEvent, WorldState

@@ -1,4 +1,4 @@
-# G1 机器人控制台（Flutter）
+# Go2 机器人控制台（Flutter）
 
 > 任务模式更新：新版控制台默认「文本指令」，开启真实相机也可发送比心、坐下等指令；
 > 「持续视觉交互」需单独选择。下文 local 自动进入视觉模式的说明仅适用于未传 taskMode 的旧客户端。
@@ -22,7 +22,8 @@
 其中本地相机任务由 `SocialVisionAgent`/`VisionPolicyWorker` 驱动，不经过文本
 `RobotAgent`。Go2 每轮将最近视频窗口、任务、技能目录、机器人状态和上次执行结果
 发给视觉模型，模型可选择执行、说话、继续、打断或忽略；动作仍经过本地 SkillRuntime。
-系统提示词不能注册新技能，也不能绕过未启用的 operator-only 目录。
+视觉 Agent 与文本 Agent 使用同一个完整 Go2 技能目录；每次执行仍经过后端
+SkillRuntime 的参数、资源和适配器校验。
 选择模拟视频源则维持一次性文本任务，不会把模拟背景当成真实图像传给VLM。
 
 ## 项目结构
@@ -59,21 +60,21 @@ test/
 保持云端 Ollama 服务及原 SSH 隧道运行（已有隧道时不要重复启动）：
 
 ```bash
-cd ~/G1Agent
+cd ~/Go2Agent
 sh scripts/remote-vision-tunnel.sh
 ```
 
 另一个终端启动后端，先使用模拟机器人与真实相机：
 
 ```bash
-cd ~/G1Agent
+cd ~/Go2Agent
 .venv/bin/python -m app.api --camera-source local \
   --vision-model qwen3.5:9b --vision-url http://127.0.0.1:11435 --no-audio
 ```
 
 前端在同一台主机上可运行 `flutter run -d chrome`。若前端在另一台主机，后端
 需要在受信任局域网监听（`--host 0.0.0.0`），前端传入
-`--dart-define=G1_API_BASE_URL=http://ROBOT_IP:8000`。这是**控制台API地址**，
+`--dart-define=GO2_API_BASE_URL=http://ROBOT_IP:8000`。这是**控制台API地址**，
 不是云端Ollama地址；后者只在后端用 `--vision-url` 配置。
 
 界面选择“本地相机”，填写交互偏好，点击“开始持续视觉交互”。仅打开相机预览不会
@@ -100,14 +101,14 @@ API目前无身份认证，仅限可信网络，不能开放到公网。
 先启动默认模拟后端：
 
 ```bash
-cd ~/G1Agent
-uv run g1-api
+cd ~/Go2Agent
+uv run go2-api
 ```
 
 再启动前端：
 
 ```bash
-cd ~/G1Agent/frontend
+cd ~/Go2Agent/frontend
 flutter run -d chrome
 ```
 
@@ -121,14 +122,14 @@ flutter run -d macos
 
 ```bash
 flutter run -d chrome \
-  --dart-define=G1_API_BASE_URL=http://ROBOT_IP:8000
+  --dart-define=GO2_API_BASE_URL=http://ROBOT_IP:8000
 ```
 
 真机和 D435i 后端示例：
 
 ```bash
-cd ~/G1Agent
-uv run g1-api \
+cd ~/Go2Agent
+uv run go2-api \
   --hardware \
   --network eth0 \
   --camera-source local \

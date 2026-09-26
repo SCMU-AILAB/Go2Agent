@@ -1,11 +1,11 @@
 {
-  "name": "G1 机器人控制台",
-  "short_name": "G1 控制台",
+  "name": "Go2 机器人控制台",
+  "short_name": "Go2 控制台",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#F3F5F9",
   "theme_color": "#F3F5F9",
-  "description": "G1 机器人控制台 Flutter 前端 Demo",
+  "description": "Go2 机器人控制台 Flutter Demo",
   "orientation": "any",
   "prefer_related_applications": false,
   "icons": [

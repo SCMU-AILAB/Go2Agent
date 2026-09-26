@@ -1,4 +1,4 @@
-"""G1 high-level posture skills exposed by LocoClient."""
+"""Go2 high-level posture skills exposed by SportClient."""
 
 from __future__ import annotations
 
@@ -20,40 +20,6 @@ class PostureSpec:
     description: str
     operator_only: bool = False
     dangerous: bool = False
-
-
-POSTURE_SPECS = (
-    PostureSpec("squat", "squat", "Enter the G1 squat posture."),
-    PostureSpec("sit", "sit", "Enter the G1 sitting posture."),
-    PostureSpec("stand_up", "stand_up", "Stand up using the G1 controller."),
-    PostureSpec("high_stand", "high_stand", "Use the high standing height."),
-    PostureSpec("low_stand", "low_stand", "Use the low standing height."),
-    PostureSpec(
-        "balance_stand",
-        "balance_stand",
-        "Enter balanced standing mode.",
-    ),
-    PostureSpec(
-        "start",
-        "start",
-        "Switch the G1 controller to FSM 500.",
-        operator_only=True,
-    ),
-    PostureSpec(
-        "damp",
-        "damp",
-        "Switch the G1 controller to damping mode.",
-        operator_only=True,
-        dangerous=True,
-    ),
-    PostureSpec(
-        "zero_torque",
-        "zero_torque",
-        "Disable commanded joint torque through FSM 0.",
-        operator_only=True,
-        dangerous=True,
-    ),
-)
 
 
 class PostureSkill(RobotSkill[PostureArgs]):
@@ -97,21 +63,8 @@ class PostureSkill(RobotSkill[PostureArgs]):
         )
 
 
-def build_posture_skills(
-    *,
-    operator_only: bool,
-) -> tuple[PostureSkill, ...]:
-    return tuple(
-        PostureSkill(spec)
-        for spec in POSTURE_SPECS
-        if spec.operator_only is operator_only
-    )
-
-
 __all__ = [
-    "POSTURE_SPECS",
     "PostureArgs",
     "PostureSkill",
     "PostureSpec",
-    "build_posture_skills",
 ]

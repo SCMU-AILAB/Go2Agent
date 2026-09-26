@@ -51,6 +51,13 @@ class LocalVoiceCommandAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(move.skill, "move_left")
         self.assertEqual(turn.skill, "turn_left")
 
+    async def test_negated_motion_commands_do_not_execute(self) -> None:
+        agent, robot = self.build_agent()
+        for phrase in ("不要前进", "别向前走", "不要坐下", "请不要停止"):
+            reply = await agent.chat(phrase)
+            self.assertIn("没有识别到明确动作", reply)
+        self.assertEqual(robot.events, [])
+
 
 if __name__ == "__main__":
     unittest.main()

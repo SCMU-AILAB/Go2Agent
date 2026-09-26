@@ -1,1 +1,1 @@
-"""Application entry points for the G1 Agent."""
+"""Application entry points for the Go2 Agent."""

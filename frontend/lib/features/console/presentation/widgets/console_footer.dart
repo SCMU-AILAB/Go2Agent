@@ -43,7 +43,7 @@ class ConsoleFooter extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
-                  'AI Robotics Mission Control · G1 / Go2',
+                  'AI Robotics Mission Control · Go2',
                   style: TextStyle(color: ConsoleColors.faint, fontSize: 10),
                 ),
                 text,

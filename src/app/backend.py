@@ -20,14 +20,13 @@ from adapters import (
     HostSpeechOutput,
     SpeechOutput,
     SpeechRecognizer,
-    UnitreeAudioOutput,
 )
 from adapters.langchain import SkillToolObserver
 from agent import AgentError, LocalVoiceCommandAgent, RobotAgent
 from agent.decision import AgentDecision
 from agent.llamacpp_vision import LlamaCppVisionInvoker
 from agent.service import system_prompt_for
-from agent.social_vision import SocialVisionAgent, TaskDrivenObservation
+from agent.social_vision import SocialVisionAgent
 from agent.unifolm_vision import UnifolmVisionInvoker
 from agent.vision_policy import OllamaVisionInvoker, VisionPolicyWorker
 from core.runtime import SkillRuntime
@@ -41,11 +40,10 @@ from robot import (
     HardwareRobot,
     RobotAdapter,
     RobotCommandError,
-    RobotModel,
     create_hardware_robot,
     create_simulated_robot,
 )
-from skills import register_g1_skills, register_go2_skills
+from skills import register_go2_skills
 
 from .perception import _DepthSafetyGate
 
@@ -171,14 +169,12 @@ type SpeechFactory = Callable[[asyncio.Lock], SpeechOutput]
 @dataclass(frozen=True, slots=True)
 class BackendConfig:
     hardware: bool = False
-    robot_model: RobotModel = "g1"
+    robot_model: Literal["go2"] = "go2"
     network_interface: str = ""
     domain_id: int = 0
-    include_operator_only_skills: bool = False
     model_name: str | None = None
     ollama_url: str | None = None
     audio_enabled: bool = True
-    speaker_id: int = 0
     host_audio_device: str | None = None
     host_tts_voice: str = "cmn"
     voice_enabled: bool = False
@@ -209,6 +205,8 @@ class BackendConfig:
     vision_confirm_hold_s: float = 0.5
 
     def __post_init__(self) -> None:
+        if self.robot_model != "go2":
+            raise ValueError("this project supports Go2 only")
         if self.vision_rotation_deg not in (0, 90, 180, 270):
             raise ValueError("invalid vision rotation")
         if not (0.0 <= float(self.vision_confirm_hold_s) <= 30.0):
@@ -217,8 +215,6 @@ class BackendConfig:
             raise ValueError("camera detection FPS must be positive")
         if self.voice_record_seconds < 0.5:
             raise ValueError("voice record window must be at least 0.5 seconds")
-        if self.voice_agent_backend == "vision" and self.robot_model != "go2":
-            raise ValueError("vision voice goals currently require Go2")
         if (
             self.vision_max_age_s <= 0
             or self.vision_window_s <= 0
@@ -277,25 +273,16 @@ class ConsoleBackend(SkillToolObserver):
             self.robot = robot
         elif self.config.hardware:
             self.hardware_robot = create_hardware_robot(
-                self.config.robot_model,
+                "go2",
                 network_interface=self.config.network_interface,
                 domain_id=self.config.domain_id,
             )
             self.robot = self.hardware_robot
         else:
-            self.robot = create_simulated_robot(self.config.robot_model)
+            self.robot = create_simulated_robot("go2")
 
         self.runtime = SkillRuntime(self.robot)
-        if self.config.robot_model == "go2":
-            register_go2_skills(
-                self.runtime,
-                include_operator_only=self.config.include_operator_only_skills,
-            )
-        else:
-            register_g1_skills(
-                self.runtime,
-                include_operator_only=self.config.include_operator_only_skills,
-            )
+        register_go2_skills(self.runtime)
         self._agent_factory = agent_factory or self._build_agent
         self._camera_factory = camera_factory or self._build_camera
         self._vision_agent_factory = vision_agent_factory or self._build_vision_agent
@@ -318,13 +305,14 @@ class ConsoleBackend(SkillToolObserver):
         self._active_task: asyncio.Task[None] | None = None
         self._lifecycle_lock = asyncio.Lock()
         self._task_lock = asyncio.Lock()
+        self._emergency_latched = False
         self.events = EventHub()
 
         self.backend = False
         self.starting = False
         self.busy = False
         self.prompt_saved = True
-        self.system_prompt = system_prompt_for(self.config.robot_model)
+        self.system_prompt = system_prompt_for("go2")
         self.session_id = "—"
         self.task_id: str | None = None
         self.camera_source: Literal["demo", "local"] = self.config.camera_source
@@ -389,11 +377,7 @@ class ConsoleBackend(SkillToolObserver):
                 base_url=self.config.vision_url,
                 max_new_tokens=160,
                 timeout_s=120,
-                output_schema=(
-                    AgentDecision.model_json_schema()
-                    if self.config.robot_model == "go2"
-                    else TaskDrivenObservation.model_json_schema()
-                ),
+                output_schema=AgentDecision.model_json_schema(),
             )
         else:
             invoker = OllamaVisionInvoker(
@@ -409,10 +393,8 @@ class ConsoleBackend(SkillToolObserver):
             generate_speech=True,
             task_context=f"{self.system_prompt}\nCurrent task: {instruction}",
             operator_instruction=instruction,
-            response_format=(
-                "decision" if self.config.robot_model == "go2" else "json"
-            ),
-            allow_operator_skills=self.config.include_operator_only_skills,
+            response_format="decision",
+            allow_operator_skills=True,
             confirm_hold_s=self.vision_confirm_hold_s,
             timeout_s=120,
             invoker=invoker,
@@ -467,6 +449,7 @@ class ConsoleBackend(SkillToolObserver):
         async with self._lifecycle_lock:
             if self.backend:
                 return self.snapshot()
+            self._emergency_latched = False
             self.starting = True
             await self._log("INFO", "backend", "正在初始化后端服务。")
             self._emit_state()
@@ -480,22 +463,15 @@ class ConsoleBackend(SkillToolObserver):
                     self.robot_details = dict(state.details)
 
                 if self.config.audio_enabled:
-                    if self.config.robot_model == "go2":
-                        self._audio = self._speech_factory(self._audio_io_lock)
-                        connect = getattr(self._audio, "connect", None)
-                        if callable(connect):
-                            await connect()
-                        await self._log(
-                            "INFO",
-                            "audio",
-                            "Go2 已启用主机本地 TTS，输出到外接扬声器。",
-                        )
-                    elif self.hardware_robot is not None:
-                        self._audio = UnitreeAudioOutput(
-                            self.hardware_robot,
-                            speaker_id=self.config.speaker_id,
-                        )
-                        await self._audio.connect()
+                    self._audio = self._speech_factory(self._audio_io_lock)
+                    connect = getattr(self._audio, "connect", None)
+                    if callable(connect):
+                        await connect()
+                    await self._log(
+                        "INFO",
+                        "audio",
+                        "Go2 已启用主机本地 TTS，输出到外接扬声器。",
+                    )
 
                 self._agent = self._agent_factory(
                     self.runtime,
@@ -517,7 +493,7 @@ class ConsoleBackend(SkillToolObserver):
                 self.skill_status = "IDLE"
                 self._heartbeat_task = asyncio.create_task(
                     self._heartbeat_loop(),
-                    name="g1-console-heartbeat",
+                    name="go2-console-heartbeat",
                 )
                 if self.camera_source == "local":
                     try:
@@ -529,7 +505,7 @@ class ConsoleBackend(SkillToolObserver):
                 if self.config.voice_enabled:
                     await self.start_voice()
                 mode = "真机" if self.config.hardware else "模拟"
-                model_label = "Go2" if self.config.robot_model == "go2" else "G1"
+                model_label = "Go2"
                 await self._log(
                     "INFO",
                     "backend",
@@ -550,6 +526,7 @@ class ConsoleBackend(SkillToolObserver):
     async def stop(self) -> ConsoleSnapshot:
         async with self._lifecycle_lock:
             await self.cancel_task("后端服务已停止")
+            await self.runtime.cancel_active()
             await self._close_resources()
             self.backend = False
             self.starting = False
@@ -586,6 +563,8 @@ class ConsoleBackend(SkillToolObserver):
         self._voice_agent = None
 
     async def start_voice(self) -> ConsoleSnapshot:
+        if self._emergency_latched:
+            raise TaskConflict("emergency stop is latched; restart the session")
         if not self.backend or (
             self._voice_agent is None and self.config.voice_agent_backend != "vision"
         ):
@@ -679,7 +658,10 @@ class ConsoleBackend(SkillToolObserver):
                     self.voice_status = "thinking"
                     self._emit_state()
                     await self._log("INFO", "voice.stt", f"识别到：{text}")
-                    if self.config.voice_agent_backend == "vision":
+                    if self._is_voice_stop(text):
+                        await self.cancel_task("语音停止指令")
+                        reply = "好的，已停止当前任务。"
+                    elif self.config.voice_agent_backend == "vision":
                         reply = await self._route_voice_goal_to_vision(text)
                     else:
                         agent = self._voice_agent
@@ -718,11 +700,7 @@ class ConsoleBackend(SkillToolObserver):
             self._emit_state()
 
     async def _route_voice_goal_to_vision(self, text: str) -> str:
-        normalized = text.strip().lower().strip("。！？,.!?")
-        if normalized in {
-            "停", "停止", "停下", "停下来", "别动", "急停", "stop",
-            "停止跟随", "别跟了", "不要跟了", "别再跟了",
-        }:
+        if self._is_voice_stop(text):
             await self.cancel_task("语音停止指令")
             return "好的，已停止当前任务。"
         if self.camera_source != "local" or self.camera_status != "ready":
@@ -731,6 +709,14 @@ class ConsoleBackend(SkillToolObserver):
             await self.cancel_task("收到新的语音目标")
         await self.submit_task(text, camera_source="local", task_mode="gesture")
         return "好的，我会持续观察并按目标行动。"
+
+    @staticmethod
+    def _is_voice_stop(text: str) -> bool:
+        normalized = text.strip().lower().strip("。！？,.!?")
+        return normalized in {
+            "停", "停止", "停下", "停下来", "别动", "急停", "stop",
+            "停止跟随", "别跟了", "不要跟了", "别再跟了",
+        }
 
     async def update_system_prompt(self, prompt: str) -> ConsoleSnapshot:
         prompt = prompt.strip()
@@ -797,7 +783,7 @@ class ConsoleBackend(SkillToolObserver):
         self.camera_status = "ready"
         self._camera_task = asyncio.create_task(
             self._camera_loop(camera),
-            name="g1-console-camera",
+            name="go2-console-camera",
         )
 
     async def _stop_camera(self) -> None:
@@ -879,7 +865,7 @@ class ConsoleBackend(SkillToolObserver):
             return
         self._safety_stop_task = asyncio.create_task(
             self._handle_depth_safety_stop(worker),
-            name="g1-console-depth-safety-stop",
+            name="go2-console-depth-safety-stop",
         )
 
     async def _handle_depth_safety_stop(
@@ -951,6 +937,8 @@ class ConsoleBackend(SkillToolObserver):
         if not self.backend or self._agent is None:
             raise BackendNotRunning("backend session is not running")
         async with self._task_lock:
+            if self._emergency_latched:
+                raise TaskConflict("emergency stop is latched; restart the session")
             if self.busy:
                 raise TaskConflict("another task is already running")
             # Omitted mode preserves legacy clients; new clients choose explicitly.
@@ -978,7 +966,7 @@ class ConsoleBackend(SkillToolObserver):
             self.tools.clear()
             self._active_task = asyncio.create_task(
                 self._run_task(self.task_id, instruction, mode),
-                name=f"g1-console-task-{self.task_id[:8]}",
+                name=f"go2-console-task-{self.task_id[:8]}",
             )
         await self._log(
             "INFO",
@@ -1106,10 +1094,8 @@ class ConsoleBackend(SkillToolObserver):
                 "INFO",
                 "vision",
                 (
-                    "Go2 视觉 Agent：VLM 按任务、画面和执行结果从技能目录选择；"
+                    "Go2 视觉 Agent：VLM 按任务、画面和执行结果从完整技能目录选择；"
                     "未注册技能会被拒绝。"
-                    if self.config.robot_model == "go2"
-                    else "手势模式：VLM 按任务与技能目录决策；其他动作请选文本指令。"
                 ),
             )
             while True:
@@ -1179,6 +1165,7 @@ class ConsoleBackend(SkillToolObserver):
         task = self._active_task
         if task is None or task.done():
             # Still issue a robot stop so e-stop works while idle after a motion.
+            await self.runtime.cancel_active()
             try:
                 await self.robot.stop()
             except (RobotCommandError, RuntimeError) as exc:
@@ -1187,6 +1174,7 @@ class ConsoleBackend(SkillToolObserver):
         self._active_task = None
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        await self.runtime.cancel_active()
         try:
             await self.robot.stop()
         except (RobotCommandError, RuntimeError) as exc:
@@ -1202,7 +1190,11 @@ class ConsoleBackend(SkillToolObserver):
 
     async def emergency_stop(self, reason: str = "操作员急停") -> ConsoleSnapshot:
         """Hard stop: cancel vision/task workers and command robot stop_move."""
+        self._emergency_latched = True
         await self._log("WARN", "executor", reason)
+        voice = self._voice_task
+        if voice is not None:
+            voice.cancel()
         worker = self._vision_worker
         if worker is not None:
             try:
@@ -1214,18 +1206,24 @@ class ConsoleBackend(SkillToolObserver):
             self._active_task = None
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        await self.runtime.cancel_active()
+        stop_error: Exception | None = None
         try:
             await self.robot.stop()
         except (RobotCommandError, RuntimeError) as exc:
+            stop_error = exc
             await self._log("ERROR", "executor", f"急停发送 stop 失败：{exc}")
+        await self.stop_voice()
         self.busy = False
-        self.skill_status = "STOPPED"
-        self.model_status = "急停"
-        self.progress_text = "已急停"
-        self.skill_name = "已急停"
+        self.skill_status = "FAILED" if stop_error else "STOPPED"
+        self.model_status = "急停失败" if stop_error else "急停"
+        self.progress_text = "停止命令失败" if stop_error else "已急停"
+        self.skill_name = "急停失败" if stop_error else "已急停"
         self.progress = 0
         self.model_output += f"\n\n【急停】{reason}"
         self._emit_state()
+        if stop_error is not None:
+            raise RobotCommandError(f"Go2 stop command failed: {stop_error}") from stop_error
         return self.snapshot()
 
     async def update_vision_confirm_hold(self, seconds: float) -> ConsoleSnapshot:
@@ -1249,11 +1247,15 @@ class ConsoleBackend(SkillToolObserver):
         skill_name: str,
         arguments: dict[str, object],
     ) -> dict[str, object]:
+        if self._emergency_latched:
+            raise TaskConflict("emergency stop is latched; restart the session")
         if not self.backend:
             raise BackendNotRunning("backend session is not running")
         if self.busy:
             raise TaskConflict("another task is already running")
         await self.before_skill(skill_name, arguments)
+        if self._emergency_latched:
+            raise TaskConflict("emergency stop is latched; restart the session")
         result = await self.runtime.execute(skill_name, **arguments)
         payload = result.to_dict()
         await self.after_skill(skill_name, arguments, payload)

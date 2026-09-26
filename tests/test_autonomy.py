@@ -5,7 +5,6 @@ import json
 import unittest
 from collections.abc import Mapping
 from typing import cast
-from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
@@ -23,7 +22,7 @@ from core.runtime import SkillRuntime
 from core.skill import RobotSkill
 from perception import PerceptionResult, WorldEvent, WorldEventType, WorldState
 from robot import SimulatedRobotAdapter
-from skills.motions import MoveBackwardSkill, WaveSkill
+from tests.go2_helpers import go2_skill
 
 
 class FakeDecisionInvoker:
@@ -56,7 +55,7 @@ class ScriptedDecisionAgent:
             return AgentDecision(
                 action="execute_and_speak",
                 skill="wave",
-                arguments={"arm": "right"},
+                arguments={},
                 speech="你好！",
                 reason="new person",
             )
@@ -64,7 +63,7 @@ class ScriptedDecisionAgent:
             return AgentDecision(
                 action="execute_and_speak",
                 skill="move_backward",
-                arguments={"distance_m": 0.2},
+                arguments={"distance_m": 0.05},
                 speech="请稍微保持一点距离。",
                 reason="person is too close",
             )
@@ -105,6 +104,24 @@ def observation(at_s: float, distance_m: float) -> PerceptionResult:
 
 
 class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
+    def test_explicit_noop_and_interrupt_cannot_become_actions(self) -> None:
+        for action in ("ignore", "continue", "interrupt", "stop", "keep", "none"):
+            decision = AgentDecision.model_validate(
+                {"action": action, "skill": "front_flip", "arguments": {"flag": True}}
+            )
+            expected = {"stop": "interrupt", "keep": "continue", "none": "ignore"}.get(
+                action, action
+            )
+            self.assertEqual(decision.action, expected)
+            self.assertIsNone(decision.skill)
+            self.assertEqual(decision.arguments, {})
+
+        spoken = AgentDecision.model_validate(
+            {"action": "speak", "skill": "front_flip", "speech": "你好"}
+        )
+        self.assertEqual(spoken.action, "speak")
+        self.assertIsNone(spoken.skill)
+
     def test_normalizes_multimodal_tool_name_inside_arguments(self) -> None:
         decision = AgentDecision.model_validate(
             {
@@ -117,8 +134,8 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_decision_prompt_is_built_from_registry_catalog(self) -> None:
         runtime = SkillRuntime(SimulatedRobotAdapter())
-        runtime.register(WaveSkill())
-        runtime.register(MoveBackwardSkill())
+        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("move_backward"))
 
         prompt = build_decision_system_prompt(runtime.registry.list())
 
@@ -142,7 +159,7 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "action": "wave",
                 "skill": "wave",
-                "arguments": {"arm": "right"},
+                "arguments": {},
                 "speech": "您好！",
             }
         )
@@ -151,9 +168,7 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.skill, "wave")
 
     def test_decision_infers_skill_from_compact_action(self) -> None:
-        decision = AgentDecision.model_validate(
-            {"action": "wave", "arguments": {"arm": "right"}}
-        )
+        decision = AgentDecision.model_validate({"action": "wave", "arguments": {}})
 
         self.assertEqual(decision.action, "execute_skill")
         self.assertEqual(decision.skill, "wave")
@@ -171,7 +186,7 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "action": "execute_skill",
                 "skill": "wave",
-                "arguments": {"arm": "right"},
+                "arguments": {},
                 "speech": "您好，欢迎来到我们的机器人！",
             }
         )
@@ -185,13 +200,13 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "action": "wave",
                     "skill": "wave",
-                    "arguments": {"arm": "right"},
+                    "arguments": {},
                     "speech": "您好！",
                 }
             ),
             skill_catalog=cast(
                 tuple[RobotSkill[SkillArgs], ...],
-                (WaveSkill(),),
+                (go2_skill("wave"),),
             ),
         )
         event = WorldEvent(type=WorldEventType.PERSON_ENTERED, timestamp_s=1.0)
@@ -206,7 +221,7 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "action": "execute_and_speak",
                 "skill": "wave",
-                "arguments": {"arm": "right"},
+                "arguments": {},
                 "speech": "你好！",
             }
         )
@@ -234,7 +249,7 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
             ),
             skill_catalog=cast(
                 tuple[RobotSkill[SkillArgs], ...],
-                (WaveSkill(),),
+                (go2_skill("wave"),),
             ),
         )
         event = WorldEvent(
@@ -283,8 +298,8 @@ class AutonomousDecisionLoopTests(unittest.IsolatedAsyncioTestCase):
     ]:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(WaveSkill())
-        runtime.register(MoveBackwardSkill())
+        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("move_backward"))
         agent = ScriptedDecisionAgent()
         speech = FakeSpeechOutput()
         return (
@@ -306,7 +321,7 @@ class AutonomousDecisionLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(first[0].speech_spoken)
         self.assertEqual(repeated, ())
         self.assertTrue(loop.world_state.person_greeted)
-        self.assertEqual(robot.events, [("wave", "right")])
+        self.assertEqual(robot.events, [("loco_action", ("hello", {}))])
         self.assertEqual(speech.messages, ["你好！"])
         self.assertEqual(len(agent.calls), 1)
         self.assertFalse(agent.calls[0][1]["person_greeted"])
@@ -368,25 +383,14 @@ class AutonomousDecisionLoopTests(unittest.IsolatedAsyncioTestCase):
         loop, robot, agent, speech = self.build_loop()
         await loop.process(observation(1.0, 2.0))
 
-        with patch(
-            "skills.motions.move_backward.asyncio.sleep",
-            new=AsyncMock(),
-        ):
-            outcomes = await loop.process(observation(2.0, 0.6))
+        outcomes = await loop.process(observation(2.0, 0.6))
 
         self.assertEqual(len(outcomes), 1)
         self.assertEqual(outcomes[0].decision.skill, "move_backward")
-        self.assertTrue(
-            outcomes[0].skill_result and outcomes[0].skill_result.success
-        )
-        self.assertEqual(
-            robot.events,
-            [
-                ("wave", "right"),
-                ("move_velocity", (-0.2, 0.0, 0.0)),
-                ("stop", None),
-            ],
-        )
+        self.assertTrue(outcomes[0].skill_result and outcomes[0].skill_result.success)
+        self.assertEqual(robot.events[0], ("loco_action", ("hello", {})))
+        self.assertIn(("move_velocity", (-0.1, 0.0, 0.0)), robot.events)
+        self.assertEqual(robot.events[-1], ("stop", None))
         self.assertEqual(
             speech.messages,
             ["你好！", "请稍微保持一点距离。"],

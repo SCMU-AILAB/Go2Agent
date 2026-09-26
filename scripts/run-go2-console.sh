@@ -7,7 +7,7 @@ export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 export NO_PROXY="127.0.0.1,localhost,${GO2_VISION_HOST:-192.168.31.112}${NO_PROXY:+,$NO_PROXY}"
 export no_proxy="$NO_PROXY"
 exec .venv/bin/python -m app.api \
-  --robot go2 --hardware --network "${GO2_NETWORK:-eth0}" \
+  --hardware --network "${GO2_NETWORK:-eth0}" \
   --camera-source local --vision-rotation-deg 0 \
   --vision-backend "${GO2_VISION_BACKEND:-unifolm}" \
   --vision-model "${GO2_VISION_MODEL:-unitreerobotics/UnifoLM-ER-1}" \

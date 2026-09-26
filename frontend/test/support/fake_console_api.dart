@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:g1_frontend/features/console/models/console_snapshot.dart';
-import 'package:g1_frontend/features/console/services/console_api.dart';
+import 'package:go2_frontend/features/console/models/console_snapshot.dart';
+import 'package:go2_frontend/features/console/services/console_api.dart';
 
 Map<String, dynamic> consolePayload({
   bool backend = false,
@@ -103,7 +103,7 @@ class FakeConsoleApi implements ConsoleApi {
     : _payload = initialPayload ?? consolePayload();
 
   @override
-  final Uri baseUri = Uri.parse('http://g1.test:8000');
+  final Uri baseUri = Uri.parse('http://go2.test:8000');
 
   final StreamController<Map<String, dynamic>> _events =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -117,6 +117,7 @@ class FakeConsoleApi implements ConsoleApi {
   String? lastTaskMode;
   int cancelTaskCalls = 0;
   int emergencyStopCalls = 0;
+  Object? emergencyStopError;
   int setCameraSourceCalls = 0;
   int clearLogsCalls = 0;
   int fetchCameraFrameCalls = 0;
@@ -227,6 +228,7 @@ class FakeConsoleApi implements ConsoleApi {
   @override
   Future<ConsoleSnapshot> emergencyStop() async {
     emergencyStopCalls += 1;
+    if (emergencyStopError case final error?) throw error;
     _payload = {
       ..._payload,
       'busy': false,

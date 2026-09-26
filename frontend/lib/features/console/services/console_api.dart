@@ -54,8 +54,8 @@ class HttpConsoleApi implements ConsoleApi {
     : _client = client ?? createConsoleHttpClient(baseUri);
 
   static const defaultBaseUrl = String.fromEnvironment(
-    'G1_API_BASE_URL',
-    defaultValue: 'http://192.168.31.74:8000',
+    'GO2_API_BASE_URL',
+    defaultValue: 'http://127.0.0.1:8000',
   );
 
   @override

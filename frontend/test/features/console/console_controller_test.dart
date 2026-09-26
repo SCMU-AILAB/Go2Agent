@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
-import 'package:g1_frontend/features/console/controllers/console_controller.dart';
+import 'package:go2_frontend/features/console/controllers/console_controller.dart';
+import 'package:go2_frontend/features/console/services/console_api.dart';
 
 import '../../support/fake_console_api.dart';
 
@@ -86,6 +87,19 @@ void main() {
     expect(api.stopSessionCalls, 1);
     expect(controller.backend, isFalse);
     expect(messages.last, '后端已停止');
+  });
+
+  testWidgets('failed emergency stop never reports success', (tester) async {
+    await tester.pump();
+    api.emergencyStopError = const ConsoleApiException(
+      'Go2 stop command failed', statusCode: 502,
+    );
+
+    await controller.emergencyStop();
+
+    expect(api.emergencyStopCalls, 1);
+    expect(api.cancelTaskCalls, 0);
+    expect(messages.last, contains('急停失败'));
   });
 
   testWidgets('saves prompt and submits and cancels a task through REST', (

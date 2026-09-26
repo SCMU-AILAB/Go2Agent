@@ -76,10 +76,12 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("看到人坐下时也坐下", invoker.calls[-1][1])
 
     async def test_follow_goal_selects_persistent_skill_and_then_continues(self):
-        invoker = FakeVisionInvoker([
-            {"action": "execute_skill", "skill": "follow_person"},
-            {"action": "execute_skill", "skill": "follow_person"},
-        ])
+        invoker = FakeVisionInvoker(
+            [
+                {"action": "execute_skill", "skill": "follow_person"},
+                {"action": "execute_skill", "skill": "follow_person"},
+            ]
+        )
         agent = SocialVisionAgent(
             invoker=invoker,
             response_format="decision",
@@ -88,6 +90,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         )
         state = RobotState(hardware=False, connected=True)
         skills = build_go2_autonomy_skills()
+
         def person_frame(at_s):
             return replace(
                 camera_frame(at_s),
@@ -101,16 +104,22 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
 
         first = await agent.decide([person_frame(1), person_frame(2)], state, skills)
         second = await agent.decide(
-            [person_frame(3), person_frame(4)], state, skills,
+            [person_frame(3), person_frame(4)],
+            state,
+            skills,
             policy_context={"active_skill": "follow_person"},
         )
-        self.assertEqual((first.action, first.skill), ("execute_skill", "follow_person"))
+        self.assertEqual(
+            (first.action, first.skill), ("execute_skill", "follow_person")
+        )
         self.assertEqual(second.action, "continue")
         self.assertIn("follow_person", invoker.calls[0][1])
 
     async def test_follow_hallucination_on_empty_scene_is_ignored(self):
         agent = SocialVisionAgent(
-            invoker=FakeVisionInvoker([{"action": "execute_skill", "skill": "follow_person"}]),
+            invoker=FakeVisionInvoker(
+                [{"action": "execute_skill", "skill": "follow_person"}]
+            ),
             response_format="decision",
             task_context="跟着人走",
             confirm_hold_s=0,
@@ -143,9 +152,13 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         decision = await agent.decide(
-            [frame], RobotState(hardware=False, connected=True), build_go2_autonomy_skills()
+            [frame],
+            RobotState(hardware=False, connected=True),
+            build_go2_autonomy_skills(),
         )
-        self.assertEqual((decision.action, decision.skill), ("execute_skill", "follow_person"))
+        self.assertEqual(
+            (decision.action, decision.skill), ("execute_skill", "follow_person")
+        )
 
     async def test_open_decision_supports_speech_and_interrupt(self):
         agent = SocialVisionAgent(
@@ -167,13 +180,13 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((first.action, first.speech), ("speak", "你好"))
         self.assertEqual(second.action, "interrupt")
 
-    async def test_operator_action_needs_startup_opt_in_and_explicit_task(self):
+    async def test_registered_operator_action_is_available_without_opt_in(self):
         state = RobotState(hardware=False, connected=True)
         skills = build_go2_all_skills()
         response = {"action": "execute_skill", "skill": "front_jump"}
         for enabled, task, expected in (
-            (False, "看到示意就前跳", "ignore"),
-            (True, "看到示意就打招呼", "ignore"),
+            (False, "看到示意就前跳", "execute_skill"),
+            (True, "看到示意就打招呼", "execute_skill"),
             (True, "看到示意就前跳", "execute_skill"),
         ):
             with self.subTest(enabled=enabled, task=task):
@@ -198,7 +211,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
             confirm_hold_s=0,
         )
         decision = await agent.decide([camera_frame(1), camera_frame(2)], state, skills)
-        self.assertEqual(decision.action, "ignore")
+        self.assertEqual(decision.action, "execute_skill")
 
     async def test_open_decision_invalid_output_does_not_execute(self):
         agent = SocialVisionAgent(
@@ -232,6 +245,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_corrects_peace_sign_misclassified_as_wave(self):
         agent = SocialVisionAgent(
+            response_format="json",
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -320,7 +334,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.action, "ignore")
 
     async def test_duplicate_timestamps_rejected(self):
-        agent = SocialVisionAgent(invoker=FakeVisionInvoker([]))
+        agent = SocialVisionAgent(response_format="json", invoker=FakeVisionInvoker([]))
         frame = camera_frame(1)
         decision = await agent.decide(
             [frame, frame],
@@ -343,6 +357,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         agent = SocialVisionAgent(
+            response_format="json",
             invoker=invoker,
             task_context="用户比耶就比心",
         )
@@ -488,6 +503,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         }
         invoker = FakeVisionInvoker([payload, payload, payload, payload])
         agent = SocialVisionAgent(
+            response_format="json",
             invoker=invoker,
             task_context="用户竖起大拇指时随机跳舞",
             confirm_hold_s=1.5,
@@ -522,6 +538,7 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         }
         invoker = FakeVisionInvoker([payload, payload])
         agent = SocialVisionAgent(
+            response_format="json",
             invoker=invoker,
             task_context="用户点赞时随机跳舞",
             confirm_hold_s=0,

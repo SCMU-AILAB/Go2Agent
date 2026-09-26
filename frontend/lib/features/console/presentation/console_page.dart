@@ -24,16 +24,16 @@ import 'widgets/console_header.dart';
 import 'widgets/console_heading.dart';
 import 'widgets/console_footer.dart';
 
-class G1ConsolePage extends StatefulWidget {
-  const G1ConsolePage({super.key, this.api});
+class Go2ConsolePage extends StatefulWidget {
+  const Go2ConsolePage({super.key, this.api});
 
   final ConsoleApi? api;
 
   @override
-  State<G1ConsolePage> createState() => _G1ConsolePageState();
+  State<Go2ConsolePage> createState() => _Go2ConsolePageState();
 }
 
-class _G1ConsolePageState extends State<G1ConsolePage> {
+class _Go2ConsolePageState extends State<Go2ConsolePage> {
   late final ConsoleController controller;
   ConsoleView _view = ConsoleView.vision;
 

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TextIO
 
-LOG_SCHEMA = "g1agent.log.v1"
+LOG_SCHEMA = "go2agent.log.v1"
 
 
 def emit_log(

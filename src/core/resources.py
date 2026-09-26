@@ -23,10 +23,12 @@ class ResourceManager:
     @asynccontextmanager
     async def acquire(self, resources: tuple[str, ...]) -> AsyncIterator[None]:
         locks = [self._lock_for(resource) for resource in sorted(set(resources))]
-        for lock in locks:
-            await lock.acquire()
+        acquired: list[asyncio.Lock] = []
         try:
+            for lock in locks:
+                await lock.acquire()
+                acquired.append(lock)
             yield
         finally:
-            for lock in reversed(locks):
+            for lock in reversed(acquired):
                 lock.release()

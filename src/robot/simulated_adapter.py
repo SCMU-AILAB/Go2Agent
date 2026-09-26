@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from .base import ActionVerification, RobotState
+from .base import RobotState
 
 
 class SimulatedRobotAdapter:
@@ -14,60 +14,6 @@ class SimulatedRobotAdapter:
 
     async def stop(self) -> None:
         self.events.append(("stop", None))
-
-    async def wave(self, arm: str) -> None:
-        self.events.append(("wave", arm))
-
-    async def wait_for_wave_completion(
-        self,
-        arm: str,
-        timeout_s: float,
-    ) -> ActionVerification:
-        return ActionVerification(
-            completed=True,
-            observable=True,
-            message="simulated wave completed",
-            details={"arm": arm, "method": "simulation"},
-        )
-
-    async def execute_arm_action(
-        self,
-        action_id: int,
-        action_name: str,
-    ) -> None:
-        self.events.append(
-            (
-                "arm_action",
-                {"action_id": action_id, "action_name": action_name},
-            )
-        )
-
-    async def execute_custom_arm_action(self, action_name: str) -> None:
-        self.events.append(("custom_arm_action", action_name))
-
-    async def stop_custom_arm_action(self) -> None:
-        self.events.append(("stop_custom_arm_action", None))
-
-    async def wait_for_arm_action_completion(
-        self,
-        action_id: int,
-        action_name: str,
-        timeout_s: float,
-    ) -> ActionVerification:
-        return ActionVerification(
-            completed=True,
-            observable=True,
-            message=f"simulated {action_name} completed",
-            details={
-                "method": "simulation",
-                "action_id": action_id,
-                "action_name": action_name,
-                "action_observed": True,
-            },
-        )
-
-    async def release_arm(self) -> None:
-        self.events.append(("release_arm", None))
 
     async def execute_loco_action(
         self,

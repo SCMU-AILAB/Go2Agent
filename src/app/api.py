@@ -1,4 +1,4 @@
-"""FastAPI control plane for the G1 Flutter console."""
+"""FastAPI control plane for the Go2 Flutter console."""
 
 from __future__ import annotations
 
@@ -186,7 +186,10 @@ def create_app(
 
     @app.post("/api/v1/robot/emergency-stop", response_model=ConsoleSnapshot)
     async def emergency_stop() -> ConsoleSnapshot:
-        return await console.emergency_stop("操作员点击急停")
+        try:
+            return await console.emergency_stop("操作员点击急停")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.put("/api/v1/config/vision-confirm-hold", response_model=ConsoleSnapshot)
     async def update_vision_confirm_hold(body: VisionConfirmHoldUpdate) -> ConsoleSnapshot:
@@ -246,6 +249,8 @@ def create_app(
     async def start_voice() -> ConsoleSnapshot:
         try:
             return await console.start_voice()
+        except TaskConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except BackendNotRunning as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -290,21 +295,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--hardware", action="store_true")
-    parser.add_argument(
-        "--robot",
-        choices=("g1", "go2"),
-        default="g1",
-        help="robot model to assemble; go2 uses SportClient and a reduced skill catalog",
-    )
     parser.add_argument("--network", default="")
     parser.add_argument("--domain-id", type=int, default=0)
     parser.add_argument("--model")
     parser.add_argument("--ollama-url")
     parser.add_argument("--no-audio", action="store_true")
-    parser.add_argument("--speaker-id", type=int, default=0)
     parser.add_argument(
         "--host-audio-device",
-        default=os.getenv("G1_AUDIO_DEVICE"),
+        default=os.getenv("GO2_AUDIO_DEVICE"),
         help="ALSA/Pulse device for Go2 host speaker TTS (external speaker)",
     )
     parser.add_argument(
@@ -366,7 +364,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0,
         help="rotate RGB for preview and VLM; use 180 if the camera is mounted upside-down",
     )
-    parser.add_argument("--include-operator-only-skills", action="store_true")
     return parser
 
 
@@ -374,14 +371,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     config = BackendConfig(
         hardware=args.hardware,
-        robot_model=args.robot,
+        robot_model="go2",
         network_interface=args.network,
         domain_id=args.domain_id,
-        include_operator_only_skills=args.include_operator_only_skills,
         model_name=args.model,
         ollama_url=args.ollama_url,
         audio_enabled=not args.no_audio,
-        speaker_id=args.speaker_id,
         host_audio_device=args.host_audio_device,
         host_tts_voice=args.host_tts_voice,
         voice_enabled=args.voice,

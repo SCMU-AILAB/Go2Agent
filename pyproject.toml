@@ -1,5 +1,5 @@
 [project]
-name = "g1agent"
+name = "go2agent"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -34,10 +34,10 @@ voice = [
 ]
 
 [project.scripts]
-g1agent = "app.main:main"
-g1-perception = "app.perception:main"
-g1-wave = "app.wave:main"
-g1-api = "app.api:main"
+go2agent = "app.main:main"
+go2-perception = "app.perception:main"
+go2-action = "app.go2_action:main"
+go2-api = "app.api:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]
