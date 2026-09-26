@@ -327,6 +327,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "langchain" },
     { name = "langchain-ollama" },
     { name = "pip" },
@@ -355,6 +356,7 @@ voice = [
 requires-dist = [
     { name = "fastapi" },
     { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.2.1" },
+    { name = "httpx" },
     { name = "langchain" },
     { name = "langchain-ollama" },
     { name = "num2words", marker = "extra == 'vision'", specifier = ">=0.5.14" },

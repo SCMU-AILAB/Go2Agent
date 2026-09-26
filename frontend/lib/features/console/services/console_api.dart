@@ -55,7 +55,7 @@ class HttpConsoleApi implements ConsoleApi {
 
   static const defaultBaseUrl = String.fromEnvironment(
     'GO2_API_BASE_URL',
-    defaultValue: 'http://127.0.0.1:8000',
+    defaultValue: 'http://192.168.31.74:8000',
   );
 
   @override

@@ -5,6 +5,7 @@ import unittest
 from collections.abc import Mapping, Sequence
 from unittest.mock import AsyncMock
 
+from httpx import ConnectError
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import ValidationError
@@ -41,6 +42,11 @@ class FakeAgentInvoker:
 class InvalidAgentInvoker:
     async def ainvoke(self, input_state: dict[str, object]) -> object:
         return {"messages": []}
+
+
+class DisconnectedAgentInvoker:
+    async def ainvoke(self, input_state: dict[str, object]) -> object:
+        raise ConnectError("All connection attempts failed")
 
 
 class ToolCapableFakeChatModel(FakeMessagesListChatModel):
@@ -98,6 +104,24 @@ class AgentAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(AgentError):
             await agent.chat("你好")
+
+    async def test_text_model_connection_error_names_endpoint_and_tunnel(self) -> None:
+        runtime = SkillRuntime(SimulatedRobotAdapter())
+        agent = RobotAgent(
+            runtime,
+            model_name="qwen3.5:9b",
+            base_url="http://127.0.0.1:11435",
+            invoker=DisconnectedAgentInvoker(),
+        )
+
+        with self.assertRaises(AgentError) as raised:
+            await agent.chat("往前走5m")
+
+        message = str(raised.exception)
+        self.assertIn("qwen3.5:9b", message)
+        self.assertIn("http://127.0.0.1:11435/api/tags", message)
+        self.assertIn("scripts/remote-vision-tunnel.sh", message)
+        self.assertEqual(len(agent._history), 0)
 
     async def test_agent_calls_skill_then_reads_result_before_final_reply(self) -> None:
         robot = SimulatedRobotAdapter()

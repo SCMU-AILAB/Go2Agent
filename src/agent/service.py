@@ -7,6 +7,7 @@ import os
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, cast
 
+from httpx import ConnectError, ConnectTimeout
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_ollama import ChatOllama
@@ -105,6 +106,10 @@ class RobotAgent:
         chat_model: Any | None = None,
     ) -> None:
         self._history: list[BaseMessage] = []
+        self._model_name = model_name or os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+        self._base_url = (
+            base_url or os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434"
+        )
         if invoker is not None:
             self._invoker = invoker
             return
@@ -114,8 +119,8 @@ class RobotAgent:
         model = chat_model
         if model is None:
             model = ChatOllama(
-                model=model_name or os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
-                base_url=base_url or os.getenv("OLLAMA_HOST"),
+                model=self._model_name,
+                base_url=self._base_url,
                 temperature=0.2,
                 client_kwargs={"trust_env": False},
             )
@@ -135,6 +140,19 @@ class RobotAgent:
         input_state: dict[str, object] = {"messages": input_messages}
         try:
             output = await self._invoker.ainvoke(input_state)
+        except (ConnectError, ConnectTimeout) as exc:
+            url = self._base_url.rstrip("/")
+            hint = (
+                "若使用默认 SSH 隧道，先在运行后端的机器上执行 "
+                "sh scripts/remote-vision-tunnel.sh。"
+                if url == "http://127.0.0.1:11435"
+                else ""
+            )
+            raise AgentError(
+                f"文本模型 {self._model_name} 无法连接 Ollama ({url})。"
+                f"请在运行后端的机器上检查 {url}/api/tags。{hint}"
+                f"原始错误：{exc}"
+            ) from exc
         except Exception as exc:
             raise AgentError(f"Agent invocation failed: {exc}") from exc
 

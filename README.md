@@ -74,6 +74,13 @@ sh scripts/run-go2-console.sh
 # 网卡可用 GO2_NETWORK 覆盖；视觉服务用 GO2_VISION_URL 覆盖
 ```
 
+控制台的「文本指令」仍使用独立 Ollama，默认模型 `qwen3.5:9b`，默认地址
+`http://127.0.0.1:11435` 是**运行后端的机器人主机**上的地址。提交文本任务前，
+在该主机上执行 `curl --noproxy '*' http://127.0.0.1:11435/api/tags`，确认服务可达且
+模型已安装。若使用仓库提供的远端 Ollama 隧道，先在该主机的另一终端保持
+`sh scripts/remote-vision-tunnel.sh` 运行；或将 `OLLAMA_HOST` 设为其他可达的
+Ollama 地址。视觉模式和默认语音目标不依赖这个文本模型连接。
+
 ## 控制台视觉接入
 
 Flutter 控制台已接入滑动视频策略。选择「持续视觉交互」并使用本地相机时，才会启动
