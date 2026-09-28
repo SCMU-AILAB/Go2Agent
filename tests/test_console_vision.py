@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from agent.social_vision import _OPEN_DECISION_PROMPT, SocialVisionAgent
+from agent.unifolm_vision import UnifolmDecisionInvoker
 from app.api import create_app
 from app.backend import BackendConfig, ConsoleBackend
 from perception import CameraFrame, PerceptionResult
@@ -148,6 +149,7 @@ class ConsoleVisionTests(unittest.TestCase):
         self.assertIn("简短回应", agent.task_context)
         self.assertIn("观察挥手", agent.task_context)
         self.assertIs(agent._invoker.think, False)
+        self.assertTrue(agent._invoker.constrain_json)
         self.assertEqual(backend.config.vision_frame_count, 3)
         self.assertEqual(backend.config.vision_window_s, 0.8)
 
@@ -160,6 +162,8 @@ class ConsoleVisionTests(unittest.TestCase):
         )
         agent = backend._build_vision_agent("看到人坐下就坐下")
         self.assertEqual(agent.response_format, "decision")
+        self.assertIsInstance(agent._invoker, UnifolmDecisionInvoker)
+        self.assertEqual(agent._invoker.task, "看到人坐下就坐下")
         self.assertIn("看到人坐下就坐下", agent.task_context)
         self.assertTrue(agent.allow_operator_skills)
         self.assertEqual(backend.config.vision_confirm_hold_s, 0.5)

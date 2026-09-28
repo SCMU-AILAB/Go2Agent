@@ -1,19 +1,22 @@
 #!/bin/sh
-# Go2 console with separate text-Agent and UnifoLM vision endpoints.
+# Go2 console with UnifoLM observation and Ollama skill decisions.
 set -eu
 cd "$(dirname "$0")/.."
 # A test worktree may reuse main's venv; always import this worktree's code.
 export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
-export NO_PROXY="127.0.0.1,localhost,${GO2_VISION_HOST:-192.168.31.112}${NO_PROXY:+,$NO_PROXY}"
+vision_url="${GO2_VISION_URL:-http://192.168.31.143:8011}"
+vision_host="${vision_url#*://}"
+vision_host="${vision_host%%[:/]*}"
+export NO_PROXY="127.0.0.1,localhost,$vision_host${NO_PROXY:+,$NO_PROXY}"
 export no_proxy="$NO_PROXY"
 exec .venv/bin/python -m app.api \
   --hardware --network "${GO2_NETWORK:-eth0}" \
   --camera-source local --vision-rotation-deg 0 \
   --vision-backend "${GO2_VISION_BACKEND:-unifolm}" \
   --vision-model "${GO2_VISION_MODEL:-unitreerobotics/UnifoLM-ER-1}" \
-  --vision-url "${GO2_VISION_URL:-http://192.168.31.112:8011}" \
+  --vision-url "$vision_url" \
   --vision-window-s "${GO2_VISION_WINDOW_S:-0.8}" \
-  --vision-frame-count "${GO2_VISION_FRAME_COUNT:-3}" \
+  --vision-frame-count "${GO2_VISION_FRAME_COUNT:-2}" \
   --voice --voice-agent-backend "${GO2_VOICE_AGENT:-vision}" \
   --audio-input-device "${GO2_AUDIO_INPUT:-pulse}" \
   --audio-output-device "${GO2_AUDIO_OUTPUT:-pulse}" \

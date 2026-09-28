@@ -20,6 +20,7 @@ from .service import AgentError, AgentInvoker, RobotAgent
 from .unifolm_vision import (
     DEFAULT_UNIFOLM_MODEL,
     DEFAULT_UNIFOLM_URL,
+    UnifolmDecisionInvoker,
     UnifolmVisionInvoker,
 )
 from .vision_policy import (
@@ -58,6 +59,7 @@ __all__ = [
     "OllamaVisionInvoker",
     "RobotAgent",
     "TransformersVisionInvoker",
+    "UnifolmDecisionInvoker",
     "UnifolmVisionInvoker",
     "VisionDecisionAgent",
     "VisionModelInvoker",

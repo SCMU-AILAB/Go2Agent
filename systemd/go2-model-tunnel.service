@@ -1,0 +1,13 @@
+[Unit]
+Description=Go2 model tunnel to LAN Ollama
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sh /home/cf/Go2Agent/scripts/remote-vision-tunnel.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -27,7 +27,7 @@ from agent.decision import AgentDecision
 from agent.llamacpp_vision import LlamaCppVisionInvoker
 from agent.service import system_prompt_for
 from agent.social_vision import SocialVisionAgent
-from agent.unifolm_vision import UnifolmVisionInvoker
+from agent.unifolm_vision import UnifolmDecisionInvoker
 from agent.vision_policy import OllamaVisionInvoker, VisionPolicyWorker
 from core.runtime import SkillRuntime
 from perception import (
@@ -365,10 +365,12 @@ class ConsoleBackend(SkillToolObserver):
 
     def _build_vision_agent(self, instruction: str) -> SocialVisionAgent:
         if self.config.vision_backend == "unifolm":
-            invoker = UnifolmVisionInvoker(
+            invoker = UnifolmDecisionInvoker(
                 self.config.vision_model,
                 base_url=self.config.vision_url,
-                max_new_tokens=160,
+                decision_model=self.config.model_name or "qwen3.5:9b",
+                decision_url=self.config.ollama_url,
+                task=instruction,
                 timeout_s=120,
             )
         elif self.config.vision_backend == "llamacpp":
@@ -383,7 +385,7 @@ class ConsoleBackend(SkillToolObserver):
             invoker = OllamaVisionInvoker(
                 self.config.vision_model,
                 base_url=self.config.vision_url,
-                constrain_json=False,
+                constrain_json=True,
                 max_new_tokens=256,
                 think=False,
             )
@@ -1058,6 +1060,12 @@ class ConsoleBackend(SkillToolObserver):
     async def _run_vision_task(self, instruction: str) -> None:
         """Continuous, cancellable vision task, reusing the CLI execution boundary."""
         agent = self._vision_agent_factory(instruction)
+        await self._log(
+            "INFO",
+            "vision",
+            f"视觉模型端点：{self.config.vision_backend} · "
+            f"{self.config.vision_url} · {self.config.vision_model}",
+        )
         await self._log(
             "INFO",
             "vision",

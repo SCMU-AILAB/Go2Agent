@@ -26,6 +26,7 @@ from agent import (
     EventDecisionAgent,
     LlamaCppVisionInvoker,
     OllamaVisionInvoker,
+    UnifolmDecisionInvoker,
     UnifolmVisionInvoker,
     VisionDecisionAgent,
     VisionPolicyOutcome,
@@ -142,6 +143,11 @@ def parse_args() -> argparse.Namespace:
         help="policy model override; defaults depend on --policy",
     )
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_HOST"))
+    parser.add_argument(
+        "--decision-model",
+        default=os.getenv("OLLAMA_MODEL", "qwen3.5:9b"),
+        help="structured decision model when --vision-backend unifolm",
+    )
     parser.add_argument(
         "--vision-url",
         default=os.getenv("VISION_URL") or os.getenv("UNIFOLM_VISION_URL"),
@@ -730,9 +736,12 @@ async def _run(args: argparse.Namespace) -> int:
                     inference_timeout_s=args.vision_timeout_s,
                 )
             elif args.vision_backend == "unifolm":
-                vision_invoker = UnifolmVisionInvoker(
+                vision_invoker = UnifolmDecisionInvoker(
                     selected_model,
                     base_url=args.vision_url or DEFAULT_UNIFOLM_URL,
+                    decision_model=args.decision_model,
+                    decision_url=args.ollama_url,
+                    task=args.vision_goal,
                     max_new_tokens=args.vision_max_new_tokens,
                     timeout_s=args.vision_timeout_s,
                 )
@@ -792,7 +801,12 @@ async def _run(args: argparse.Namespace) -> int:
             }
             if isinstance(
                 vision_invoker,
-                (CudaVisionInvoker, UnifolmVisionInvoker, LlamaCppVisionInvoker),
+                (
+                    CudaVisionInvoker,
+                    UnifolmVisionInvoker,
+                    UnifolmDecisionInvoker,
+                    LlamaCppVisionInvoker,
+                ),
             ):
                 ready_data.update(vision_invoker.backend_info)
             emit_log(

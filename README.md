@@ -65,21 +65,23 @@ Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、Go2 专用装配�
 
 ## 一键启动 Go2 控制台
 
-此脚本连真机但**不会**自动提交动作任务。默认语音把转写结果作为持续视觉目标，
-5070 Ti 负责视觉决策，不需要另备文本 Ollama：
+此脚本连真机但**不会**自动提交动作任务。默认语音把转写结果作为持续视觉目标；
+视觉观察使用 `192.168.31.143:8011` 的 UnifoLM，结构化技能决策和文本指令
+通过 SSH 隧道使用同机的 `qwen3.5:9b`：
 
 ```bash
 sh scripts/run-go2-console.sh
 # 默认：真机 + 本地相机 + 外接麦克风/扬声器 + vision 语音目标
-# 网卡可用 GO2_NETWORK 覆盖；视觉服务用 GO2_VISION_URL 覆盖
+# 网卡可用 GO2_NETWORK 覆盖；视觉模型用 GO2_VISION_URL 覆盖
 ```
 
-控制台的「文本指令」仍使用独立 Ollama，默认模型 `qwen3.5:9b`，默认地址
+控制台的「文本指令」也使用 Ollama，默认模型 `qwen3.5:9b`，默认地址
 `http://127.0.0.1:11435` 是**运行后端的机器人主机**上的地址。提交文本任务前，
 在该主机上执行 `curl --noproxy '*' http://127.0.0.1:11435/api/tags`，确认服务可达且
-模型已安装。若使用仓库提供的远端 Ollama 隧道，先在该主机的另一终端保持
-`sh scripts/remote-vision-tunnel.sh` 运行；或将 `OLLAMA_HOST` 设为其他可达的
-Ollama 地址。视觉模式和默认语音目标不依赖这个文本模型连接。
+模型已安装。狗端首次安装隧道服务执行
+`systemctl --user link ~/Go2Agent/systemd/go2-model-tunnel.service`，再执行
+`systemctl --user enable --now go2-model-tunnel.service`；视觉模式、默认语音目标和
+文本模式都依赖此连接。
 
 ## 控制台视觉接入
 
@@ -95,7 +97,7 @@ JPEG，决策、Skill 结果与状态通过 REST/WebSocket 快照展示。详见
 .venv/bin/python -m app.api --camera-source local \
   --vision-backend unifolm \
   --vision-model unitreerobotics/UnifoLM-ER-1 \
-  --vision-url http://192.168.31.112:8011 --no-audio
+  --vision-url http://192.168.31.143:8011 --no-audio
 ```
 
 不要同时启动占用同一相机的 `run-remote-vision.sh`。前端选择视觉模式并开始任务才会
@@ -113,11 +115,12 @@ Go2 目录包含 `follow_person`：前端选择「本地相机」和
 它还不是身份追踪或避障导航；请在开阔平地、遥控器在手的条件下验收。
 需要完全离线的有限动作词表时，可改用 `GO2_VOICE_AGENT=local_commands`。
 
-Go2 真机直接使用启动脚本。视觉和默认语音目标都连接局域网 UnifoLM；
-若改用 Ollama 文本 Agent，需配置可用的 `OLLAMA_HOST`：
+Go2 真机直接使用启动脚本。默认视觉观察连接 `192.168.31.143:8011`，
+决策 Agent 和文本 Agent 共用狗端的 `127.0.0.1:11435` 隧道；可分别用
+`GO2_VISION_URL` 和 `OLLAMA_HOST` 覆盖：
 
 ```bash
-GO2_VISION_URL=http://192.168.31.112:8011 sh scripts/run-go2-console.sh
+sh scripts/run-go2-console.sh
 ```
 
 文本/麦克风路径如下：
@@ -320,7 +323,7 @@ FastAPI 与前端一起使用：
 .venv/bin/python -m app.api \
   --hardware --network eth0 \
   --camera-source local --vision-rotation-deg 0 \
-  --vision-backend unifolm --vision-url http://192.168.31.112:8011 \
+  --vision-backend unifolm --vision-url http://192.168.31.143:8011 \
   --voice --voice-agent-backend vision --record-seconds 3 \
   --whisper-model /home/cf/Go2Agent/models/faster-whisper-small \
   --whisper-device cpu --whisper-compute-type int8 \
@@ -427,16 +430,22 @@ sh scripts/run-jetson-unifolm-vision.sh --hardware --network eth0
 
 #### 宇树 UnifoLM-ER-1（Go2，可选）
 
-仓库保留文字 Agent 的 Ollama/Qwen 链路，并用 `--vision-backend unifolm` 单独连接
-视觉服务。当前局域网服务位于 `http://192.168.31.112:8011`。UnifoLM 对 JSON 提示
-曾使用单标签手势协议；当前 Go2 默认改为开放的结构化动作决策。模型每轮读取
+仓库仍保留 `--vision-backend unifolm`，连接
+`http://192.168.31.143:8011`。UnifoLM 对场景描述和简单视觉问题能正常回答，但直接
+要求动作决策 JSON 时可能返回点位坐标。此后端现在先让 UnifoLM 描述画面，再由
+`qwen3.5:9b` 根据该观察、当前任务和完整技能目录生成受 schema 约束的决策；因此
+同时需要可用的文本 Ollama 地址（`--ollama-url` / `OLLAMA_HOST`）。坐标或空观察会被
+拒绝，不会转成动作。Go2 控制台默认使用这条双模型路径；需要 Qwen 直接看图时
+可设置 `GO2_VISION_BACKEND=ollama GO2_VISION_MODEL=qwen3.5:9b`，并将
+`GO2_VISION_URL` 指向 Ollama 地址。
+视觉 Agent 每轮读取
 视觉目标、最新画面、D435i 本地观测、可用 Skill 目录和执行历史，再输出执行、
 说话、继续、打断或忽略。模型输出不能跳过本地 Skill、深度和时效校验。
 
 视觉服务器健康检查：
 
 ```bash
-curl http://192.168.31.112:8011/health
+curl http://192.168.31.143:8011/health
 ```
 
 Go2 端启动完整控制台：

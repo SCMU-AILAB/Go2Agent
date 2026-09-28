@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import unittest
 from typing import Self
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from agent import UnifolmVisionInvoker
+from agent import UnifolmDecisionInvoker, UnifolmVisionInvoker
+from agent.decision import DecisionAgentError
 
 
 class FakeResponse:
@@ -67,6 +68,47 @@ class UnifolmVisionInvokerTests(unittest.IsolatedAsyncioTestCase):
             invoker = UnifolmVisionInvoker(timeout_s=2)
             with self.assertRaisesRegex(Exception, "mismatched request id"):
                 await invoker.ainvoke([b"jpeg"], "runtime prompt")
+
+    async def test_decision_uses_visual_observation_without_forwarding_images(
+        self,
+    ) -> None:
+        observer = AsyncMock()
+        observer.ainvoke.return_value = "No person is visible."
+        observer.last_metrics = {"inference_s": 0.6}
+        observer.backend_info = {"status": "ready"}
+        decider = AsyncMock()
+        decider.ainvoke.return_value = '{"action":"ignore"}'
+        decider.last_metrics = {"round_trip_s": 1.1}
+        invoker = UnifolmDecisionInvoker(
+            task="greet waving people",
+            observer=observer,
+            decision_invoker=decider,
+        )
+
+        await invoker.warmup()
+        result = await invoker.ainvoke([b"frame"], "full skill catalog")
+        await invoker.close()
+
+        self.assertEqual(result, '{"action":"ignore"}')
+        self.assertIn("greet waving people", observer.ainvoke.call_args.args[1])
+        self.assertEqual(decider.ainvoke.call_args.args[0], ())
+        self.assertIn("No person is visible", decider.ainvoke.call_args.args[1])
+        self.assertIn("full skill catalog", decider.ainvoke.call_args.args[1])
+        self.assertEqual(invoker.last_metrics["unifolm_metrics"], {"inference_s": 0.6})
+
+    async def test_decision_rejects_point_output_before_tool_selection(self) -> None:
+        observer = AsyncMock()
+        observer.ainvoke.return_value = '```json\n[{"point":[436,573]}]\n```'
+        decider = AsyncMock()
+        invoker = UnifolmDecisionInvoker(
+            observer=observer,
+            decision_invoker=decider,
+        )
+
+        with self.assertRaisesRegex(DecisionAgentError, "unusable visual observation"):
+            await invoker.ainvoke([b"frame"], "full skill catalog")
+
+        decider.ainvoke.assert_not_awaited()
 
 
 if __name__ == "__main__":
