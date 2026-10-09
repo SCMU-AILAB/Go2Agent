@@ -38,7 +38,6 @@ class ConsoleSnapshot {
     required this.voiceListening,
     required this.voiceStatus,
     required this.voiceTranscript,
-    this.visionConfirmHoldS = 1.5,
     required this.voiceReply,
     required this.voiceError,
     required this.voiceInputDevice,
@@ -46,6 +45,8 @@ class ConsoleSnapshot {
     required this.voiceTtsEngine,
     required this.tools,
     required this.logs,
+    this.visionTask = const {},
+    this.cameraObservation = const {},
   });
 
   factory ConsoleSnapshot.fromJson(Map<String, dynamic> json) {
@@ -55,11 +56,12 @@ class ConsoleSnapshot {
     final robotDetails = _asMap(robot['details']);
     final rawModel = (robotDetails['robot_model'] as String?)?.toLowerCase();
     final robotModel = switch (rawModel) {
-      'g1' => 'G1',
       'go2' => 'GO2',
       _ => null,
     };
     return ConsoleSnapshot(
+      visionTask: _asMap(json['visionTask']),
+      cameraObservation: _asMap(camera['observation']),
       backend: json['backend'] as bool? ?? false,
       starting: json['starting'] as bool? ?? false,
       busy: json['busy'] as bool? ?? false,
@@ -101,8 +103,6 @@ class ConsoleSnapshot {
       voiceInputDevice: voice['inputDevice'] as String? ?? 'pulse',
       voiceOutputDevice: voice['outputDevice'] as String? ?? 'pulse',
       voiceTtsEngine: voice['ttsEngine'] as String?,
-      visionConfirmHoldS:
-          (json['visionConfirmHold'] as num?)?.toDouble() ?? 1.5,
       tools: _asList(
         json['tools'],
       ).map(_asMap).map(ToolCall.fromJson).toList(growable: false),
@@ -112,6 +112,8 @@ class ConsoleSnapshot {
     );
   }
 
+  final Map<String, dynamic> visionTask;
+  final Map<String, dynamic> cameraObservation;
   final bool backend;
   final bool starting;
   final bool busy;
@@ -147,7 +149,6 @@ class ConsoleSnapshot {
   final bool voiceListening;
   final String voiceStatus;
   final String voiceTranscript;
-  final double visionConfirmHoldS;
   final String voiceReply;
   final String? voiceError;
   final String voiceInputDevice;

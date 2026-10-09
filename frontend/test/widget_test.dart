@@ -62,6 +62,7 @@ void main() {
     expect(find.text('TOOL CALLS'), findsOneWidget);
     expect(find.text('SKILL PIPELINE'), findsOneWidget);
     expect(find.text('ROBOT STATUS'), findsOneWidget);
+    expect(find.text('手势确认时长'), findsNothing);
     expectNoLayoutException(tester);
   });
 

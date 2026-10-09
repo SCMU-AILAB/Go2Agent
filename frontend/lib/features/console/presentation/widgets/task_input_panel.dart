@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/theme/console_colors.dart';
 import '../../controllers/console_controller.dart';
 import 'console_widgets.dart';
+import 'visual_task_status.dart';
 
 class TaskInputPanel extends StatelessWidget {
   const TaskInputPanel({super.key, required this.controller});
@@ -31,17 +32,17 @@ class TaskInputPanel extends StatelessWidget {
               children: [
                 ChoiceChip(
                   label: const Text('文本指令'),
-                  selected: !controller.gestureMode,
+                  selected: !controller.visionMode,
                   onSelected: controller.busy
                       ? null
                       : (_) => controller.setTaskMode('text'),
                 ),
                 ChoiceChip(
-                  label: const Text('持续手势交互'),
-                  selected: controller.gestureMode,
+                  label: const Text('持续视觉任务'),
+                  selected: controller.visionMode,
                   onSelected: controller.busy
                       ? null
-                      : (_) => controller.setTaskMode('gesture'),
+                      : (_) => controller.setTaskMode('vision'),
                 ),
               ],
             ),
@@ -49,8 +50,8 @@ class TaskInputPanel extends StatelessWidget {
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                controller.gestureMode
-                    ? '手势模式 · 持续运行，直到停止任务'
+                controller.visionMode
+                    ? '视觉模式 · 持续观察与执行，直到停止任务'
                     : controller.busy
                     ? '文本模式 · 任务处理中，状态见下方进度与 AGENT OUTPUT'
                     : '文本模式 · 点「发送指令」后，进度在本面板，回复在 AGENT OUTPUT',
@@ -69,10 +70,10 @@ class TaskInputPanel extends StatelessWidget {
               ),
               cursorColor: ConsoleColors.accent,
               decoration: InputDecoration(
-                hintText: controller.gestureMode
+                hintText: controller.visionMode
                     ? (controller.robotModel == 'GO2'
-                          ? '写下你希望它如何回应（例如：打招呼就打招呼，比耶就比心）。模型会看着画面自主选技能。'
-                          : '持续观察画面，按任务提示与技能目录回应；不执行任意文本动作。')
+                          ? '描述目标和条件，例如：看见人后跟着他走，保持 1.5 米距离。'
+                          : '描述需要根据画面完成的目标。')
                     : '告诉机器人要做什么…',
                 fillColor: ConsoleColors.field,
               ),
@@ -84,9 +85,11 @@ class TaskInputPanel extends StatelessWidget {
               spacing: 6,
               runSpacing: 6,
               children: [
-                if (controller.gestureMode)
-                  _suggestion('社交互动', '用户给你打招呼的时候就给他打招呼，用户给你比耶或比心的时候你就比心。')
-                else ...[
+                if (controller.visionMode) ...[
+                  _suggestion('跟随人员', '看见一个人后跟着他走，保持 1.5 米距离，人消失时停止。'),
+                  _suggestion('挥手回应', '有人向你挥手时，你挥手回应。'),
+                  _suggestion('人员出现', '看见有人出现时，打一次招呼。'),
+                ] else ...[
                   _suggestion('比心', '给我比个心。'),
                   _suggestion('站起来', '站起来。'),
                   _suggestion('坐下', '坐下。'),
@@ -106,6 +109,10 @@ class TaskInputPanel extends StatelessWidget {
                 ],
               ],
             ),
+            if (controller.visionMode) ...[
+              VisualTaskStatus(controller: controller),
+              const SizedBox(height: 12),
+            ],
             const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
@@ -117,7 +124,9 @@ class TaskInputPanel extends StatelessWidget {
                       label: const Text('停止执行'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: ConsoleColors.red,
-                        backgroundColor: ConsoleColors.red.withValues(alpha: .08),
+                        backgroundColor: ConsoleColors.red.withValues(
+                          alpha: .08,
+                        ),
                         side: BorderSide(
                           color: ConsoleColors.red.withValues(alpha: .55),
                         ),
@@ -129,18 +138,14 @@ class TaskInputPanel extends StatelessWidget {
                   : FilledButton.icon(
                       onPressed:
                           controller.backend &&
-                              (!controller.gestureMode ||
+                              (!controller.visionMode ||
                                   controller.cameraSource == 'local') &&
                               controller.taskController.text.trim().isNotEmpty
                           ? controller.submitTask
                           : null,
                       iconAlignment: IconAlignment.end,
                       icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                      label: Text(
-                        controller.gestureMode
-                            ? '开始视觉交互'
-                            : '开始文本对话',
-                      ),
+                      label: Text(controller.visionMode ? '开始视觉任务' : '开始文本对话'),
                       style: FilledButton.styleFrom(
                         backgroundColor: ConsoleColors.accent,
                         foregroundColor: ConsoleColors.bg0,
@@ -157,6 +162,14 @@ class TaskInputPanel extends StatelessWidget {
                       ),
                     ),
             ),
+            if (controller.busy && controller.visionMode)
+              TextButton.icon(
+                onPressed: controller.taskController.text.trim().isEmpty
+                    ? null
+                    : () => controller.submitTask(replaceExisting: true),
+                icon: const Icon(Icons.swap_horiz),
+                label: const Text('停止旧任务并应用新目标'),
+              ),
             const SizedBox(height: 8),
             Center(
               child: Text(
@@ -164,13 +177,13 @@ class TaskInputPanel extends StatelessWidget {
                     ? '请先启动后端服务'
                     : controller.busy
                     ? '任务执行中，可按 Esc 停止'
-                    : controller.gestureMode
+                    : controller.visionMode
                     ? (controller.cameraSource != 'local'
-                          ? '请先选择本地相机；模拟画面不能识别手势'
+                          ? '请先选择本地相机；模拟画面不能用于视觉任务'
                           : controller.robotModel == 'GO2'
                           ? '按任务提示词自主决策；仅执行技能目录中的动作'
-                          : '仅握手 / 挥手 / 击掌；持续运行至停止')
-                    : '文本模式看 AGENT OUTPUT 与下方进度条；手势模式看视觉决策流',
+                          : '从注册技能中选择动作；持续运行至停止')
+                    : '文本模式看 AGENT OUTPUT 与下方进度条；视觉模式看任务状态与决策流',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: ConsoleColors.dim, fontSize: 11),
               ),

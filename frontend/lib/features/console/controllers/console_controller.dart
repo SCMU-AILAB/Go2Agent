@@ -17,7 +17,7 @@ class ConsoleController extends ChangeNotifier {
 
   final systemPromptController = TextEditingController(
     text:
-        '你是 G1 机器人的任务助手。\n先观察摄像头画面，再规划任务。\n调用工具与技能时，输出执行状态。\n遇到障碍或不确定情况时，停止并报告。',
+        '你是 Go2 机器人的任务助手。\n先观察摄像头画面，再规划任务。\n调用工具与技能时，输出执行状态。\n遇到障碍或不确定情况时，停止并报告。',
   );
   final taskController = TextEditingController();
   final searchController = TextEditingController();
@@ -51,11 +51,14 @@ class ConsoleController extends ChangeNotifier {
   String cameraSource = 'demo';
   String taskMode = 'text';
 
-  bool get gestureMode => taskMode == 'gesture';
+  bool get visionMode => taskMode == 'vision' || taskMode == 'gesture';
+  bool get gestureMode => visionMode;
 
   void setTaskMode(String mode) {
-    if (busy || (mode != 'text' && mode != 'gesture')) return;
-    taskMode = mode;
+    if (busy || (mode != 'text' && mode != 'vision' && mode != 'gesture')) {
+      return;
+    }
+    taskMode = mode == 'gesture' ? 'vision' : mode;
     refresh();
   }
 
@@ -83,7 +86,8 @@ class ConsoleController extends ChangeNotifier {
   String progressText = '等待执行';
   String modelOutput = '';
   String currentTask = '';
-  double visionConfirmHoldS = 1.5;
+  Map<String, dynamic> visionTask = {};
+  Map<String, dynamic> cameraObservation = {};
 
   /// Local chat history for the dialog page (frontend-only; no backend field).
   final List<DialogTurn> dialog = [];
@@ -112,7 +116,7 @@ class ConsoleController extends ChangeNotifier {
     systemPromptController.addListener(onPromptChanged);
     taskController.addListener(refresh);
     searchController.addListener(_onLogFilterChanged);
-    addLog('INFO', 'console', '正在连接 G1 FastAPI 后端。', refresh: false);
+    addLog('INFO', 'console', '正在连接 Go2 FastAPI 后端。', refresh: false);
     clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!isActive) return;
       now = DateTime.now();
@@ -229,13 +233,14 @@ class ConsoleController extends ChangeNotifier {
     activeStep = snapshot.activeStep;
     currentTask = snapshot.currentTask;
     modelOutput = snapshot.modelOutput;
-    visionConfirmHoldS = snapshot.visionConfirmHoldS;
     taskCount = snapshot.taskCount;
     latency = snapshot.latency;
     robotMode = snapshot.robotMode;
     robotModel = snapshot.robotModel;
     telemetryAvailable = snapshot.telemetryAvailable;
     robotConnected = snapshot.robotConnected;
+    visionTask = snapshot.visionTask;
+    cameraObservation = snapshot.cameraObservation;
     cameraLabel = snapshot.cameraLabel;
     cameraStatus = snapshot.cameraStatus;
     cameraFrameAvailable = snapshot.cameraFrameAvailable;
@@ -324,19 +329,17 @@ class ConsoleController extends ChangeNotifier {
   }
 
   static String _extractAssistantReply(String modelOutput) {
-    final lines = modelOutput
-        .split('\n')
-        .map((line) => line.trimRight())
-        .where((line) {
-          if (line.trim().isEmpty) return false;
-          if (line.startsWith('文本指令模式')) return false;
-          if (line.startsWith('已收到指令')) return false;
-          if (line.startsWith('视觉交互')) return false;
-          if (line.startsWith('执行失败')) return true;
-          if (line.startsWith('执行已中断')) return true;
-          return true;
-        })
-        .toList();
+    final lines = modelOutput.split('\n').map((line) => line.trimRight()).where(
+      (line) {
+        if (line.trim().isEmpty) return false;
+        if (line.startsWith('文本指令模式')) return false;
+        if (line.startsWith('已收到指令')) return false;
+        if (line.startsWith('视觉交互')) return false;
+        if (line.startsWith('执行失败')) return true;
+        if (line.startsWith('执行已中断')) return true;
+        return true;
+      },
+    ).toList();
     if (lines.isEmpty) return '';
     // Drop the mode banner if it was the only first line.
     return lines.join('\n').trim();
@@ -453,15 +456,15 @@ class ConsoleController extends ChangeNotifier {
     }
   }
 
-  Future<void> submitTask() async {
+  Future<void> submitTask({bool replaceExisting = false}) async {
     final prompt = taskController.text.trim();
-    if (!backend || busy || prompt.isEmpty) return;
+    if (!backend || (busy && !replaceExisting) || prompt.isEmpty) return;
     if (!promptSaved) {
       onMessage('请先保存修改后的系统提示词');
       return;
     }
     if (gestureMode && cameraSource != 'local') {
-      onMessage('手势交互需要先选择本地相机');
+      onMessage('视觉任务需要先选择本地相机');
       return;
     }
     try {
@@ -469,6 +472,7 @@ class ConsoleController extends ChangeNotifier {
         prompt,
         cameraSource: cameraSource,
         taskMode: taskMode,
+        replaceExisting: replaceExisting,
       );
       _applySnapshot(snapshot);
     } catch (error) {
@@ -490,42 +494,30 @@ class ConsoleController extends ChangeNotifier {
   }
 
   Future<void> emergencyStop() async {
-    Object? primaryError;
     try {
       final snapshot = await api.emergencyStop();
       _applySnapshot(snapshot);
       onMessage('已急停');
       return;
     } catch (error) {
-      primaryError = error;
+      if (error is! ConsoleApiException || error.statusCode != 404) {
+        addLog('ERROR', 'executor', '急停失败：$error');
+        onMessage('急停失败：$error');
+        return;
+      }
       addLog('WARN', 'executor', '急停接口不可用，尝试停止任务：$error');
     }
     // Fallback for older backends without /robot/emergency-stop.
     try {
       final snapshot = await api.cancelTask('操作员急停');
       _applySnapshot(snapshot);
-      onMessage(
-        primaryError == null
-            ? '已停止任务'
-            : '急停接口不可用，已改用任务停止（请重启后端以启用急停 API）',
-      );
+      onMessage('急停接口不可用，已改用任务停止（请重启后端以启用急停 API）');
     } catch (error) {
       addLog('ERROR', 'executor', '急停失败：$error');
       onMessage(
         '急停失败：$error\n'
         '若提示 Not Found，请重启后端加载新接口后重试',
       );
-    }
-  }
-
-  Future<void> applyVisionConfirmHold(double seconds) async {
-    try {
-      final snapshot = await api.updateVisionConfirmHold(seconds);
-      _applySnapshot(snapshot);
-      onMessage('手势确认时长：${seconds.toStringAsFixed(2)} 秒');
-    } catch (error) {
-      addLog('ERROR', 'config', '更新手势确认时长失败：$error');
-      onMessage('更新失败：$error');
     }
   }
 

@@ -29,12 +29,12 @@ abstract interface class ConsoleApi {
     String instruction, {
     String? cameraSource,
     String? taskMode,
+    bool replaceExisting = false,
   });
   Future<ConsoleSnapshot> cancelTask(String reason);
 
   Future<ConsoleSnapshot> emergencyStop();
 
-  Future<ConsoleSnapshot> updateVisionConfirmHold(double seconds);
   Future<ConsoleSnapshot> setCameraSource(String source);
   Future<ConsoleSnapshot> clearLogs();
   Future<ConsoleSnapshot> startVoice();
@@ -54,7 +54,7 @@ class HttpConsoleApi implements ConsoleApi {
     : _client = client ?? createConsoleHttpClient(baseUri);
 
   static const defaultBaseUrl = String.fromEnvironment(
-    'G1_API_BASE_URL',
+    'GO2_API_BASE_URL',
     defaultValue: 'http://192.168.31.74:8000',
   );
 
@@ -89,11 +89,13 @@ class HttpConsoleApi implements ConsoleApi {
     String instruction, {
     String? cameraSource,
     String? taskMode,
+    bool replaceExisting = false,
   }) async => ConsoleSnapshot.fromJson(
     await _post('/api/v1/tasks', {
       'instruction': instruction,
       'cameraSource': cameraSource,
       'taskMode': taskMode,
+      'replaceExisting': replaceExisting,
     }),
   );
 
@@ -107,15 +109,6 @@ class HttpConsoleApi implements ConsoleApi {
   Future<ConsoleSnapshot> emergencyStop() async => ConsoleSnapshot.fromJson(
     await _post('/api/v1/robot/emergency-stop', <String, dynamic>{}),
   );
-
-  @override
-  Future<ConsoleSnapshot> updateVisionConfirmHold(double seconds) async =>
-      ConsoleSnapshot.fromJson(
-        await _put(
-          '/api/v1/config/vision-confirm-hold',
-          {'seconds': seconds},
-        ),
-      );
 
   @override
   Future<ConsoleSnapshot> setCameraSource(String source) async =>

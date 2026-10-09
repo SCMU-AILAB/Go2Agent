@@ -6,7 +6,6 @@ import 'widgets/console_header.dart';
 import 'widgets/console_footer.dart';
 import 'widgets/console_widgets.dart';
 import 'widgets/log_panel.dart';
-import 'widgets/vision_hold_panel.dart';
 
 /// Standalone dialog / text-interaction page.
 ///
@@ -268,7 +267,6 @@ class _SideColumn extends StatelessWidget {
       children: [
         _StatusCard(controller: controller),
         const SizedBox(height: 12),
-        VisionHoldPanel(controller: controller),
         const SizedBox(height: 12),
         SizedBox(
           width: double.infinity,
@@ -378,13 +376,17 @@ class _StatusCard extends StatelessWidget {
             spacing: 16,
             runSpacing: 8,
             children: [
-              _kv('模式', c.gestureMode ? '手势交互' : '文本指令'),
+              _kv('模式', c.gestureMode ? '视觉任务' : '文本指令'),
               _kv('后端', c.backend ? '已连接' : '未连接'),
-              _kv('机器人', '${c.robotModelLabel} · ${c.isHardware ? '真机' : '模拟'}'),
+              _kv(
+                '机器人',
+                '${c.robotModelLabel} · ${c.isHardware ? '真机' : '模拟'}',
+              ),
               _kv('技能状态', c.skillStatus),
               _kv('当前技能', c.skillName),
               if (c.busy) _kv('进度', '${c.progress}%'),
-              if (c.busy) _kv('耗时', '${c.modelDuration.inMilliseconds / 1000}s'),
+              if (c.busy)
+                _kv('耗时', '${c.modelDuration.inMilliseconds / 1000}s'),
               if (c.currentTask.isNotEmpty) _kv('当前任务', c.currentTask),
             ],
           ),
@@ -470,8 +472,9 @@ class _ChatBody extends StatelessWidget {
           return Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Column(
-              crossAxisAlignment:
-                  isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              crossAxisAlignment: isUser
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
               children: [
                 Text(
                   '${isUser ? '你' : '机器人'}  ${turn.time}',
@@ -496,10 +499,11 @@ class _ChatBody extends StatelessWidget {
                       color: isUser ? ConsoleColors.field : ConsoleColors.bg2,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: (isUser
-                                ? ConsoleColors.accent
-                                : ConsoleColors.lineSoft)
-                            .withValues(alpha: .55),
+                        color:
+                            (isUser
+                                    ? ConsoleColors.accent
+                                    : ConsoleColors.lineSoft)
+                                .withValues(alpha: .55),
                       ),
                     ),
                     child: Text(

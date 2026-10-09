@@ -103,7 +103,7 @@ class FakeConsoleApi implements ConsoleApi {
     : _payload = initialPayload ?? consolePayload();
 
   @override
-  final Uri baseUri = Uri.parse('http://g1.test:8000');
+  final Uri baseUri = Uri.parse('http://go2.test:8000');
 
   final StreamController<Map<String, dynamic>> _events =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -115,8 +115,10 @@ class FakeConsoleApi implements ConsoleApi {
   int updatePromptCalls = 0;
   int submitTaskCalls = 0;
   String? lastTaskMode;
+  bool lastReplaceExisting = false;
   int cancelTaskCalls = 0;
   int emergencyStopCalls = 0;
+  Object? emergencyStopError;
   int setCameraSourceCalls = 0;
   int clearLogsCalls = 0;
   int fetchCameraFrameCalls = 0;
@@ -192,11 +194,13 @@ class FakeConsoleApi implements ConsoleApi {
     String instruction, {
     String? cameraSource,
     String? taskMode,
+    bool replaceExisting = false,
   }) async {
     submitTaskCalls += 1;
     lastInstruction = instruction;
     lastTaskCameraSource = cameraSource;
     lastTaskMode = taskMode;
+    lastReplaceExisting = replaceExisting;
     _payload = {
       ..._payload,
       'busy': true,
@@ -227,6 +231,7 @@ class FakeConsoleApi implements ConsoleApi {
   @override
   Future<ConsoleSnapshot> emergencyStop() async {
     emergencyStopCalls += 1;
+    if (emergencyStopError case final error?) throw error;
     _payload = {
       ..._payload,
       'busy': false,
@@ -234,12 +239,6 @@ class FakeConsoleApi implements ConsoleApi {
       'skillStatus': 'STOPPED',
       'progressText': '已急停',
     };
-    return snapshot;
-  }
-
-  @override
-  Future<ConsoleSnapshot> updateVisionConfirmHold(double seconds) async {
-    _payload = {..._payload, 'visionConfirmHold': seconds};
     return snapshot;
   }
 
