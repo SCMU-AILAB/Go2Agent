@@ -1,5 +1,7 @@
 """Public facade for registering and invoking robot skills."""
 
+import asyncio
+
 from robot.base import RobotAdapter
 
 from .executor import SkillExecutor
@@ -15,6 +17,7 @@ class SkillRuntime:
         self.registry = SkillRegistry()
         self.resources = ResourceManager()
         self.executor = SkillExecutor(self.registry, robot, self.resources)
+        self._active_tasks: dict[asyncio.Task[SkillResult], str] = {}
 
     def register[ArgsT: SkillArgs](self, skill: RobotSkill[ArgsT]) -> None:
         self.registry.register(skill)
@@ -25,9 +28,28 @@ class SkillRuntime:
         /,
         **arguments: object,
     ) -> SkillResult:
-        return await self.executor.execute(
-            SkillInvocation(
-                skill_name=skill_name,
-                arguments=arguments,
-            )
-        )
+        if skill_name in {"stop", "stop_move"}:
+            await self.cancel_active()
+        invocation = SkillInvocation(skill_name=skill_name, arguments=arguments)
+        task = asyncio.current_task()
+        if task is not None:
+            self._active_tasks[task] = skill_name
+        try:
+            return await self.executor.execute(invocation)
+        finally:
+            if task is not None:
+                self._active_tasks.pop(task, None)
+
+    async def cancel_active(self) -> None:
+        current = asyncio.current_task()
+        tasks = [
+            task
+            for task, skill_name in self._active_tasks.items()
+            if task is not current
+            and skill_name not in {"stop", "stop_move"}
+            and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)

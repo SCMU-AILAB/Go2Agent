@@ -28,6 +28,7 @@ from .motions import (
     StopMoveSkill,
     StopSkill,
 )
+from .motions.go2_follow import FollowPersonSkill
 from .posture import PostureSkill, PostureSpec
 
 # Safe random-dance pool only. Never operator-only or dangerous actions.
@@ -394,6 +395,7 @@ def build_go2_autonomy_skills() -> tuple[RobotSkill[SkillArgs], ...]:
         StopSkill(),
         StopMoveSkill(),
         Go2MoveSkill(),
+        FollowPersonSkill(),
     )
     return cast(tuple[RobotSkill[SkillArgs], ...], skills)
 

@@ -1,6 +1,7 @@
 """Stable request, result, and metadata contracts for robot skills."""
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -23,6 +24,8 @@ class SkillMetadata:
     tags: tuple[str, ...] = ()
 
     required_resources: tuple[str, ...] = ()
+
+    behavior: Literal["bounded", "persistent"] = "bounded"
 
     timeout_s: float = 30.0
 
