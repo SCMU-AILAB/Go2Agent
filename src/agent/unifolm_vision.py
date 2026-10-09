@@ -16,14 +16,13 @@ from .vision_policy import OllamaVisionInvoker
 DEFAULT_UNIFOLM_MODEL = "unitreerobotics/UnifoLM-ER-1"
 DEFAULT_UNIFOLM_URL = "http://127.0.0.1:8011"
 
-_OBSERVATION_PROMPT = """Describe only visible facts relevant to this task: {task}
-Describe visible people and the hand pose in the latest frame, including a
-stationary heart shape, finger heart or V sign when present. Also describe
-movement across these ordered frames, such as a waving hand. An unchanged hand
-pose is still visible evidence; do not report only whether something changed.
-Distinguish no person visible from a visible person with no clear gesture.
-If hands are outside the frame or obscured, say so. Do not guess unseen gestures
-or output coordinates, robot commands or JSON. Use one short sentence.
+_OBSERVATION_PROMPT = """Task: {task}
+Describe the hand gesture NOW in the LAST frame in at most eight words.
+Earlier frames give motion context only. If the hand was raised earlier but
+is down in the last frame, say "Hands down now; gesture ended."
+Do not call a stationary raised hand waving unless movement is visible.
+If unclear, say "Gesture unclear." If absent, say "No gesture visible."
+A stationary heart or V sign is valid. Describe only visible evidence.
 """
 
 
@@ -156,7 +155,7 @@ class UnifolmDecisionInvoker:
         decision_model: str = "qwen3.5:9b",
         decision_url: str | None = None,
         task: str = "",
-        max_new_tokens: int = 96,
+        max_new_tokens: int = 32,
         timeout_s: float = 10.0,
         observer: UnifolmVisionInvoker | None = None,
         decision_invoker: OllamaVisionInvoker | None = None,
@@ -170,6 +169,10 @@ class UnifolmDecisionInvoker:
         output_schema = AgentDecision.model_json_schema()
         # Explanations are not part of the model output contract.
         output_schema["properties"].pop("reason")
+        output_schema["properties"]["gesture_state"] = {
+            "type": "string", "enum": ["wave", "heart", "none", "uncertain"]
+        }
+        output_schema["required"].append("gesture_state")
         output_schema["properties"]["speech"] = {
             "anyOf": [{"type": "string", "maxLength": 160}, {"type": "null"}]
         }
@@ -222,7 +225,17 @@ class UnifolmDecisionInvoker:
             "task is absent or unclear, choose ignore. Return ONLY one compact "
             "JSON object. Never output reason, analysis, explanations, Markdown "
             "or any text outside the JSON.\n"
-            "Omit unused fields. For ignore or continue, return only action. "
+            "Always include gesture_state describing ONLY the latest visible "
+            "hand gesture: wave, heart (including V sign), none, or uncertain. "
+            "Earlier gestures that have ended are none. Possible or ambiguous "
+            "waving is uncertain, never wave. For wave/hello/heart skills, "
+            "gesture_state must match the requested gesture. If it does not, "
+            "choose ignore. Ignore previous failed actions when deciding "
+            "whether a gesture is visible NOW; never retry a past gesture. "
+            "If policy context responded_gesture matches gesture_state, "
+            "choose ignore: that continuous gesture has already been answered. "
+            "Keep reporting the visible gesture_state even when ignoring. "
+            "Omit unused fields. For ignore or continue, return action and gesture_state. "
             "For a skill without parameters, arguments "
             "must be {}. Never copy catalog descriptions or JSON schemas "
             "into arguments.\n"
@@ -237,8 +250,22 @@ class UnifolmDecisionInvoker:
             "Return the decision JSON for the operator task."
         )
         result = await self._decision.ainvoke((), grounded_prompt)
+        gesture_state = "uncertain"
+        try:
+            payload = json.loads(result) if isinstance(result, str) else result
+            if isinstance(payload, dict):
+                reported = payload.pop("gesture_state", "uncertain")
+                if reported in {"wave", "heart", "none", "uncertain"}:
+                    gesture_state = reported
+                expected = {"wave": "wave", "hello": "wave", "heart": "heart"}.get(payload.get("skill"))
+                if expected and gesture_state != expected:
+                    payload = {"action": "ignore"}
+                result = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        except (ValueError, TypeError):
+            pass  # Existing decision validation rejects malformed JSON.
         self._last_metrics = {
             **self._decision.last_metrics,
+            "gesture_state": gesture_state,
             "round_trip_s": round(time.monotonic() - started, 4),
             "frame_count": len(frames),
             "unifolm_observation": observation,

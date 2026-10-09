@@ -60,7 +60,9 @@ skill for Go2 (it invokes the native `hello` action). You may use
 execute_and_speak with a short greeting, but do not return speak alone when the
 task asks the robot to greet physically. Do not trigger a greeting merely
 because a person is present; require visible greeting evidence in the latest
-visual evidence.
+visual evidence. The gesture must still be present in the LAST frame;
+never greet for an earlier frame after the person lowered their hand.
+Possible or ambiguous waving is insufficient: ignore it.
 Any skill in the supplied catalog is eligible when it matches the task and the
 current visual evidence. Keep speech concise.
 
@@ -301,6 +303,11 @@ class SocialVisionAgent(VisionDecisionAgent):
             return AgentDecision(
                 action="ignore",
                 reason=f"skill not allowed for vision: {decision.skill}",
+            )
+        gesture = {"wave": "wave", "hello": "wave", "heart": "heart"}.get(decision.skill)
+        if gesture and (policy_context or {}).get("responded_gesture") == gesture:
+            return AgentDecision(
+                action="ignore", reason="continuous gesture already answered; release to retry"
             )
         if decision.skill == "follow_person":
             observation = frames[-1].observation

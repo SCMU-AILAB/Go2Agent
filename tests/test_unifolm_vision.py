@@ -104,6 +104,36 @@ class UnifolmVisionInvokerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(invoker.last_metrics["unifolm_metrics"], {"inference_s": 0.6})
 
+    async def test_latest_gesture_evidence_blocks_old_or_ambiguous_action(self) -> None:
+        for state in ("none", "uncertain", "heart"):
+            with self.subTest(state=state):
+                observer = AsyncMock()
+                observer.ainvoke.return_value = "Hands down now; gesture ended."
+                observer.last_metrics = {}
+                decider = AsyncMock()
+                decider.ainvoke.return_value = json.dumps({
+                    "action": "execute_skill", "skill": "wave", "gesture_state": state,
+                })
+                decider.last_metrics = {}
+                invoker = UnifolmDecisionInvoker(observer=observer, decision_invoker=decider)
+                result = await invoker.ainvoke([b"old", b"latest"], "skills")
+                self.assertEqual(json.loads(result), {"action": "ignore"})
+                self.assertEqual(invoker.last_metrics["gesture_state"], state)
+                self.assertIn("LAST frame", observer.ainvoke.call_args.args[1])
+
+    async def test_gesture_metadata_is_not_forwarded_as_skill_arguments(self) -> None:
+        observer = AsyncMock()
+        observer.ainvoke.return_value = "Hand waving now."
+        observer.last_metrics = {}
+        decider = AsyncMock()
+        decider.ainvoke.return_value = '{"action":"execute_skill","skill":"wave","gesture_state":"wave"}'
+        decider.last_metrics = {}
+        invoker = UnifolmDecisionInvoker(observer=observer, decision_invoker=decider)
+        self.assertEqual(json.loads(await invoker.ainvoke([b"frame"], "skills")), {
+            "action": "execute_skill", "skill": "wave",
+        })
+        self.assertEqual(invoker.last_metrics["gesture_state"], "wave")
+
     def test_decider_has_explicit_context_and_bounded_explanations(self) -> None:
         invoker = UnifolmDecisionInvoker()
         decider = invoker._decision

@@ -721,6 +721,7 @@ class VisionPolicyWorker:
         self._recent_actions: deque[dict[str, object]] = deque(maxlen=5)
         self._last_selected_skill: str | None = None
         self._last_selected_at_s: float | None = None
+        self._responded_gesture: str | None = None
         self._request_sequence = 0
         self._decision_finished_at_s: deque[float] = deque(maxlen=32)
         self._interrupt_lock = asyncio.Lock()
@@ -1040,6 +1041,13 @@ class VisionPolicyWorker:
             frames = request.frames
             robot_state = request.robot_state
             try:
+                gesture_state = request.model_metrics.get("gesture_state")
+                evidence_fresh = bool(frames) and (
+                    self.max_decision_age_s is None
+                    or time.monotonic() - frames[-1].observed_at_s <= self.max_decision_age_s
+                )
+                if gesture_state == "none" and evidence_fresh:
+                    self._responded_gesture = None
                 if decision.action in {"continue", "ignore"}:
                     self._put_latest(
                         self._outcome_queue,
@@ -1163,6 +1171,29 @@ class VisionPolicyWorker:
                         ),
                     )
                     continue
+
+                gesture = {"wave": "wave", "hello": "wave", "heart": "heart"}.get(decision.skill)
+                if gesture and gesture_state is not None:
+                    suppression = None
+                    if gesture_state != gesture:
+                        suppression = "gesture absent or unclear in latest frame"
+                    elif self._responded_gesture == gesture:
+                        suppression = "continuous gesture already answered; release to retry"
+                    if suppression:
+                        self._put_latest(
+                            self._outcome_queue,
+                            self._outcome(
+                                decision, frames, robot_state,
+                                request_id=request.request_id,
+                                model_metrics=request.model_metrics,
+                                suppressed_reason=suppression,
+                            ),
+                        )
+                        continue
+                    # Count an attempted response even when SDK acknowledgement
+                    # times out. Retrying an ambiguous physical result can repeat
+                    # the same gesture indefinitely. No timer or hold is used.
+                    self._responded_gesture = gesture
 
                 self._active_signature = signature
                 self._active_skill = decision.skill
@@ -1360,6 +1391,7 @@ class VisionPolicyWorker:
             ),
             "last_selected_skill": self._last_selected_skill,
             "recent_actions": list(self._recent_actions),
+            "responded_gesture": self._responded_gesture,
             "safety_latched": self._safety_latched,
         }
         if self._last_selected_at_s is not None:

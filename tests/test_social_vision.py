@@ -72,6 +72,17 @@ class SocialVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("last_skill_result", invoker.calls[-1][1])
         self.assertIn("看到人坐下时也坐下", invoker.calls[-1][1])
 
+    async def test_open_decision_cannot_retry_answered_wave_through_hello_alias(self):
+        invoker = FakeVisionInvoker([{"action": "execute_skill", "skill": "hello"}])
+        agent = SocialVisionAgent(invoker=invoker, task_context="有人挥手就挥手")
+        result = await agent.decide(
+            [camera_frame(1), camera_frame(2)],
+            RobotState(hardware=False, connected=True), build_go2_all_skills(),
+            policy_context={"responded_gesture": "wave"},
+        )
+        self.assertEqual(result.action, "ignore")
+        self.assertIn("already answered", result.reason)
+
     async def test_follow_goal_selects_persistent_skill_and_then_continues(self):
         invoker = FakeVisionInvoker(
             [

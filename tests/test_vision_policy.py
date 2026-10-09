@@ -5,6 +5,7 @@ import json
 import time
 import unittest
 from collections.abc import Sequence
+from unittest.mock import AsyncMock
 
 from agent import (
     AgentDecision,
@@ -17,6 +18,7 @@ from core.context import SkillContext
 from core.models import SkillArgs, SkillMetadata, SkillResult
 from core.runtime import SkillRuntime
 from core.skill import RobotSkill
+from core.types import SkillStatus
 from perception import CameraFrame, PerceptionResult, VideoBuffer
 from robot import RobotState, SimulatedRobotAdapter
 from skills import register_go2_skills
@@ -776,6 +778,38 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
             await worker.stop()
 
         self.assertGreaterEqual(robot.events.count(("loco_action", ("hello", {}))), 2)
+
+    async def test_continuous_gesture_has_one_attempt_even_after_sdk_timeout(self) -> None:
+        runtime = SkillRuntime(SimulatedRobotAdapter())
+        register_go2_skills(runtime)
+        worker = VisionPolicyWorker(
+            runtime, VisionDecisionAgent(invoker=FakeVisionInvoker([{"action": "ignore"}])),
+            VideoBuffer(), max_decision_age_s=2.0,
+        )
+        worker._execute = AsyncMock(return_value=(SkillResult.fail(SkillStatus.FAILED, "SDK status 3104"), False))
+        task = asyncio.create_task(worker._execution_loop())
+        try:
+            for index, (state, skill, age) in enumerate([
+                ("wave", "wave", 0), ("wave", "hello", 0),
+                ("uncertain", None, 0), ("wave", "wave", 0),
+                ("none", None, 3), ("wave", "wave", 0),
+                ("none", None, 0), ("wave", "hello", 0),
+            ]):
+                decision = AgentDecision(action="execute_skill", skill=skill) if skill else AgentDecision(action="ignore")
+                await worker._decision_queue.put(_VisionDecisionRequest(
+                    decision=decision, frames=(camera_frame(time.monotonic() - age),),
+                    robot_state=RobotState(hardware=False, connected=True),
+                    request_id=str(index), model_metrics={"gesture_state": state},
+                ))
+                deadline = time.monotonic() + 1
+                while not worker._outcome_queue.qsize() and time.monotonic() < deadline:
+                    await asyncio.sleep(.001)
+                self.assertTrue(worker.drain_outcomes())
+            self.assertEqual(worker._execute.await_count, 2)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await worker.stop()
 
     async def test_interrupt_cancels_active_skill_and_stops_robot(self) -> None:
         robot = SimulatedRobotAdapter()

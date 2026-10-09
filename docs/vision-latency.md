@@ -135,3 +135,29 @@ option. An identical behavior is still suppressed while active; it may execute
 again as soon as completion is recorded. Decision prompts request JSON only,
 and the UnifoLM decider schema excludes the reason field entirely. Internal
 runtime diagnostic reasons remain available for rejected decisions.
+
+### Current gesture evidence and repeated responses
+
+A later live trace exposed a semantic error: an observation described the hand
+being extended in the first frame and lowered in the second, yet the decider
+selected wave. Ambiguous "could be interpreted as waving" observations also
+selected hello. Live frame-to-decision ages were roughly 1.1–3.0 seconds;
+these records did not show a growing backlog of queued camera windows.
+
+The observer now prioritizes the last frame and uses at most eight words. The
+decider emits a required gesture_state (wave/heart/none/uncertain) alongside its
+JSON action. That metadata is removed before skill parsing. A wave/hello/heart
+action must match current gesture evidence; past or ambiguous gestures are
+ignored. The worker records one attempted response per continuous gesture,
+including attempts with uncertain SDK acknowledgement. wave and hello share
+that state. Only a fresh none observation rearms the same gesture; an ignore,
+an uncertain observation or an old none observation cannot rearm it. The state
+is supplied to the decider as responded_gesture, so repeated commands can be
+suppressed before reaching execution as well. No confirmation timer or fixed
+cooldown is involved. Console decision freshness is tightened from five to two
+seconds; slow results are discarded rather than executed late.
+
+Regression coverage includes gesture release/reappearance, alias switching,
+uncertainty, stale release evidence and repeated SDK failure. This reduces
+repeated and stale commands but does not eliminate model inference latency or
+resolve SDK status 3104.

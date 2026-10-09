@@ -195,7 +195,7 @@ class BackendConfig:
     vision_backend: Literal["ollama", "unifolm", "llamacpp"] = "ollama"
     vision_url: str = "http://127.0.0.1:11435"
     vision_rotation_deg: int = 0
-    vision_max_age_s: float = 5.0
+    vision_max_age_s: float = 2.0
     # Match run-remote-vision.sh; configurable for recognition/latency replay.
     vision_window_s: float = 0.8
     vision_frame_count: int = 3
