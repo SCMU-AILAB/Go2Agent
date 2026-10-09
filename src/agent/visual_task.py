@@ -59,8 +59,12 @@ class VisualTaskPlanner:
             "Compile the operator's visual task, not a current camera decision. Return ONLY JSON matching "
             "the supplied task schema. Preserve the operator's meaning; never replace an unsupported goal "
             "with a greeting. Use only autonomous skills in the catalog. Fill required_skills and "
-            "skill_arguments with actual validated parameter values, not schemas. Choose repeat_policy=persistent for continuous following, once_per_event for greetings and gesture responses, or while_needed for repeated bounded steps toward a goal. Conditions must be "
-            "observable. Use the skill's defaults when the operator omits a parameter. For following, "
+            "skill_arguments with actual validated parameter values, not schemas. Choose repeat_policy=persistent for continuous following, once_per_event for greetings and gesture responses, or while_needed for repeated bounded steps toward a goal. "
+            '"skill_arguments" maps SKILL NAMES to argument objects. For example, following at '
+            '1.5 metres uses "required_skills":["follow_person"], '
+            '"skill_arguments":{"follow_person":{"target_distance_m":1.5}}. '
+            'Never put parameter names at the outer level or wrap values in {"value":...}. '
+            "Conditions must be observable. Use the skill's defaults when the operator omits a parameter. For following, "
             "the capability is single visible person distance following, not identity recognition, "
             "route replay or navigation behind a person around corners. Multiple ambiguous targets "
             "need clarification. If the goal requires absent capabilities, set supported=false and "
