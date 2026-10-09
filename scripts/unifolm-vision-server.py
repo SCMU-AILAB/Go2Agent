@@ -11,13 +11,10 @@ import time
 from contextlib import asynccontextmanager
 from threading import Lock
 
-import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
-from qwen_vl_utils import process_vision_info
-from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
 
 class InvokeRequest(BaseModel):
@@ -31,6 +28,9 @@ class InvokeRequest(BaseModel):
 
 class UnifolmRuntime:
     def __init__(self, model_path: str) -> None:
+        import torch
+        from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+
         loaded_at = time.perf_counter()
         # The published tokenizer config contains a legacy list-form metadata
         # field. All action tokens already exist in tokenizer.json.
@@ -49,6 +49,9 @@ class UnifolmRuntime:
         self._lock = Lock()
 
     def invoke(self, body: InvokeRequest) -> dict[str, object]:
+        import torch
+        from qwen_vl_utils import process_vision_info
+
         started = time.perf_counter()
         try:
             images = [
@@ -115,6 +118,7 @@ def create_app(model_path: str) -> FastAPI:
     async def lifespan(app: FastAPI):
         app.state.runtime = await asyncio.to_thread(UnifolmRuntime, model_path)
         app.state.inference_lock = asyncio.Lock()
+        app.state.pending_requests = 0
         yield
 
     app = FastAPI(title="UnifoLM Vision Server", lifespan=lifespan)
@@ -134,16 +138,41 @@ def create_app(model_path: str) -> FastAPI:
     async def invoke(body: InvokeRequest) -> dict[str, object]:
         runtime: UnifolmRuntime = app.state.runtime
         inference_lock: asyncio.Lock = app.state.inference_lock
-        if inference_lock.locked():
+        if app.state.pending_requests >= 8:
             raise HTTPException(
                 status_code=429,
-                detail="inference already in flight; submit the latest window later",
+                detail="inference queue full; retry latest window",
+                headers={"Retry-After": "1"},
             )
+        app.state.pending_requests += 1
+        queued_at = time.perf_counter()
         try:
-            async with inference_lock:
-                return await asyncio.to_thread(runtime.invoke, body)
+            try:
+                await asyncio.wait_for(inference_lock.acquire(), timeout=3.0)
+            except TimeoutError as exc:
+                raise HTTPException(
+                    status_code=429,
+                    detail="inference queue wait exceeded 3 seconds; retry latest window",
+                    headers={"Retry-After": "1"},
+                ) from exc
+            queue_wait_s = time.perf_counter() - queued_at
+            task = asyncio.create_task(asyncio.to_thread(runtime.invoke, body))
+            try:
+                try:
+                    result = await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    await task  # GPU work must finish before handing off the slot.
+                    raise
+                result.setdefault("metrics", {})["queue_wait_s"] = round(
+                    queue_wait_s, 4
+                )
+                return result
+            finally:
+                inference_lock.release()
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            app.state.pending_requests -= 1
 
     return app
 
