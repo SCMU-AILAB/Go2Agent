@@ -23,7 +23,7 @@ from core.models import SkillArgs
 from core.skill import RobotSkill
 from perception.events import WorldEvent, WorldEventType
 
-_DECISION_SYSTEM_PROMPT = """Select one Unitree G1 response for the supplied event.
+_DECISION_SYSTEM_PROMPT = """Select one Unitree Go2 response for the supplied event.
 Output only a JSON object. Its top-level keys are action, skill, arguments,
 speech, and optionally reason. Never wrap the object in a decision key.
 The action field must be exactly one of execute_skill, speak,
@@ -82,6 +82,7 @@ class AgentDecision(BaseModel):
     arguments: dict[str, object] = Field(default_factory=dict)
     speech: str | None = None
     reason: str | None = None
+    condition_met: bool | None = Field(default=None, strict=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -96,8 +97,19 @@ class AgentDecision(BaseModel):
         action = action.strip()
         payload["action"] = action
         skill_value = payload.get("skill")
-        has_skill = _has_nonempty_text(skill_value)
-        has_arguments = bool(payload.get("arguments"))
+        # Some multimodal models put the selected tool in arguments.name.
+        # Normalize that shape at the protocol boundary.
+        raw_arguments = payload.get("arguments")
+        if (
+            action in {"execute_skill", "execute_and_speak"}
+            and not _has_nonempty_text(skill_value)
+            and isinstance(raw_arguments, Mapping)
+            and _has_nonempty_text(raw_arguments.get("name"))
+        ):
+            payload["skill"] = str(raw_arguments["name"]).strip()
+            payload["arguments"] = {
+                key: item for key, item in raw_arguments.items() if key != "name"
+            }
         has_speech = _has_nonempty_text(payload.get("speech"))
 
         if action == "execute_skill":
@@ -105,30 +117,37 @@ class AgentDecision(BaseModel):
                 payload["action"] = "execute_and_speak"
             return payload
         if action == "speak":
-            if has_skill or has_arguments:
-                payload["action"] = "execute_and_speak" if has_speech else "execute_skill"
+            payload["skill"] = None
+            payload["arguments"] = {}
             return payload
         if action == "execute_and_speak":
             if not has_speech:
                 payload["action"] = "execute_skill"
             return payload
         if action in {"continue", "interrupt", "ignore"}:
-            if has_skill or has_arguments:
-                payload["action"] = "execute_and_speak" if has_speech else "execute_skill"
-            elif has_speech:
-                payload["action"] = "speak"
+            # An explicit no-op or interrupt must never turn into a physical
+            # action because the model attached an inconsistent skill field.
+            payload["skill"] = None
+            payload["arguments"] = {}
+            payload["speech"] = None
             return payload
 
-        if action in {"stop", "cancel"} and not has_skill and not has_arguments:
+        if action in {"stop", "cancel"}:
             payload["action"] = "interrupt"
+            payload["skill"] = None
+            payload["arguments"] = {}
             payload.pop("speech", None)
             return payload
-        if action in {"keep", "keep_going"} and not has_skill and not has_arguments:
+        if action in {"keep", "keep_going"}:
             payload["action"] = "continue"
+            payload["skill"] = None
+            payload["arguments"] = {}
             payload.pop("speech", None)
             return payload
-        if action in {"none", "no_action", "noop"} and not has_skill and not has_arguments:
+        if action in {"none", "no_action", "noop"}:
             payload["action"] = "speak" if has_speech else "ignore"
+            payload["skill"] = None
+            payload["arguments"] = {}
             return payload
 
         skill = payload.get("skill")
@@ -164,11 +183,18 @@ class AgentDecision(BaseModel):
         return self
 
     def to_dict(self) -> dict[str, object]:
-        return self.model_dump(mode="json")
+        payload = self.model_dump(mode="json")
+        if self.condition_met is None:
+            payload.pop("condition_met", None)
+        return payload
 
 
 class DecisionAgentError(RuntimeError):
     """Raised when the decision Agent does not return a valid decision."""
+
+
+class RecoverableDecisionError(DecisionAgentError):
+    """Discard this model response and try again with a fresh camera window."""
 
 
 class DecisionAgent(Protocol):
@@ -234,7 +260,7 @@ class EventDecisionAgent:
             base_url=base_url or os.getenv("OLLAMA_HOST"),
             temperature=0.1,
             reasoning=False,
-            num_ctx=1024,
+            num_ctx=8192,
             num_predict=64,
             keep_alive="30m",
             client_kwargs={"trust_env": False, "timeout": timeout_s},

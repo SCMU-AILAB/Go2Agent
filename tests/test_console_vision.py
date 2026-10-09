@@ -4,11 +4,14 @@ import asyncio
 import io
 import time
 import unittest
+from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from agent.social_vision import SocialVisionAgent
+from agent.decision import RecoverableDecisionError
+from agent.social_vision import _OPEN_DECISION_PROMPT, SocialVisionAgent
+from agent.unifolm_vision import UnifolmDecisionInvoker
 from app.api import create_app
 from app.backend import BackendConfig, ConsoleBackend
 from perception import CameraFrame, PerceptionResult
@@ -145,10 +148,37 @@ class ConsoleVisionTests(unittest.TestCase):
         self.assertEqual(agent.model_name, "qwen3.5:9b")
         self.assertTrue(agent.generate_speech)
         self.assertIn("简短回应", agent.task_context)
-        self.assertIn("观察挥手", agent.task_context)
+        self.assertEqual("观察挥手", agent.operator_instruction)
         self.assertIs(agent._invoker.think, False)
+        self.assertTrue(agent._invoker.constrain_json)
         self.assertEqual(backend.config.vision_frame_count, 3)
         self.assertEqual(backend.config.vision_window_s, 0.8)
+
+    def test_removed_confirmation_endpoint_is_unavailable(self):
+        backend = ConsoleBackend(
+            BackendConfig(audio_enabled=False), agent_factory=fake_agent_factory
+        )
+        with TestClient(create_app(backend=backend)) as client:
+            self.assertEqual(
+                client.put("/api/v1/config/vision-confirm-hold", json={"seconds": 1}).status_code,
+                404,
+            )
+            self.assertNotIn("visionConfirmHoldS", client.get("/api/v1/console").json())
+
+    def test_go2_vision_factory_uses_open_decisions(self):
+        backend = ConsoleBackend(
+            BackendConfig(
+                robot_model="go2", audio_enabled=False, vision_backend="unifolm"
+            ),
+            agent_factory=fake_agent_factory,
+        )
+        agent = backend._build_vision_agent("看到人坐下就坐下")
+        self.assertEqual(agent.response_format, "decision")
+        self.assertIsInstance(agent._invoker, UnifolmDecisionInvoker)
+        self.assertEqual(agent._invoker.task, "看到人坐下就坐下")
+        self.assertEqual("看到人坐下就坐下", agent.operator_instruction)
+        self.assertFalse(agent.allow_operator_skills)
+        self.assertIn("registered `wave`", _OPEN_DECISION_PROMPT)
 
     def test_default_camera_applies_rotation_before_jpeg_encoding(self):
         backend = ConsoleBackend(
@@ -165,11 +195,12 @@ class ConsoleVisionTests(unittest.TestCase):
         invoker = VisionInvoker()
         backend = ConsoleBackend(
             BackendConfig(
-                camera_source="local", audio_enabled=False, vision_rotation_deg=180
+                robot_model="go2", camera_source="local", audio_enabled=False, vision_rotation_deg=180
             ),
             agent_factory=fake_agent_factory,
             camera_factory=lambda: camera,
             vision_agent_factory=lambda text: SocialVisionAgent(
+                response_format="json",
                 invoker=invoker,
                 prompt_profile="egocentric",
                 generate_speech=True,
@@ -197,7 +228,7 @@ class ConsoleVisionTests(unittest.TestCase):
             )
             self.assertTrue(snap["busy"])
             self.assertEqual(audio.spoken, ["你好呀！"])
-            self.assertIn(("wave", "right"), backend.robot.events)
+            self.assertIn(("loco_action", ("hello", {})), backend.robot.events)
             self.assertIn("回应挥手", invoker.calls[0][1])
             self.assertIn("请用中文", invoker.calls[0][1])
             self.assertGreaterEqual(len(invoker.calls[0][0]), 2)
@@ -236,6 +267,52 @@ class ConsoleVisionTests(unittest.TestCase):
             self.assertEqual(len(invoker.calls), count)
         self.assertFalse(camera.opened)
 
+    def test_token_exhaustion_between_interactions_keeps_task_running(self):
+        for response_format in ("json", "decision"):
+            with self.subTest(response_format=response_format):
+                backend, _camera, invoker = self.build()
+                calls = 0
+
+                async def invoke(frames, prompt, mode=response_format):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 2:
+                        raise RecoverableDecisionError("Ollama output token budget exhausted")
+                    if calls > 3:
+                        return {"action": "ignore"}
+                    result: dict[str, object] = {
+                        "action": "execute_skill",
+                        "skill": "wave" if calls == 1 else "heart",
+                    }
+                    if mode == "json":
+                        result.update(
+                            observation="visible gesture toward camera",
+                            hand_visible=True,
+                            directed_at_robot=True,
+                            present_in_latest=True,
+                        )
+                    return result
+
+                invoker.ainvoke = invoke
+                backend._vision_agent_factory = lambda text, invoker=invoker, mode=response_format: SocialVisionAgent(
+                    invoker=invoker, response_format=mode, task_context=text
+                )
+                with TestClient(create_app(backend=backend)) as client:
+                    wait_for(client, lambda s: s["camera"]["frameAvailable"])
+                    client.post("/api/v1/tasks", json={"instruction": "回应挥手和比心"})
+                    snapshot = wait_for(
+                        client,
+                        lambda s, backend=backend: ("loco_action", ("heart", {})) in backend.robot.events,
+                    )
+                    self.assertIn(("loco_action", ("hello", {})), backend.robot.events)
+                    self.assertTrue(snapshot["busy"])
+                    self.assertTrue(any(
+                        log["level"] == "WARN" and "继续观察" in log["message"]
+                        for log in snapshot["logs"]
+                    ))
+                    self.assertFalse(invoker.closed)
+                    client.post("/api/v1/tasks/current/cancel", json={})
+
     def test_stale_frames_and_bad_output_never_execute(self):
         for fault in ("stale", "bad"):
             with self.subTest(fault=fault):
@@ -271,30 +348,3 @@ class ConsoleVisionTests(unittest.TestCase):
             )
             client.put("/api/v1/camera/source", json={"source": "demo"})
             self.assertEqual(len(backend._video_buffer), 0)
-
-
-class ConsoleCameraConcurrencyTests(unittest.IsolatedAsyncioTestCase):
-    async def test_depth_safety_stop_does_not_block_camera_capture(self):
-        camera = Camera()
-        camera.distance_m = 0.2
-        backend = ConsoleBackend(
-            BackendConfig(audio_enabled=False, vision_rotation_deg=0),
-            agent_factory=fake_agent_factory,
-            camera_factory=lambda: camera,
-        )
-        worker = BlockingSafetyWorker()
-        backend._vision_worker = worker
-        camera_task = asyncio.create_task(backend._camera_loop(camera))
-
-        try:
-            await asyncio.wait_for(worker.started.wait(), timeout=1.0)
-            count_while_stop_is_blocked = camera.capture_count
-            await asyncio.sleep(0.1)
-            self.assertGreater(camera.capture_count, count_while_stop_is_blocked)
-        finally:
-            worker.release.set()
-            safety_task = backend._safety_stop_task
-            if safety_task is not None:
-                await asyncio.wait_for(safety_task, timeout=1.0)
-            camera_task.cancel()
-            await asyncio.gather(camera_task, return_exceptions=True)

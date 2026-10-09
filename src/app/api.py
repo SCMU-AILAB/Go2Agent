@@ -46,18 +46,15 @@ class SystemPromptUpdate(ApiModel):
 
 class TaskRequest(ApiModel):
     instruction: str = Field(min_length=1)
+    replace_existing: bool = False
     camera_source: Literal["demo", "local"] | None = None
-    task_mode: Literal["text", "gesture"] | None = None
+    task_mode: Literal["text", "vision", "gesture"] | None = None
     # Accepted for older clients; ignored. Gesture skills map 1:1 from vision.
     wave_response: Literal["wave", "heart"] | None = None
 
 
 class CancelTaskRequest(ApiModel):
     reason: str = "用户停止了任务"
-
-
-class VisionConfirmHoldUpdate(ApiModel):
-    seconds: float = Field(ge=0, le=30)
 
 
 class SkillExecuteRequest(ApiModel):
@@ -169,6 +166,7 @@ def create_app(
                 camera_source=body.camera_source,
                 task_mode=body.task_mode,
                 wave_response=body.wave_response,
+                replace_existing=body.replace_existing,
             )
         except TaskConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -182,18 +180,17 @@ def create_app(
     @app.post("/api/v1/tasks/current/cancel", response_model=ConsoleSnapshot)
     async def cancel_task(body: CancelTaskRequest | None = None) -> ConsoleSnapshot:
         reason = body.reason if body is not None else "用户停止了任务"
-        return await console.cancel_task(reason)
+        try:
+            return await console.cancel_task(reason)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.post("/api/v1/robot/emergency-stop", response_model=ConsoleSnapshot)
     async def emergency_stop() -> ConsoleSnapshot:
-        return await console.emergency_stop("操作员点击急停")
-
-    @app.put("/api/v1/config/vision-confirm-hold", response_model=ConsoleSnapshot)
-    async def update_vision_confirm_hold(body: VisionConfirmHoldUpdate) -> ConsoleSnapshot:
         try:
-            return await console.update_vision_confirm_hold(body.seconds)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return await console.emergency_stop("操作员点击急停")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/v1/skills")
     async def get_skills() -> dict[str, list[dict[str, object]]]:
@@ -346,6 +343,9 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("ollama", "unifolm", "llamacpp"),
         default="ollama",
     )
+    parser.add_argument(
+        "--vision-decision-route", choices=("grounded", "direct"), default="grounded"
+    )
     parser.add_argument("--vision-model")
     parser.add_argument("--vision-url")
     parser.add_argument("--vision-window-s", type=float, default=0.8)
@@ -402,6 +402,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
         ),
         vision_backend=args.vision_backend,
+        vision_decision_route=args.vision_decision_route,
         vision_url=(
             args.vision_url
             or (

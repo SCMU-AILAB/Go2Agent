@@ -19,6 +19,7 @@ from agent import (
     DEFAULT_UNIFOLM_URL,
     DEFAULT_VISION_GOAL,
     DEFAULT_VISION_MODEL,
+    AgentDecision,
     AutonomousDecisionLoop,
     CudaVisionInvoker,
     DecisionAgentError,
@@ -26,6 +27,7 @@ from agent import (
     EventDecisionAgent,
     LlamaCppVisionInvoker,
     OllamaVisionInvoker,
+    UnifolmDecisionInvoker,
     UnifolmVisionInvoker,
     VisionDecisionAgent,
     VisionPolicyOutcome,
@@ -33,9 +35,9 @@ from agent import (
 )
 from agent.social_vision import (
     SocialVisionAgent,
-    TaskDrivenObservation,
 )
 from agent.vision_capture import VisionCapture
+from agent.visual_task import VisualTaskPlanner, VisualTaskSpec
 from core.runtime import SkillRuntime
 from perception import (
     EventDetector,
@@ -227,15 +229,10 @@ def parse_args() -> argparse.Namespace:
             "many seconds"
         ),
     )
+    parser.add_argument("--vision-decision-model", default="qwen3.5:9b")
     parser.add_argument(
         "--vision-goal",
         default=DEFAULT_VISION_GOAL,
-    )
-    parser.add_argument(
-        "--action-cooldown-s",
-        type=float,
-        default=5.0,
-        help="minimum interval before an identical action may execute again",
     )
     parser.add_argument("--no-audio", action="store_true")
     parser.add_argument("--speaker-id", type=int, default=0)
@@ -734,7 +731,7 @@ async def _run(args: argparse.Namespace) -> int:
                     selected_model,
                     base_url=args.ollama_url,
                     output_schema=(
-                        TaskDrivenObservation.model_json_schema()
+                        AgentDecision.model_json_schema()
                         if args.vision_task == "social"
                         else None
                     ),
@@ -754,15 +751,17 @@ async def _run(args: argparse.Namespace) -> int:
                     inference_timeout_s=args.vision_timeout_s,
                 )
             elif args.vision_backend == "unifolm":
-                vision_invoker = UnifolmVisionInvoker(
+                vision_invoker = UnifolmDecisionInvoker(
                     selected_model,
                     base_url=args.vision_url or DEFAULT_UNIFOLM_URL,
-                    max_new_tokens=args.vision_max_new_tokens,
+                    task=args.vision_goal,
+                    decision_model=args.vision_decision_model,
+                    decision_url=args.ollama_url,
                     timeout_s=args.vision_timeout_s,
                 )
             elif args.vision_backend == "llamacpp":
                 llama_output_schema = (
-                    TaskDrivenObservation.model_json_schema()
+                    AgentDecision.model_json_schema()
                     if args.vision_task == "social"
                     else None
                 )
@@ -789,6 +788,18 @@ async def _run(args: argparse.Namespace) -> int:
                 **(
                     {
                         "prompt_profile": args.vision_social_profile,
+                        "operator_instruction": args.vision_goal,
+                        "response_format": "decision",
+                        "task_planner": VisualTaskPlanner(
+                            OllamaVisionInvoker(
+                                args.vision_decision_model,
+                                base_url=args.ollama_url,
+                                output_schema=VisualTaskSpec.model_json_schema(),
+                                constrain_json=True,
+                                think=False,
+                                max_new_tokens=512,
+                            )
+                        ),
                         "generate_speech": args.vision_generate_speech,
                     }
                     if args.vision_task == "social"
@@ -805,6 +816,12 @@ async def _run(args: argparse.Namespace) -> int:
                     "vision_task": args.vision_task,
                 },
             )
+            if isinstance(vision_agent, SocialVisionAgent):
+                spec = await vision_agent.prepare_task(runtime.registry.list())
+                if not spec.supported or spec.clarification:
+                    raise DecisionAgentError(
+                        spec.capability_gap or spec.clarification or "unsupported task"
+                    )
             await vision_agent.warmup()
             ready_data: dict[str, object] = {
                 "model": vision_agent.model_name,
@@ -812,7 +829,12 @@ async def _run(args: argparse.Namespace) -> int:
             }
             if isinstance(
                 vision_invoker,
-                (CudaVisionInvoker, UnifolmVisionInvoker, LlamaCppVisionInvoker),
+                (
+                    CudaVisionInvoker,
+                    UnifolmVisionInvoker,
+                    UnifolmDecisionInvoker,
+                    LlamaCppVisionInvoker,
+                ),
             ):
                 ready_data.update(vision_invoker.backend_info)
             emit_log(
@@ -886,7 +908,6 @@ async def _run(args: argparse.Namespace) -> int:
             speech=audio,
             interval_s=args.vision_interval_s,
             frame_count=args.vision_frame_count,
-            action_cooldown_s=args.action_cooldown_s,
             max_decision_age_s=args.max_decision_age_s,
             capture=(
                 VisionCapture(args.vision_capture_dir, args.vision_capture_limit)

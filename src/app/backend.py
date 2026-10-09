@@ -24,11 +24,13 @@ from adapters import (
 )
 from adapters.langchain import SkillToolObserver
 from agent import AgentError, RobotAgent
+from agent.decision import AgentDecision, RecoverableDecisionError
 from agent.llamacpp_vision import LlamaCppVisionInvoker
 from agent.service import system_prompt_for
-from agent.social_vision import SocialVisionAgent, TaskDrivenObservation
-from agent.unifolm_vision import UnifolmVisionInvoker
+from agent.social_vision import SocialVisionAgent
+from agent.unifolm_vision import UnifolmDecisionInvoker, UnifolmVisionInvoker
 from agent.vision_policy import OllamaVisionInvoker, VisionPolicyWorker
+from agent.visual_task import VisualTaskPlanner, VisualTaskSpec
 from core.runtime import SkillRuntime
 from perception import (
     CameraFrame,
@@ -45,6 +47,7 @@ from robot import (
     create_simulated_robot,
 )
 from skills import register_g1_skills, register_go2_skills
+from skills.motions.go2_follow import FollowPersonSkill
 
 from .perception import _DepthSafetyGate
 
@@ -145,7 +148,7 @@ class ConsoleSnapshot(ApiModel):
     voice: VoiceView
     tools: list[ToolCall]
     logs: list[ConsoleLog]
-    vision_confirm_hold_s: float = 1.5
+    vision_task: dict[str, object] = Field(default_factory=dict)
 
 
 class ConsoleEvent(ApiModel):
@@ -197,18 +200,16 @@ class BackendConfig:
     vision_model: str = "qwen3.5:9b"
     vision_backend: Literal["ollama", "unifolm", "llamacpp"] = "ollama"
     vision_url: str = "http://127.0.0.1:11435"
+    vision_decision_route: Literal["grounded", "direct"] = "grounded"
     vision_rotation_deg: int = 0
-    vision_max_age_s: float = 5.0
+    vision_max_age_s: float = 2.0
     # Match run-remote-vision.sh; configurable for recognition/latency replay.
     vision_window_s: float = 0.8
     vision_frame_count: int = 3
-    vision_confirm_hold_s: float = 1.5
 
     def __post_init__(self) -> None:
         if self.vision_rotation_deg not in (0, 90, 180, 270):
             raise ValueError("invalid vision rotation")
-        if not (0.0 <= float(self.vision_confirm_hold_s) <= 30.0):
-            raise ValueError("vision_confirm_hold_s must be between 0 and 30")
         if self.camera_detection_fps <= 0:
             raise ValueError("camera detection FPS must be positive")
         if self.voice_record_seconds < 0.5:
@@ -309,6 +310,7 @@ class ConsoleBackend(SkillToolObserver):
         self._safety_stop_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._active_task: asyncio.Task[None] | None = None
+        self.vision_task: dict[str, object] = {}
         self._lifecycle_lock = asyncio.Lock()
         self._task_lock = asyncio.Lock()
         self.events = EventHub()
@@ -343,7 +345,6 @@ class ConsoleBackend(SkillToolObserver):
         self.frame_version = 0
         self.tools: list[ToolCall] = []
         self.logs: list[ConsoleLog] = []
-        self.vision_confirm_hold_s = float(self.config.vision_confirm_hold_s)
         self.voice_enabled = False
         self.voice_listening = False
         self.voice_status: Literal[
@@ -369,11 +370,23 @@ class ConsoleBackend(SkillToolObserver):
         )
 
     def _build_vision_agent(self, instruction: str) -> SocialVisionAgent:
-        if self.config.vision_backend == "unifolm":
+        if (
+            self.config.vision_backend == "unifolm"
+            and self.config.vision_decision_route == "direct"
+        ):
             invoker = UnifolmVisionInvoker(
                 self.config.vision_model,
                 base_url=self.config.vision_url,
-                max_new_tokens=96,
+                max_new_tokens=192,
+                timeout_s=120,
+            )
+        elif self.config.vision_backend == "unifolm":
+            invoker = UnifolmDecisionInvoker(
+                self.config.vision_model,
+                base_url=self.config.vision_url,
+                decision_model=self.config.model_name or "qwen3.5:9b",
+                decision_url=self.config.ollama_url,
+                task=instruction,
                 timeout_s=120,
             )
         elif self.config.vision_backend == "llamacpp":
@@ -382,13 +395,13 @@ class ConsoleBackend(SkillToolObserver):
                 base_url=self.config.vision_url,
                 max_new_tokens=96,
                 timeout_s=120,
-                output_schema=TaskDrivenObservation.model_json_schema(),
+                output_schema=AgentDecision.model_json_schema(),
             )
         else:
             invoker = OllamaVisionInvoker(
                 self.config.vision_model,
                 base_url=self.config.vision_url,
-                constrain_json=False,
+                constrain_json=True,
                 max_new_tokens=256,
                 think=False,
             )
@@ -396,13 +409,20 @@ class ConsoleBackend(SkillToolObserver):
             model_name=self.config.vision_model,
             prompt_profile="egocentric",
             generate_speech=True,
-            task_context=f"{self.system_prompt}\nCurrent task: {instruction}",
-            response_format=(
-                "gesture_label"
-                if self.config.vision_backend == "unifolm"
-                else "json"
+            task_context=self.system_prompt,
+            operator_instruction=instruction,
+            response_format="decision",
+            allow_operator_skills=False,
+            task_planner=VisualTaskPlanner(
+                OllamaVisionInvoker(
+                    self.config.model_name or "qwen3.5:9b",
+                    base_url=self.config.ollama_url,
+                    output_schema=VisualTaskSpec.model_json_schema(),
+                    max_new_tokens=512,
+                    think=False,
+                    constrain_json=True,
+                )
             ),
-            confirm_hold_s=self.vision_confirm_hold_s,
             timeout_s=120,
             invoker=invoker,
         )
@@ -790,6 +810,9 @@ class ConsoleBackend(SkillToolObserver):
                 # The preview and model receive the same oriented JPEG bytes.
                 frame = replace(frame, rgb=self.latest_frame)
                 self._video_buffer.push(frame)
+                for skill in self.runtime.registry.list():
+                    if isinstance(skill, FollowPersonSkill):
+                        skill.observe_frame(frame)
                 transition = self._safety_gate.update(frame.nearest_obstacle_distance_m)
                 worker = self._vision_worker
                 if worker is not None:
@@ -889,8 +912,9 @@ class ConsoleBackend(SkillToolObserver):
         instruction: str,
         *,
         camera_source: str | None = None,
-        task_mode: Literal["text", "gesture"] | None = None,
+        task_mode: Literal["text", "vision", "gesture"] | None = None,
         wave_response: Literal["wave", "heart"] | None = None,
+        replace_existing: bool = False,
     ) -> ConsoleSnapshot:
         instruction = instruction.strip()
         if not instruction:
@@ -899,19 +923,32 @@ class ConsoleBackend(SkillToolObserver):
             raise BackendNotRunning("backend session is not running")
         async with self._task_lock:
             if self.busy:
-                raise TaskConflict("another task is already running")
+                if not replace_existing:
+                    raise TaskConflict("another task is already running")
+                await self.cancel_task("新任务替换旧任务")
             # Omitted mode preserves legacy clients; new clients choose explicitly.
             source = camera_source or self.camera_source
-            mode = task_mode or ("gesture" if source == "local" else "text")
-            if mode not in {"text", "gesture"}:
-                raise ValueError("task_mode must be text or gesture")
-            if mode == "gesture" and source != "local":
-                raise ValueError("手势交互需要真实相机；模拟画面不能用于手势识别")
+            mode = task_mode or ("vision" if source == "local" else "text")
+            if mode == "gesture":
+                mode = "vision"
+            if mode not in {"text", "vision"}:
+                raise ValueError("task_mode must be text or vision")
+            if mode == "vision" and source != "local":
+                raise ValueError("视觉任务需要真实相机；模拟画面不能用于视觉决策")
             if camera_source is not None:
                 await self.set_camera_source(camera_source)
-            if mode == "gesture" and self.camera_status != "ready":
+            if mode == "vision" and self.camera_status != "ready":
                 raise PerceptionError("本地相机未就绪，不能启动视觉任务")
             self.task_id = uuid.uuid4().hex
+            self.vision_task = (
+                {
+                    "state": "planning",
+                    "taskId": self.task_id,
+                    "instruction": instruction,
+                }
+                if mode == "vision"
+                else {}
+            )
             self.busy = True
             self.current_task = instruction
             self.model_output = "已收到指令。\n"
@@ -938,7 +975,7 @@ class ConsoleBackend(SkillToolObserver):
     async def _run_task(self, task_id: str, instruction: str, mode: str) -> None:
         started = time.monotonic()
         try:
-            if mode == "gesture":
+            if mode == "vision":
                 await self._run_vision_task(instruction)
                 return
             # Text tasks do not supply images to RobotAgent. Keep preview running,
@@ -996,6 +1033,10 @@ class ConsoleBackend(SkillToolObserver):
             if self.task_id == task_id:
                 self.busy = False
                 self.model_status = "失败"
+                if self.vision_task:
+                    self.vision_task.update(
+                        state="failed", activeSkill=None, reason=str(exc)
+                    )
                 self.skill_status = "FAILED"
                 self.progress_text = "执行失败"
                 self.model_output += f"\n\n执行失败：{exc}"
@@ -1004,6 +1045,10 @@ class ConsoleBackend(SkillToolObserver):
             if self.task_id == task_id:
                 self.busy = False
                 self.model_status = "失败"
+                if self.vision_task:
+                    self.vision_task.update(
+                        state="failed", activeSkill=None, reason=str(exc)
+                    )
                 self.skill_status = "FAILED"
                 self.progress_text = "执行失败"
                 self.model_output += f"\n\n执行失败：{exc}"
@@ -1020,7 +1065,7 @@ class ConsoleBackend(SkillToolObserver):
         await self._log(
             "INFO",
             "vision",
-            f"手势任务按指令与已确认手势执行：{instruction}",
+            f"视觉任务持续观察并按指令决策：{instruction}",
         )
         worker = VisionPolicyWorker(
             self.runtime,
@@ -1036,6 +1081,28 @@ class ConsoleBackend(SkillToolObserver):
             self.model_status = "加载视觉模型"
             self.model_output = f"视觉交互 · {self.config.vision_model}\n任务：{instruction}\n持续运行，点击停止任务结束。"
             self._emit_state()
+            while True:
+                try:
+                    spec = await agent.prepare_task(self.runtime.registry.list())
+                    break
+                except RecoverableDecisionError as exc:
+                    self.vision_task.update(state="waiting_model", reason=str(exc))
+                    self._emit_state()
+                    await self._log(
+                        "WARN", "vision", f"任务规格暂不可用，继续等待：{exc}"
+                    )
+                    await asyncio.sleep(0.5)
+            self.vision_task["spec"] = spec.model_dump()
+            if not spec.supported or spec.clarification:
+                self.vision_task.update(
+                    state="blocked", reason=spec.capability_gap or spec.clarification
+                )
+                self.model_status = "任务需要补充能力或明确目标"
+                self.progress_text = str(self.vision_task["reason"])
+                await self._log("WARN", "vision", self.progress_text)
+                self._emit_state()
+                while True:
+                    await asyncio.sleep(0.2)
             await agent.warmup()
             worker.set_safety_latched(self._safety_gate.latched)
             # Wait for the initial window, but never start on an unavailable camera.
@@ -1053,22 +1120,41 @@ class ConsoleBackend(SkillToolObserver):
                 "INFO",
                 "vision",
                 (
-                    "Go2 手势任务：VLM 按任务提示词从技能目录自主选择；"
+                    "Go2 视觉任务：按任务、画面与执行结果从技能目录选择；"
                     "未注册/operator-only 技能会被拒绝。"
                     if self.config.robot_model == "go2"
-                    else "手势模式：VLM 按任务与技能目录决策；其他动作请选文本指令。"
+                    else "视觉模式：按任务、画面与技能目录决策。"
                 ),
             )
+            service_busy = False
             while True:
                 await self._check_vision_camera()
-                self.model_status = "持续视觉交互"
-                self.progress_text = "正在观察手势 · 停止任务可结束"
+                self.model_status = "持续视觉任务"
+                self.vision_task["activeSkill"] = worker.active_skill
+                if worker.active_behavior:
+                    self.vision_task.update(state="executing", reason=None)
+                elif self.vision_task.get("state") not in {"blocked", "waiting_model"}:
+                    self.vision_task["state"] = "observing"
+                self.progress_text = "正在观察并决策 · 停止任务可结束"
                 self.skill_name = (
-                    "执行视觉技能" if worker.active_behavior else "等待确认手势"
+                    "执行视觉技能" if worker.active_behavior else "等待视觉决策"
                 )
                 self.progress = 40
                 self.active_step = 1
                 for record in worker.drain_policy_decisions():
+                    self.vision_task.update(
+                        metrics=dict(record.model_metrics),
+                        frameAgeS=max(0.0, time.monotonic() - record.window_end_s),
+                    )
+                    self.vision_task.update(
+                        state="executing" if worker.active_behavior else "observing",
+                        reason=record.decision.reason,
+                    )
+                    if service_busy:
+                        await self._log(
+                            "INFO", "vision", "视觉服务已恢复，继续观察最新画面。"
+                        )
+                        service_busy = False
                     payload = record.to_dict()
                     payload["input_preprocessing"] = {
                         "rotation_deg": self.config.vision_rotation_deg
@@ -1088,6 +1174,10 @@ class ConsoleBackend(SkillToolObserver):
                 for outcome in worker.drain_outcomes():
                     self._record_tool("vision.outcome", {}, outcome.to_dict())
                     if outcome.skill_result is not None:
+                        if not outcome.skill_result.success:
+                            self.vision_task.update(
+                                state="blocked", reason=outcome.skill_result.message
+                            )
                         await self.after_skill(
                             outcome.decision.skill or "vision",
                             outcome.decision.arguments,
@@ -1097,12 +1187,32 @@ class ConsoleBackend(SkillToolObserver):
                             "INFO", "audio", f"TTS调用成功返回：{outcome.speech_spoken}"
                         )
                     elif outcome.suppressed_reason:
+                        self.vision_task.update(
+                            state="blocked", reason=outcome.suppressed_reason
+                        )
                         await self._log("INFO", "vision", outcome.suppressed_reason)
                 errors = worker.drain_errors()
-                if errors:
-                    raise RuntimeError(
-                        f"视觉任务错误：{errors[0].stage}: {errors[0].message}"
-                    )
+                for error in errors:
+                    if not error.recoverable:
+                        raise RuntimeError(
+                            f"视觉任务错误：{error.stage}: {error.message}"
+                        )
+                    self.vision_task.update(state="waiting_model", reason=error.message)
+                    if not service_busy:
+                        active = worker.active_skill
+                        closed_loop = (
+                            active is not None
+                            and "closed_loop"
+                            in self.runtime.registry.get(active).metadata.tags
+                        )
+                        if not closed_loop:
+                            await worker.interrupt("视觉决策不可用，等待最新画面")
+                        await self._log(
+                            "WARN",
+                            "vision",
+                            "本轮视觉决策不可用，丢弃结果并等待最新画面；继续观察。",
+                        )
+                        service_busy = True
                 self._emit_state()
                 await asyncio.sleep(0.2)
         finally:
@@ -1123,13 +1233,22 @@ class ConsoleBackend(SkillToolObserver):
             raise PerceptionError("相机中断或画面过期，视觉任务已停止")
 
     async def cancel_task(self, reason: str = "用户停止了任务") -> ConsoleSnapshot:
+        await self.runtime.cancel_active()
         task = self._active_task
         if task is None or task.done():
             # Still issue a robot stop so e-stop works while idle after a motion.
             try:
                 await self.robot.stop()
             except (RobotCommandError, RuntimeError) as exc:
+                self.skill_status = "FAILED"
+                self.model_status = "停止命令失败"
+                if self.vision_task:
+                    self.vision_task.update(
+                        state="failed", activeSkill=None, reason=str(exc)
+                    )
+                self._emit_state()
                 await self._log("ERROR", "executor", f"停止机器人失败：{exc}")
+                raise RobotCommandError(f"stop command failed: {exc}") from exc
             return self.snapshot()
         self._active_task = None
         task.cancel()
@@ -1137,9 +1256,20 @@ class ConsoleBackend(SkillToolObserver):
         try:
             await self.robot.stop()
         except (RobotCommandError, RuntimeError) as exc:
+            self.busy = False
+            self.skill_status = "FAILED"
+            self.model_status = "停止命令失败"
+            if self.vision_task:
+                self.vision_task.update(
+                    state="failed", activeSkill=None, reason=str(exc)
+                )
+            self._emit_state()
             await self._log("ERROR", "executor", f"停止机器人失败：{exc}")
+            raise RobotCommandError(f"stop command failed: {exc}") from exc
         self.busy = False
         self.skill_status = "STOPPED"
+        if self.vision_task:
+            self.vision_task.update(state="stopped", activeSkill=None, reason=reason)
         self.model_status = "已停止"
         self.progress_text = "任务已停止"
         self.model_output += f"\n\n执行已中断：{reason}。"
@@ -1161,33 +1291,29 @@ class ConsoleBackend(SkillToolObserver):
             self._active_task = None
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        await self.runtime.cancel_active()
         try:
             await self.robot.stop()
         except (RobotCommandError, RuntimeError) as exc:
+            self.busy = False
+            self.skill_status = "FAILED"
+            self.model_status = "急停命令失败"
+            if self.vision_task:
+                self.vision_task.update(
+                    state="failed", activeSkill=None, reason=str(exc)
+                )
+            self._emit_state()
             await self._log("ERROR", "executor", f"急停发送 stop 失败：{exc}")
+            raise RobotCommandError(f"emergency stop failed: {exc}") from exc
         self.busy = False
         self.skill_status = "STOPPED"
+        if self.vision_task:
+            self.vision_task.update(state="stopped", activeSkill=None, reason=reason)
         self.model_status = "急停"
         self.progress_text = "已急停"
         self.skill_name = "已急停"
         self.progress = 0
         self.model_output += f"\n\n【急停】{reason}"
-        self._emit_state()
-        return self.snapshot()
-
-    async def update_vision_confirm_hold(self, seconds: float) -> ConsoleSnapshot:
-        """Set continuous gesture confirmation window used by the vision agent."""
-        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
-            raise ValueError("confirm hold must be a number")
-        value = float(seconds)
-        if not (0.0 <= value <= 30.0):
-            raise ValueError("confirm hold must be between 0 and 30 seconds")
-        self.vision_confirm_hold_s = value
-        await self._log(
-            "INFO",
-            "config",
-            f"手势确认时长已更新为 {value:.2f} 秒（新视觉任务生效）。",
-        )
         self._emit_state()
         return self.snapshot()
 
@@ -1322,6 +1448,11 @@ class ConsoleBackend(SkillToolObserver):
         )
 
     def snapshot(self) -> ConsoleSnapshot:
+        vision_task = dict(self.vision_task)
+        if vision_task and self.config.robot_model == "go2":
+            skill = self.runtime.registry.get("follow_person")
+            if isinstance(skill, FollowPersonSkill):
+                vision_task["tracking"] = skill.tracking_status
         return ConsoleSnapshot(
             backend=self.backend,
             starting=self.starting,
@@ -1387,7 +1518,7 @@ class ConsoleBackend(SkillToolObserver):
             ),
             tools=list(self.tools),
             logs=list(self.logs),
-            vision_confirm_hold_s=self.vision_confirm_hold_s,
+            vision_task=vision_task,
         )
 
     def skill_catalog(self) -> list[dict[str, object]]:
@@ -1396,6 +1527,10 @@ class ConsoleBackend(SkillToolObserver):
                 "name": skill.metadata.name,
                 "description": skill.metadata.description,
                 "version": skill.metadata.version,
+                "behavior": skill.metadata.behavior,
+                "autonomous": not {"operator_only", "dangerous"}.intersection(
+                    skill.metadata.tags
+                ),
                 "tags": list(skill.metadata.tags),
                 "requiredResources": list(skill.metadata.required_resources),
                 "timeoutS": skill.metadata.timeout_s,

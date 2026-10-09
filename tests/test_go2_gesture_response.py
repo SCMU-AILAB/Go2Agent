@@ -9,9 +9,9 @@ from tests.test_vision_policy import FakeVisionInvoker, camera_frame
 class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_selected_heart_is_executed(self):
         agent = SocialVisionAgent(
+            response_format="json",
             task_context="用户打招呼就打招呼，比耶或比心就比心",
             generate_speech=True,
-            confirm_hold_s=0,
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -37,8 +37,8 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_model_selected_wave_is_executed(self):
         agent = SocialVisionAgent(
+            response_format="json",
             task_context="有人打招呼就打招呼",
-            confirm_hold_s=0,
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -60,8 +60,26 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.action, "execute_skill")
         self.assertEqual(decision.skill, "wave")
 
+    async def test_first_greeting_executes_despite_tracking_detector_miss(self):
+        agent = SocialVisionAgent(
+            task_context="用户打招呼就给他打招呼",
+            response_format="decision",
+            invoker=FakeVisionInvoker(
+                [{"action": "execute_skill", "skill": "wave", "reason": "greeting"}]
+            ),
+        )
+        state = RobotState(hardware=False, connected=True)
+        skills = build_go2_autonomy_skills()
+        first = await agent.decide(
+            [camera_frame(1.0), camera_frame(1.2)], state, skills
+        )
+        self.assertEqual(camera_frame(1.2).observation.person_count, 0)
+        self.assertEqual(first.action, "execute_skill")
+        self.assertEqual(first.skill, "wave")
+
     async def test_peace_sign_returned_as_wave_is_resolved_to_heart(self):
-        agent = SocialVisionAgent(confirm_hold_s=0, 
+        agent = SocialVisionAgent(
+            response_format="json",
             task_context="用户打招呼就打招呼，比耶或比心就比心",
             invoker=FakeVisionInvoker(
                 [
@@ -85,7 +103,8 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unregistered_or_operator_skill_is_ignored(self):
         for skill in ("damp", "front_flip", "not_a_skill"):
-            agent = SocialVisionAgent(confirm_hold_s=0, 
+            agent = SocialVisionAgent(
+                response_format="json",
                 invoker=FakeVisionInvoker(
                     [
                         {
@@ -107,7 +126,8 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(decision.action, "ignore")
 
     async def test_unconfirmed_directed_at_robot_is_ignored(self):
-        agent = SocialVisionAgent(confirm_hold_s=0, 
+        agent = SocialVisionAgent(
+            response_format="json",
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -129,7 +149,8 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.action, "ignore")
 
     async def test_ignore_with_no_skill_stays_silent(self):
-        agent = SocialVisionAgent(confirm_hold_s=0, 
+        agent = SocialVisionAgent(
+            response_format="json",
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -152,7 +173,8 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(decision.skill)
 
     async def test_active_skill_returns_continue(self):
-        agent = SocialVisionAgent(confirm_hold_s=0, 
+        agent = SocialVisionAgent(
+            response_format="json",
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -175,7 +197,7 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.action, "continue")
 
     async def test_gesture_label_thumbs_up_maps_to_random_dance(self):
-        agent = SocialVisionAgent(confirm_hold_s=0, 
+        agent = SocialVisionAgent(
             invoker=FakeVisionInvoker(["thumbs_up"]),
             task_context="用户点赞时随机跳舞",
             response_format="gesture_label",
@@ -189,7 +211,7 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.skill, "random_dance")
 
     async def test_gesture_label_active_random_dance_continues(self):
-        agent = SocialVisionAgent(confirm_hold_s=0, 
+        agent = SocialVisionAgent(
             invoker=FakeVisionInvoker(["thumbs_up"]),
             task_context="用户竖起大拇指的时候就随机跳舞",
             response_format="gesture_label",

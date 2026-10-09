@@ -40,7 +40,7 @@ async def main():
     import ollama
     invoker._client = ollama.AsyncClient(host="http://127.0.0.1:11435", trust_env=False)
     agent = SocialVisionAgent(invoker=invoker, model_name=args.model,
-                              prompt_profile=args.profile, generate_speech=args.speech, timeout_s=90)
+                              response_format="json", prompt_profile=args.profile, generate_speech=args.speech, timeout_s=90)
     rows = []
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x", encoding="utf-8") as output:
