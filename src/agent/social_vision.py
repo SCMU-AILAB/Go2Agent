@@ -20,7 +20,7 @@ from core.skill import RobotSkill
 from perception import CameraFrame
 from robot import RobotState
 
-from .decision import AgentDecision, DecisionAgentError
+from .decision import AgentDecision, DecisionAgentError, RecoverableDecisionError
 from .vision_policy import VisionDecisionAgent, _skill_catalog_payload
 
 _OPEN_DECISION_PROMPT = """You are the real-time visual Agent for a Unitree Go2.
@@ -28,11 +28,16 @@ Use the visual evidence supplied by the vision backend and follow the operator's
 task. Reconsider after every new video window, including while a skill runs.
 Use the robot state, active skill, previous decision and last skill result to
 decide whether to act, keep observing, speak, continue, or interrupt.
-Local perception below is the safety-grounded camera observation. If it says
-no person is detected, do not initiate a person-dependent skill such as
-follow_person. A visual guess cannot override missing depth or ambiguity.
+Local perception below is a depth tracking detector, not a gesture detector.
+It can miss upper bodies and close-up hands. A zero local person_count must NOT
+veto a greeting or heart gesture clearly described by the visual evidence.
+Only follow_person requires exactly one locally detected person with valid
+depth and position; visual evidence cannot replace those tracking prerequisites.
 
-Return one compact JSON object with action, skill, arguments, speech, reason.
+Return ONLY one compact JSON object with action and the needed skill, arguments
+or speech fields. Never output reason, analysis, explanations, Markdown or text
+outside the JSON. For ignore or continue, output only {{"action":"ignore"}}
+or {{"action":"continue"}}, respectively.
 action must be execute_skill, execute_and_speak, speak, continue, interrupt,
 or ignore. Use null or omit unused fields. Select at most one registered skill
 per decision and give only its actual arguments. Never invent a skill or infer
@@ -43,7 +48,7 @@ physical motion finished. Recheck the latest visual evidence and use last_skill_
 After a skill result, use the latest visual evidence and recent action history to decide
 whether the goal needs another step. Do not repeat a completed behavior just
 because the scene remains unchanged; do repeat a bounded skill if new visual
-evidence shows that it is still necessary and it is no longer in cooldown.
+evidence shows that it is still necessary. There is no post-action cooldown.
 For a persistent goal such as following a person, choose follow_person once
 when one person is visible. While it runs, continue observing and return
 continue unless the goal changes or stopping is needed. The local depth
@@ -157,14 +162,27 @@ class TaskDrivenObservation(BaseModel):
     speech: str | None = Field(default=None, max_length=120)
 
 
+def _compact_skill_catalog(skills: Sequence[RobotSkill[SkillArgs]]) -> list[dict[str, object]]:
+    """Keep every skill and argument contract without duplicate schema metadata."""
+    def compact(value: object) -> object:
+        if isinstance(value, dict):
+            return {k: compact(v) for k, v in value.items() if k != "title"}
+        if isinstance(value, list):
+            return [compact(v) for v in value]
+        return value
+
+    return [
+        {key: compact(entry[key]) for key in (
+            "name", "description", "arguments_schema", "tags", "required_resources",
+        )}
+        for entry in _skill_catalog_payload(skills)
+    ]
+
+
 class SocialVisionAgent(VisionDecisionAgent):
     """Continuously decide skills from the operator task + live video."""
 
     minimum_frames = 1
-    # Require this much continuous confirmation before execute_skill.
-    # The VLM performs the semantic check; keep the temporal confirmation
-    # short enough that a transient greeting is not gone before execution.
-    DEFAULT_CONFIRM_HOLD_S = 0.5
 
     def __init__(
         self,
@@ -174,7 +192,6 @@ class SocialVisionAgent(VisionDecisionAgent):
         task_context: str = "",
         operator_instruction: str | None = None,
         response_format: Literal["json", "gesture_label", "decision"] = "decision",
-        confirm_hold_s: float | None = None,
         allow_operator_skills: bool = True,
         **kwargs,
     ):
@@ -195,13 +212,6 @@ class SocialVisionAgent(VisionDecisionAgent):
         # is now available to every visual Agent.
         del allow_operator_skills
         self.allow_operator_skills = True
-        hold = self.DEFAULT_CONFIRM_HOLD_S if confirm_hold_s is None else confirm_hold_s
-        if hold < 0:
-            raise ValueError("confirm_hold_s must not be negative")
-        self.confirm_hold_s = float(hold)
-        self._pending_skill: str | None = None
-        self._pending_since_s: float | None = None
-        self._hold_hits = 0
         self._fired_skill: str | None = None
 
     @property
@@ -211,7 +221,6 @@ class SocialVisionAgent(VisionDecisionAgent):
             "gesture_observation": getattr(self, "_last_observation", None),
             "prompt_profile": self.prompt_profile,
             "decision_mode": (self.response_format),
-            "confirm_hold_s": self.confirm_hold_s,
         }
 
     @staticmethod
@@ -242,7 +251,7 @@ class SocialVisionAgent(VisionDecisionAgent):
         prompt = _OPEN_DECISION_PROMPT.format(
             task=task,
             skill_catalog=json.dumps(
-                _skill_catalog_payload(allowed), ensure_ascii=False
+                _compact_skill_catalog(allowed), ensure_ascii=False, separators=(",", ":")
             ),
             robot_state=json.dumps(
                 {
@@ -270,6 +279,8 @@ class SocialVisionAgent(VisionDecisionAgent):
                 output = await self._invoker.ainvoke(
                     [frame.rgb for frame in frames], prompt
                 )
+        except RecoverableDecisionError:
+            raise
         except Exception as exc:
             raise DecisionAgentError(
                 f"task-driven vision invocation failed: {type(exc).__name__}: {exc}"
@@ -286,7 +297,7 @@ class SocialVisionAgent(VisionDecisionAgent):
         if decision.skill is not None and decision.skill not in {
             skill.metadata.name for skill in allowed
         }:
-            self._reset_hold(rearm=True)
+            self._fired_skill = None
             return AgentDecision(
                 action="ignore",
                 reason=f"skill not allowed for vision: {decision.skill}",
@@ -306,7 +317,8 @@ class SocialVisionAgent(VisionDecisionAgent):
         if decision.action == "speak" and not self.generate_speech:
             return AgentDecision(action="ignore", reason="speech output disabled")
         if decision.action in {"ignore", "interrupt", "speak"}:
-            self._reset_hold(rearm=decision.action == "ignore")
+            if decision.action == "ignore":
+                self._fired_skill = None
             return decision
         if decision.action == "continue":
             return (
@@ -320,28 +332,6 @@ class SocialVisionAgent(VisionDecisionAgent):
             return AgentDecision(
                 action="continue", reason=f"skill ongoing: {decision.skill}"
             )
-        signature = json.dumps(
-            [decision.skill, decision.arguments], sort_keys=True, default=str
-        )
-        frame_t = float(frames[-1].observed_at_s)
-        if self._pending_skill != signature:
-            self._pending_skill = signature
-            self._pending_since_s = frame_t
-            self._hold_hits = 1
-        else:
-            self._hold_hits += 1
-        since = self._pending_since_s if self._pending_since_s is not None else frame_t
-        held_s = max(0.0, frame_t - since)
-        self._last_observation.update(
-            {"hold_elapsed_s": round(held_s, 3), "hold_hits": self._hold_hits}
-        )
-        if self.confirm_hold_s > 0 and (
-            self._hold_hits < 2 or held_s < self.confirm_hold_s
-        ):
-            return AgentDecision(action="ignore", reason="confirming visual decision")
-        self._pending_skill = None
-        self._pending_since_s = None
-        self._hold_hits = 0
         if decision.action == "execute_and_speak" and not self.generate_speech:
             return AgentDecision(
                 action="execute_skill",
@@ -397,6 +387,8 @@ class SocialVisionAgent(VisionDecisionAgent):
                 if self.response_format == "gesture_label"
                 else self._parse_observation(output)
             )
+        except RecoverableDecisionError:
+            raise
         except Exception as exc:
             raise DecisionAgentError(
                 f"task-driven vision decision failed: {type(exc).__name__}: {exc}"
@@ -406,7 +398,7 @@ class SocialVisionAgent(VisionDecisionAgent):
         registered = {s.metadata.name: s for s in skill_catalog}
 
         if observation.action == "ignore" or not observation.skill:
-            self._reset_hold(rearm=True)
+            self._fired_skill = None
             return AgentDecision(
                 action="ignore",
                 reason=observation.observation or "no matching social response",
@@ -424,7 +416,7 @@ class SocialVisionAgent(VisionDecisionAgent):
             self._last_observation["skill_correction"] = "peace_sign_to_heart"
         skill = registered.get(skill_name)
         if skill is None:
-            self._reset_hold(rearm=True)
+            self._fired_skill = None
             return AgentDecision(
                 action="ignore",
                 reason=f"skill not registered for vision: {skill_name}",
@@ -435,7 +427,7 @@ class SocialVisionAgent(VisionDecisionAgent):
             and observation.directed_at_robot
             and observation.present_in_latest
         ):
-            self._reset_hold(rearm=True)
+            self._fired_skill = None
             unmet = []
             if not observation.hand_visible:
                 unmet.append("hand_not_visible")
@@ -460,53 +452,16 @@ class SocialVisionAgent(VisionDecisionAgent):
                 reason="gesture already responded; release before retry",
             )
 
-        # Hold uses CAMERA timestamps so slow inference does not fake a hold.
-        # Also require at least two consecutive confirmations for the same skill.
-        frame_t = float(frames[-1].observed_at_s)
-        if self._pending_skill != skill_name:
-            self._pending_skill = skill_name
-            self._pending_since_s = frame_t
-            self._hold_hits = 1
-        else:
-            self._hold_hits += 1
-        since = self._pending_since_s if self._pending_since_s is not None else frame_t
-        held_s = max(0.0, frame_t - since)
-        self._last_observation["hold_elapsed_s"] = round(held_s, 3)
-        self._last_observation["hold_hits"] = self._hold_hits
-        self._last_observation["confirm_hold_s"] = self.confirm_hold_s
-        self._last_observation["hold_clock"] = "camera_frame"
-        if self.confirm_hold_s > 0 and (
-            self._hold_hits < 2 or held_s < self.confirm_hold_s
-        ):
-            return AgentDecision(
-                action="ignore",
-                reason=(
-                    f"confirming gesture hold "
-                    f"{held_s:.2f}s < {self.confirm_hold_s:.2f}s "
-                    f"(hits={self._hold_hits})"
-                ),
-            )
-
         speech = observation.speech.strip() if observation.speech else None
         if speech and not self.generate_speech:
             speech = None
         self._fired_skill = skill_name
-        self._pending_skill = None
-        self._pending_since_s = None
-        self._hold_hits = 0
         return AgentDecision(
             action="execute_and_speak" if speech else "execute_skill",
             skill=skill_name,
             speech=speech or None,
             reason=observation.observation or skill_name,
         )
-
-    def _reset_hold(self, *, rearm: bool) -> None:
-        self._pending_skill = None
-        self._pending_since_s = None
-        self._hold_hits = 0
-        if rearm:
-            self._fired_skill = None
 
     @staticmethod
     def _parse_gesture_label(output: object, task: str) -> TaskDrivenObservation:

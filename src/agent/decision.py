@@ -189,6 +189,10 @@ class DecisionAgentError(RuntimeError):
     """Raised when the decision Agent does not return a valid decision."""
 
 
+class RecoverableDecisionError(DecisionAgentError):
+    """Discard this model response and try again with a fresh camera window."""
+
+
 class DecisionAgent(Protocol):
     async def decide(
         self,

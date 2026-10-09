@@ -69,7 +69,7 @@ class VideoBufferTests(unittest.TestCase):
 
 
 class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
-    def test_different_generated_speech_cannot_bypass_action_cooldown(self):
+    def test_different_generated_speech_has_same_active_behavior_signature(self):
         first = AgentDecision(action="execute_and_speak", skill="wave", speech="你好")
         second = AgentDecision(
             action="execute_and_speak", skill="wave", speech="很高兴见到你"
@@ -747,7 +747,7 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("move_velocity", [event[0] for event in robot.events])
         self.assertIn(("stop", None), robot.events)
 
-    async def test_identical_skill_is_suppressed_during_cooldown(self) -> None:
+    async def test_identical_skill_can_repeat_immediately_after_completion(self) -> None:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
         runtime.register(go2_skill("wave"))
@@ -767,7 +767,6 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
             VisionDecisionAgent(invoker=invoker),
             buffer,
             interval_s=0.01,
-            action_cooldown_s=10.0,
         )
 
         await worker.start()
@@ -776,13 +775,7 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await worker.stop()
 
-        self.assertEqual(robot.events.count(("loco_action", ("hello", {}))), 1)
-        self.assertTrue(
-            any(
-                outcome.suppressed_reason == "identical behavior is in cooldown"
-                for outcome in worker.drain_outcomes()
-            )
-        )
+        self.assertGreaterEqual(robot.events.count(("loco_action", ("hello", {}))), 2)
 
     async def test_interrupt_cancels_active_skill_and_stops_robot(self) -> None:
         robot = SimulatedRobotAdapter()
@@ -823,7 +816,6 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
             SkillRuntime(robot),
             VisionDecisionAgent(invoker=FakeVisionInvoker([{"action": "ignore"}])),
             VideoBuffer(window_s=2.0, max_frames=60),
-            action_cooldown_s=0,
         )
         first_started = asyncio.Event()
         second_started = asyncio.Event()

@@ -94,7 +94,23 @@ class UnifolmVisionInvokerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decider.ainvoke.call_args.args[0], ())
         self.assertIn("No person is visible", decider.ainvoke.call_args.args[1])
         self.assertIn("full skill catalog", decider.ainvoke.call_args.args[1])
+        self.assertIn("Never output reason", decider.ainvoke.call_args.args[1])
+        # Keep current visual evidence after the catalog/local tracking context,
+        # so a missed HOG detection cannot replace what the VLM actually saw.
+        grounded_prompt = decider.ainvoke.call_args.args[1]
+        self.assertGreater(
+            grounded_prompt.index("Latest UnifoLM visual observation"),
+            grounded_prompt.index("full skill catalog"),
+        )
         self.assertEqual(invoker.last_metrics["unifolm_metrics"], {"inference_s": 0.6})
+
+    def test_decider_has_explicit_context_and_bounded_explanations(self) -> None:
+        invoker = UnifolmDecisionInvoker()
+        decider = invoker._decision
+        self.assertEqual(decider.context_tokens, 8192)
+        self.assertEqual(decider.max_new_tokens, 256)
+        self.assertNotIn("reason", decider.output_schema["properties"])
+        self.assertIs(decider.output_schema["additionalProperties"], False)
 
     async def test_decision_rejects_point_output_before_tool_selection(self) -> None:
         observer = AsyncMock()

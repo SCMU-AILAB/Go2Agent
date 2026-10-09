@@ -99,3 +99,39 @@ systemd-run --user --unit=go2-vision-ollama \
   --setenv=OLLAMA_HOST=127.0.0.1:11435 \
   --setenv=OLLAMA_NUM_PARALLEL=1 /usr/local/bin/ollama serve
 ```
+
+## Go2 UnifoLM decision latency (2026-10-09)
+
+The deployed two-stage pipeline uses UnifoLM for visual observation and
+qwen3.5:9b for registered-skill selection. Server logs showed roughly 8,365
+input tokens being truncated to 4,098. Later decisions also produced 123-token
+explanations, taking 3–4.5 seconds per window; output-budget failures discarded
+an entire round. The worker already samples the newest window with one request
+in flight and checks frame freshness before execution.
+
+The open visual prompt now keeps every skill, argument constraint and safety
+tag while removing duplicate catalog fields and schema titles. The UnifoLM
+decider explicitly requests an 8,192-token context, limits reason strings to
+64 characters and speech to 160 characters through the output schema, and
+uses a 256-token output budget. Runtime validation and rejection of truncated
+responses remain in place.
+
+Six alternating recorded waving/empty-image replays on the RTX 3080 server
+(with prior failed-action context and local person_count=0) yielded:
+
+| Input | First request | Subsequent requests |
+| --- | ---: | ---: |
+| Waving person | 3.181 s | 2.126 s, 1.944 s |
+| Empty room | 1.377 s | 1.392 s, 1.370 s |
+
+All three waving inputs selected wave and all three empty inputs selected
+ignore. Inputs were 4,674–4,703 tokens; outputs were 23–44 tokens. These replay
+measurements exclude robot execution and do not establish live gesture
+accuracy or physical response time. The existing five-second identical-action
+cooldown and two-second SDK timeout remain separate limits on repeated actions.
+
+The later 2026-10-09 update removes the identical-action cooldown and its CLI
+option. An identical behavior is still suppressed while active; it may execute
+again as soon as completion is recorded. Decision prompts request JSON only,
+and the UnifoLM decider schema excludes the reason field entirely. Internal
+runtime diagnostic reasons remain available for rejected decisions.

@@ -675,8 +675,7 @@ continue  -> 保持当前行为，不启动新 Skill
 interrupt -> 取消当前可中断 Skill，并调用机器人软件 stop
 ```
 
-相同 Skill/参数/语音正在执行时不会重复启动；执行结束后默认还有 5 秒冷却，可用
-`--action-cooldown-s` 调整。旧事件策略仍可运行：
+相同 Skill/参数正在执行时不会重复启动；执行结束后没有冷却时间，下一轮有效视觉决策可立即再次执行。视觉决策只输出紧凑 JSON，不输出解释字段。旧事件策略仍可运行：
 
 ```bash
 uv run --extra perception go2-perception \

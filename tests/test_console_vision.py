@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from agent.decision import RecoverableDecisionError
 from agent.social_vision import _OPEN_DECISION_PROMPT, SocialVisionAgent
 from agent.unifolm_vision import UnifolmDecisionInvoker
 from app.api import create_app
@@ -153,6 +154,17 @@ class ConsoleVisionTests(unittest.TestCase):
         self.assertEqual(backend.config.vision_frame_count, 3)
         self.assertEqual(backend.config.vision_window_s, 0.8)
 
+    def test_removed_confirmation_endpoint_is_unavailable(self):
+        backend = ConsoleBackend(
+            BackendConfig(audio_enabled=False), agent_factory=fake_agent_factory
+        )
+        with TestClient(create_app(backend=backend)) as client:
+            self.assertEqual(
+                client.put("/api/v1/config/vision-confirm-hold", json={"seconds": 1}).status_code,
+                404,
+            )
+            self.assertNotIn("visionConfirmHoldS", client.get("/api/v1/console").json())
+
     def test_go2_vision_factory_uses_open_decisions(self):
         backend = ConsoleBackend(
             BackendConfig(
@@ -166,7 +178,6 @@ class ConsoleVisionTests(unittest.TestCase):
         self.assertEqual(agent._invoker.task, "看到人坐下就坐下")
         self.assertIn("看到人坐下就坐下", agent.task_context)
         self.assertTrue(agent.allow_operator_skills)
-        self.assertEqual(backend.config.vision_confirm_hold_s, 0.5)
         self.assertIn("registered `wave`", _OPEN_DECISION_PROMPT)
 
     def test_default_camera_applies_rotation_before_jpeg_encoding(self):
@@ -194,7 +205,6 @@ class ConsoleVisionTests(unittest.TestCase):
                 prompt_profile="egocentric",
                 generate_speech=True,
                 task_context=backend.system_prompt + "\n" + text,
-                confirm_hold_s=0,
             ),
         )
         return backend, camera, invoker
@@ -256,6 +266,52 @@ class ConsoleVisionTests(unittest.TestCase):
             time.sleep(0.15)
             self.assertEqual(len(invoker.calls), count)
         self.assertFalse(camera.opened)
+
+    def test_token_exhaustion_between_interactions_keeps_task_running(self):
+        for response_format in ("json", "decision"):
+            with self.subTest(response_format=response_format):
+                backend, _camera, invoker = self.build()
+                calls = 0
+
+                async def invoke(frames, prompt, mode=response_format):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 2:
+                        raise RecoverableDecisionError("Ollama output token budget exhausted")
+                    if calls > 3:
+                        return {"action": "ignore"}
+                    result: dict[str, object] = {
+                        "action": "execute_skill",
+                        "skill": "wave" if calls == 1 else "heart",
+                    }
+                    if mode == "json":
+                        result.update(
+                            observation="visible gesture toward camera",
+                            hand_visible=True,
+                            directed_at_robot=True,
+                            present_in_latest=True,
+                        )
+                    return result
+
+                invoker.ainvoke = invoke
+                backend._vision_agent_factory = lambda text, invoker=invoker, mode=response_format: SocialVisionAgent(
+                    invoker=invoker, response_format=mode, task_context=text
+                )
+                with TestClient(create_app(backend=backend)) as client:
+                    wait_for(client, lambda s: s["camera"]["frameAvailable"])
+                    client.post("/api/v1/tasks", json={"instruction": "回应挥手和比心"})
+                    snapshot = wait_for(
+                        client,
+                        lambda s, backend=backend: ("loco_action", ("heart", {})) in backend.robot.events,
+                    )
+                    self.assertIn(("loco_action", ("hello", {})), backend.robot.events)
+                    self.assertTrue(snapshot["busy"])
+                    self.assertTrue(any(
+                        log["level"] == "WARN" and "继续观察" in log["message"]
+                        for log in snapshot["logs"]
+                    ))
+                    self.assertFalse(invoker.closed)
+                    client.post("/api/v1/tasks/current/cancel", json={})
 
     def test_stale_frames_and_bad_output_never_execute(self):
         for fault in ("stale", "bad"):

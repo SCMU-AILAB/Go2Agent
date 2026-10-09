@@ -22,7 +22,7 @@ from perception import CameraFrame, VideoBuffer
 from robot import RobotState
 from skills.motions.go2_follow import FollowPersonSkill
 
-from .decision import AgentDecision, DecisionAgentError
+from .decision import AgentDecision, DecisionAgentError, RecoverableDecisionError
 from .vision_capture import VisionCapture
 
 DEFAULT_VISION_MODEL = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
@@ -71,6 +71,7 @@ class OllamaVisionInvoker:
         max_new_tokens: int = 160,
         constrain_json: bool = True,
         think: bool | None = None,
+        context_tokens: int | None = None,
     ) -> None:
         ollama = importlib.import_module("ollama")
         self.model_name = model_name
@@ -81,6 +82,7 @@ class OllamaVisionInvoker:
         self.max_new_tokens = max_new_tokens
         self.constrain_json = constrain_json
         self.think = think
+        self.context_tokens = context_tokens
 
     async def warmup(self) -> None:
         await self._client.show(self.model_name)
@@ -108,16 +110,20 @@ class OllamaVisionInvoker:
             format=self.output_schema if self.constrain_json else "json",
             stream=False,
             **({"think": self.think} if self.think is not None else {}),
-            options={"temperature": 0, "num_predict": self.max_new_tokens},
+            options={
+                "temperature": 0,
+                "num_predict": self.max_new_tokens,
+                **({"num_ctx": self.context_tokens} if self.context_tokens else {}),
+            },
             keep_alive="30m",
         )
         payload = response if isinstance(response, Mapping) else response.model_dump()
         if payload.get("done") is not True:
-            raise DecisionAgentError(
+            raise RecoverableDecisionError(
                 "Ollama returned an incomplete response; check server logs"
             )
         if payload.get("done_reason") == "length":
-            raise DecisionAgentError(
+            raise RecoverableDecisionError(
                 "Ollama exhausted the output token budget; refusing truncated decision"
             )
         finished = time.monotonic()
@@ -606,6 +612,7 @@ class VisionPolicyOutcome:
 class VisionPolicyError:
     stage: str
     message: str
+    recoverable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -661,7 +668,6 @@ class VisionPolicyWorker:
         speech: SpeechOutput | None = None,
         interval_s: float = 0.5,
         frame_count: int = 1,
-        action_cooldown_s: float = 5.0,
         max_decision_age_s: float | None = None,
         queue_size: int = 16,
         capture: VisionCapture | None = None,
@@ -676,8 +682,6 @@ class VisionPolicyWorker:
             raise ValueError("vision frame count must be greater than zero")
         if frame_count < getattr(decision_agent, "minimum_frames", 1):
             raise ValueError("vision frame count is below the agent's minimum")
-        if action_cooldown_s < 0:
-            raise ValueError("action cooldown must not be negative")
         if max_decision_age_s is not None and max_decision_age_s <= 0:
             raise ValueError("maximum decision age must be greater than zero")
         self.runtime = runtime
@@ -687,7 +691,6 @@ class VisionPolicyWorker:
         self.speech = speech
         self.interval_s = interval_s
         self.frame_count = frame_count
-        self.action_cooldown_s = action_cooldown_s
         self.max_decision_age_s = max_decision_age_s
         # A single consumer and a one-item latest-wins queue are intentional:
         # an in-flight remote inference is never followed by a backlog of old
@@ -718,7 +721,6 @@ class VisionPolicyWorker:
         self._recent_actions: deque[dict[str, object]] = deque(maxlen=5)
         self._last_selected_skill: str | None = None
         self._last_selected_at_s: float | None = None
-        self._last_action_at: dict[str, float] = {}
         self._request_sequence = 0
         self._decision_finished_at_s: deque[float] = deque(maxlen=32)
         self._interrupt_lock = asyncio.Lock()
@@ -999,7 +1001,11 @@ class VisionPolicyWorker:
                     self._finish_capture(capture_path, {"error": str(exc)})
                     self._put_latest(
                         self._error_queue,
-                        VisionPolicyError(stage="decision", message=str(exc)),
+                        VisionPolicyError(
+                            stage="decision",
+                            message=str(exc),
+                            recoverable=isinstance(exc, RecoverableDecisionError),
+                        ),
                     )
             remaining = self.interval_s - (time.monotonic() - started)
             if remaining > 0:
@@ -1119,23 +1125,6 @@ class VisionPolicyWorker:
                         ),
                     )
                     continue
-                last_action_at = self._last_action_at.get(signature)
-                if (
-                    last_action_at is not None
-                    and now - last_action_at < self.action_cooldown_s
-                ):
-                    self._put_latest(
-                        self._outcome_queue,
-                        self._outcome(
-                            decision,
-                            frames,
-                            robot_state,
-                            request_id=request.request_id,
-                            model_metrics=request.model_metrics,
-                            suppressed_reason="identical behavior is in cooldown",
-                        ),
-                    )
-                    continue
                 if self._active_task is not None and not self._active_task.done():
                     await self.interrupt("switching vision behavior")
 
@@ -1187,7 +1176,6 @@ class VisionPolicyWorker:
                         decision.skill
                     )
                     self._last_selected_at_s = now
-                self._last_action_at[signature] = now
                 active_task = asyncio.create_task(
                     self._execute(decision),
                     name="vision-active-behavior",

@@ -219,12 +219,6 @@ def parse_args() -> argparse.Namespace:
         "--vision-goal",
         default=DEFAULT_VISION_GOAL,
     )
-    parser.add_argument(
-        "--action-cooldown-s",
-        type=float,
-        default=5.0,
-        help="minimum interval before an identical action may execute again",
-    )
     parser.add_argument("--no-audio", action="store_true")
     parser.add_argument("--camera-serial", help="D435i serial number")
     parser.add_argument(
@@ -869,7 +863,6 @@ async def _run(args: argparse.Namespace) -> int:
             speech=audio,
             interval_s=args.vision_interval_s,
             frame_count=args.vision_frame_count,
-            action_cooldown_s=args.action_cooldown_s,
             max_decision_age_s=args.max_decision_age_s,
             capture=(
                 VisionCapture(args.vision_capture_dir, args.vision_capture_limit)

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from agent.decision import DecisionAgentError
+from agent.decision import RecoverableDecisionError
 from agent.vision_policy import OllamaVisionInvoker
 
 
@@ -36,6 +36,12 @@ class OllamaVisionTests(unittest.IsolatedAsyncioTestCase):
         await invoker.ainvoke([b"jpeg"], "test")
         self.assertIs(invoker._client.chat.call_args.kwargs["think"], False)
 
+    async def test_explicit_context_capacity_is_sent(self):
+        invoker = self.invoker({"done": True, "message": {"content": "{}"}})
+        invoker.context_tokens = 8192
+        await invoker.ainvoke([], "test")
+        self.assertEqual(invoker._client.chat.call_args.kwargs["options"]["num_ctx"], 8192)
+
     async def test_metrics_separate_encoding_http_and_server_time(self):
         invoker = self.invoker(
             {
@@ -66,5 +72,5 @@ class OllamaVisionTests(unittest.IsolatedAsyncioTestCase):
             {"done": False}, {},
             {"done": True, "done_reason": "length", "message": {"content": "{}"}},
         ):
-            with self.subTest(payload=payload), self.assertRaises(DecisionAgentError):
+            with self.subTest(payload=payload), self.assertRaises(RecoverableDecisionError):
                 await self.invoker(payload).ainvoke([b"jpeg"], "test")

@@ -38,7 +38,6 @@ class ConsoleSnapshot {
     required this.voiceListening,
     required this.voiceStatus,
     required this.voiceTranscript,
-    this.visionConfirmHoldS = 1.5,
     required this.voiceReply,
     required this.voiceError,
     required this.voiceInputDevice,
@@ -100,8 +99,6 @@ class ConsoleSnapshot {
       voiceInputDevice: voice['inputDevice'] as String? ?? 'pulse',
       voiceOutputDevice: voice['outputDevice'] as String? ?? 'pulse',
       voiceTtsEngine: voice['ttsEngine'] as String?,
-      visionConfirmHoldS:
-          (json['visionConfirmHold'] as num?)?.toDouble() ?? 1.5,
       tools: _asList(
         json['tools'],
       ).map(_asMap).map(ToolCall.fromJson).toList(growable: false),
@@ -146,7 +143,6 @@ class ConsoleSnapshot {
   final bool voiceListening;
   final String voiceStatus;
   final String voiceTranscript;
-  final double visionConfirmHoldS;
   final String voiceReply;
   final String? voiceError;
   final String voiceInputDevice;

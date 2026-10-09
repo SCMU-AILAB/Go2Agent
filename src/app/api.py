@@ -56,10 +56,6 @@ class CancelTaskRequest(ApiModel):
     reason: str = "用户停止了任务"
 
 
-class VisionConfirmHoldUpdate(ApiModel):
-    seconds: float = Field(ge=0, le=30)
-
-
 class SkillExecuteRequest(ApiModel):
     arguments: dict[str, object] = Field(default_factory=dict)
 
@@ -190,13 +186,6 @@ def create_app(
             return await console.emergency_stop("操作员点击急停")
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    @app.put("/api/v1/config/vision-confirm-hold", response_model=ConsoleSnapshot)
-    async def update_vision_confirm_hold(body: VisionConfirmHoldUpdate) -> ConsoleSnapshot:
-        try:
-            return await console.update_vision_confirm_hold(body.seconds)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/v1/skills")
     async def get_skills() -> dict[str, list[dict[str, object]]]:

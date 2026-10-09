@@ -1,7 +1,0 @@
-{
-  "indexing": true,
-  "autoImportCompletions": true,
-  "typeCheckingMode": "standard",
-  "venvPath": ".",
-  "venv": ".venv",
-}

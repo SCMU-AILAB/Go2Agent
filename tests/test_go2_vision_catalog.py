@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import unittest
 from dataclasses import replace
 
-from agent.social_vision import SocialVisionAgent
+from agent.social_vision import SocialVisionAgent, _compact_skill_catalog
 from agent.vision_policy import VisionDecisionAgent, _skill_catalog_payload
 from core.runtime import SkillRuntime
 from perception import CameraFrame, PerceptionResult
@@ -52,7 +53,6 @@ class Go2VisionCatalogTests(unittest.IsolatedAsyncioTestCase):
         agent = SocialVisionAgent(
             invoker=invoker,
             task_context="明确切换 Go2 阻尼模式",
-            confirm_hold_s=0,
         )
 
         decision = await agent.decide(frames(), self.state, self.skills)
@@ -60,8 +60,8 @@ class Go2VisionCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.skill, "damp")
         self.assertTrue(agent.allow_operator_skills)
         self.assertEqual(agent.response_format, "decision")
-        self.assertIn('"name": "damp"', invoker.prompt)
-        self.assertIn('"name": "front_flip"', invoker.prompt)
+        catalog = json.loads(invoker.prompt.split("Registered skills: ")[1].split("\nRobot state:")[0])
+        self.assertEqual({entry["name"] for entry in catalog}, self.names)
 
     def test_visual_payload_contains_same_skills_and_schemas(self) -> None:
         payload = _skill_catalog_payload(self.skills)
@@ -72,6 +72,18 @@ class Go2VisionCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("flag", pose["arguments_schema"]["properties"])
         damp = next(entry for entry in payload if entry["name"] == "damp")
         self.assertIn("operator_only", damp["tags"])
+
+    def test_compaction_preserves_argument_contracts_and_safety_tags(self) -> None:
+        original = _skill_catalog_payload(self.skills)
+        compact = _compact_skill_catalog(self.skills)
+        self.assertLess(len(json.dumps(compact)), len(json.dumps(original)))
+        for before, after in zip(original, compact, strict=True):
+            self.assertEqual(before["name"], after["name"])
+            self.assertEqual(before["tags"], after["tags"])
+            schema = after["arguments_schema"]
+            self.assertEqual(schema["required"], before["arguments_schema"]["required"])
+            for name, field in before["arguments_schema"]["properties"].items():
+                self.assertEqual(schema["properties"][name], {k: v for k, v in field.items() if k != "title"})
 
     def test_recovery_allowlist_does_not_filter_operator_skills(self) -> None:
         recovered = VisionDecisionAgent._recoverable_skill_names(self.skills)
@@ -108,7 +120,6 @@ class Go2VisionCatalogTests(unittest.IsolatedAsyncioTestCase):
                         }
                     ),
                     task_context="按画面选择 Go2 动作",
-                    confirm_hold_s=0,
                 )
                 decision = await agent.decide(observed_frames, self.state, self.skills)
                 self.assertEqual(decision.action, "execute_skill")
@@ -127,7 +138,6 @@ class Go2VisionCatalogTests(unittest.IsolatedAsyncioTestCase):
                     "arguments": {"flag": False},
                 }
             ),
-            confirm_hold_s=0,
         )
         decision = await agent.decide(frames(), self.state, runtime.registry.list())
         result = await runtime.execute(decision.skill, **decision.arguments)

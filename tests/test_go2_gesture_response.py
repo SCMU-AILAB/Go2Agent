@@ -12,7 +12,6 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
             response_format="json",
             task_context="用户打招呼就打招呼，比耶或比心就比心",
             generate_speech=True,
-            confirm_hold_s=0,
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -40,7 +39,6 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         agent = SocialVisionAgent(
             response_format="json",
             task_context="有人打招呼就打招呼",
-            confirm_hold_s=0,
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -62,7 +60,7 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.action, "execute_skill")
         self.assertEqual(decision.skill, "wave")
 
-    async def test_default_short_hold_allows_transient_greeting(self):
+    async def test_first_greeting_executes_despite_tracking_detector_miss(self):
         agent = SocialVisionAgent(
             task_context="用户打招呼就给他打招呼",
             response_format="decision",
@@ -75,17 +73,13 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         first = await agent.decide(
             [camera_frame(1.0), camera_frame(1.2)], state, skills
         )
-        second = await agent.decide(
-            [camera_frame(1.5), camera_frame(1.7)], state, skills
-        )
-        self.assertEqual(first.action, "ignore")
-        self.assertEqual(second.action, "execute_skill")
-        self.assertEqual(second.skill, "wave")
+        self.assertEqual(camera_frame(1.2).observation.person_count, 0)
+        self.assertEqual(first.action, "execute_skill")
+        self.assertEqual(first.skill, "wave")
 
     async def test_peace_sign_returned_as_wave_is_resolved_to_heart(self):
         agent = SocialVisionAgent(
             response_format="json",
-            confirm_hold_s=0,
             task_context="用户打招呼就打招呼，比耶或比心就比心",
             invoker=FakeVisionInvoker(
                 [
@@ -111,7 +105,6 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
         for skill in ("damp", "front_flip", "not_a_skill"):
             agent = SocialVisionAgent(
                 response_format="json",
-                confirm_hold_s=0,
                 invoker=FakeVisionInvoker(
                     [
                         {
@@ -135,7 +128,6 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
     async def test_unconfirmed_directed_at_robot_is_ignored(self):
         agent = SocialVisionAgent(
             response_format="json",
-            confirm_hold_s=0,
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -159,7 +151,6 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
     async def test_ignore_with_no_skill_stays_silent(self):
         agent = SocialVisionAgent(
             response_format="json",
-            confirm_hold_s=0,
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -184,7 +175,6 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
     async def test_active_skill_returns_continue(self):
         agent = SocialVisionAgent(
             response_format="json",
-            confirm_hold_s=0,
             invoker=FakeVisionInvoker(
                 [
                     {
@@ -208,7 +198,6 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_gesture_label_thumbs_up_maps_to_random_dance(self):
         agent = SocialVisionAgent(
-            confirm_hold_s=0,
             invoker=FakeVisionInvoker(["thumbs_up"]),
             task_context="用户点赞时随机跳舞",
             response_format="gesture_label",
@@ -223,7 +212,6 @@ class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_gesture_label_active_random_dance_continues(self):
         agent = SocialVisionAgent(
-            confirm_hold_s=0,
             invoker=FakeVisionInvoker(["thumbs_up"]),
             task_context="用户竖起大拇指的时候就随机跳舞",
             response_format="gesture_label",
