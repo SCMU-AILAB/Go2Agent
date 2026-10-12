@@ -83,7 +83,7 @@ class ConsoleController extends ChangeNotifier {
   String progressText = '等待执行';
   String modelOutput = '';
   String currentTask = '';
-  double visionConfirmHoldS = 1.5;
+  double visionConfirmHoldS = 0.5;
 
   /// Local chat history for the dialog page (frontend-only; no backend field).
   final List<DialogTurn> dialog = [];

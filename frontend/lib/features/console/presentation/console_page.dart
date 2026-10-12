@@ -268,6 +268,8 @@ class _Go2ConsolePageState extends State<Go2ConsolePage> {
           items[3],
           const SizedBox(height: 12),
           items[4],
+          const SizedBox(height: 12),
+          items[5],
         ],
       );
     }

@@ -241,7 +241,7 @@ class FakeConsoleApi implements ConsoleApi {
 
   @override
   Future<ConsoleSnapshot> updateVisionConfirmHold(double seconds) async {
-    _payload = {..._payload, 'visionConfirmHold': seconds};
+    _payload = {..._payload, 'visionConfirmHoldS': seconds};
     return snapshot;
   }
 
