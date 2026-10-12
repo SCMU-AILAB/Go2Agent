@@ -306,20 +306,17 @@ class Go2FlagSkill(RobotSkill[Go2FlagArgs]):
 
 
 def _go2_wave_hello_skill() -> PostureSkill:
-    """Social-vision skill name 'wave' backed by the native Go2 hello action.
+    """Compatibility name 'wave' backed by the native Go2 hello action.
 
-    The vision policy looks up skills by gesture name. Go2 has no arm wave;
-    this skill keeps the wave gesture actionable while documenting the real
-    SportClient call. handshake and high_five remain unregistered on purpose.
+    Go2 has no arm wave; this alias performs the same SportClient hello call.
     """
     return PostureSkill(
         PostureSpec(
             "wave",
             "hello",
             (
-                "Gesture-mode alias for Go2 native hello when a person waves. "
-                "Not a humanoid arm wave. Text agent should use hello or heart "
-                "directly when the user names them."
+                "Alias of hello: plays the same Go2 native greeting (挥手/打招呼). "
+                "Not a humanoid arm wave."
             ),
         )
     )
@@ -338,10 +335,9 @@ class RandomGo2DanceSkill(RobotSkill[SkillArgs]):
         self.metadata = SkillMetadata(
             name="random_dance",
             description=(
-                "用户竖起大拇指、点赞或明确要求随机跳舞时使用；从 dance1/dance2 "
-                "中随机选择一个。不是跳跃、空翻或危险特技。 "
-                "Use when the user gives a thumbs-up / like or explicitly asks "
-                "for a random dance; randomly choose dance1 or dance2. "
+                "随机跳一支 Go2 原生舞蹈（随机跳舞）：从 dance1/dance2 中随机选择一个。"
+                "不是跳跃、空翻或危险特技。 "
+                "Randomly play one native Go2 dance (dance1 or dance2). "
                 "Not a jump, flip, or dangerous stunt."
             ),
             tags=("motion", "dance", "go2"),

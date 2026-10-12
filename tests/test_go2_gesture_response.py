@@ -1,240 +1,62 @@
+"""Vision decisions reach Go2 only through the shared SkillRuntime."""
+
 import unittest
 
 from agent.social_vision import SocialVisionAgent
-from robot import RobotState
-from skills.go2_catalog import build_go2_autonomy_skills
+from core.runtime import SkillRuntime
+from robot import RobotState, SimulatedRobotAdapter
+from skills import register_go2_skills
 from tests.test_vision_policy import FakeVisionInvoker, camera_frame
 
 
-class TaskDrivenVisionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_model_selected_heart_is_executed(self):
+class Go2VisionExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def _decide_and_execute(self, payload):
+        robot = SimulatedRobotAdapter()
+        runtime = SkillRuntime(robot)
+        register_go2_skills(runtime)
         agent = SocialVisionAgent(
-            response_format="json",
-            task_context="用户打招呼就打招呼，比耶或比心就比心",
+            invoker=FakeVisionInvoker([payload]),
+            task_context="按画面和任务选择 Go2 动作",
             generate_speech=True,
-            confirm_hold_s=0,
-            invoker=FakeVisionInvoker(
-                [
-                    {
-                        "action": "execute_skill",
-                        "skill": "heart",
-                        "observation": "peace sign near face",
-                        "hand_visible": True,
-                        "directed_at_robot": True,
-                        "present_in_latest": True,
-                        "speech": "给你比心",
-                    }
-                ]
-            ),
         )
         decision = await agent.decide(
             [camera_frame(1), camera_frame(2)],
             RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
+            runtime.registry.list(),
         )
-        self.assertEqual(decision.action, "execute_and_speak")
-        self.assertEqual(decision.skill, "heart")
+        result = None
+        if decision.skill is not None:
+            result = await runtime.execute(decision.skill, **decision.arguments)
+        return decision, result, robot
+
+    async def test_model_chosen_native_action_runs_on_go2(self):
+        for skill in ("hello", "heart", "sit"):
+            with self.subTest(skill=skill):
+                _decision, result, robot = await self._decide_and_execute(
+                    {"action": "execute_skill", "skill": skill}
+                )
+                self.assertTrue(result.success)
+                self.assertEqual(robot.events, [("loco_action", (skill, {}))])
+
+    async def test_speech_rides_along_with_the_skill(self):
+        decision, _result, robot = await self._decide_and_execute(
+            {"action": "execute_and_speak", "skill": "heart", "speech": "给你比心"}
+        )
         self.assertEqual(decision.speech, "给你比心")
+        self.assertEqual(robot.events, [("loco_action", ("heart", {}))])
 
-    async def test_model_selected_wave_is_executed(self):
-        agent = SocialVisionAgent(
-            response_format="json",
-            task_context="有人打招呼就打招呼",
-            confirm_hold_s=0,
-            invoker=FakeVisionInvoker(
-                [
-                    {
-                        "action": "execute_skill",
-                        "skill": "wave",
-                        "observation": "person waving hand",
-                        "hand_visible": True,
-                        "directed_at_robot": True,
-                        "present_in_latest": True,
-                    }
-                ]
-            ),
+    async def test_invalid_arguments_are_rejected_by_runtime(self):
+        _decision, result, robot = await self._decide_and_execute(
+            {"action": "execute_skill", "skill": "move_forward", "arguments": {"distance_m": 5}}
         )
-        decision = await agent.decide(
-            [camera_frame(1), camera_frame(2)],
-            RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
-        )
-        self.assertEqual(decision.action, "execute_skill")
-        self.assertEqual(decision.skill, "wave")
+        self.assertFalse(result.success)
+        self.assertEqual(robot.events, [])
 
-    async def test_default_short_hold_allows_transient_greeting(self):
-        agent = SocialVisionAgent(
-            task_context="用户打招呼就给他打招呼",
-            response_format="decision",
-            invoker=FakeVisionInvoker(
-                [{"action": "execute_skill", "skill": "wave", "reason": "greeting"}]
-            ),
-        )
-        state = RobotState(hardware=False, connected=True)
-        skills = build_go2_autonomy_skills()
-        first = await agent.decide(
-            [camera_frame(1.0), camera_frame(1.2)], state, skills
-        )
-        second = await agent.decide(
-            [camera_frame(1.5), camera_frame(1.7)], state, skills
-        )
-        self.assertEqual(first.action, "ignore")
-        self.assertEqual(second.action, "execute_skill")
-        self.assertEqual(second.skill, "wave")
-
-    async def test_peace_sign_returned_as_wave_is_resolved_to_heart(self):
-        agent = SocialVisionAgent(
-            response_format="json",
-            confirm_hold_s=0,
-            task_context="用户打招呼就打招呼，比耶或比心就比心",
-            invoker=FakeVisionInvoker(
-                [
-                    {
-                        "action": "execute_skill",
-                        "skill": "wave",
-                        "observation": "V-sign held near face",
-                        "hand_visible": True,
-                        "directed_at_robot": True,
-                        "present_in_latest": True,
-                    }
-                ]
-            ),
-        )
-        decision = await agent.decide(
-            [camera_frame(1), camera_frame(2)],
-            RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
-        )
-        self.assertEqual(decision.skill, "heart")
-
-    async def test_unregistered_or_operator_skill_is_ignored(self):
-        for skill in ("damp", "front_flip", "not_a_skill"):
-            agent = SocialVisionAgent(
-                response_format="json",
-                confirm_hold_s=0,
-                invoker=FakeVisionInvoker(
-                    [
-                        {
-                            "action": "execute_skill",
-                            "skill": skill,
-                            "observation": "something",
-                            "hand_visible": True,
-                            "directed_at_robot": True,
-                            "present_in_latest": True,
-                        }
-                    ]
-                ),
-            )
-            decision = await agent.decide(
-                [camera_frame(1), camera_frame(2)],
-                RobotState(hardware=False, connected=True),
-                build_go2_autonomy_skills(),
-            )
-            self.assertEqual(decision.action, "ignore")
-
-    async def test_unconfirmed_directed_at_robot_is_ignored(self):
-        agent = SocialVisionAgent(
-            response_format="json",
-            confirm_hold_s=0,
-            invoker=FakeVisionInvoker(
-                [
-                    {
-                        "action": "execute_skill",
-                        "skill": "heart",
-                        "observation": "two-hand heart",
-                        "hand_visible": True,
-                        "directed_at_robot": False,
-                        "present_in_latest": True,
-                    }
-                ]
-            ),
-        )
-        decision = await agent.decide(
-            [camera_frame(1), camera_frame(2)],
-            RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
-        )
+    async def test_ignore_never_touches_the_robot(self):
+        decision, result, robot = await self._decide_and_execute({"action": "ignore"})
         self.assertEqual(decision.action, "ignore")
-
-    async def test_ignore_with_no_skill_stays_silent(self):
-        agent = SocialVisionAgent(
-            response_format="json",
-            confirm_hold_s=0,
-            invoker=FakeVisionInvoker(
-                [
-                    {
-                        "action": "ignore",
-                        "skill": None,
-                        "observation": "person walking by",
-                        "hand_visible": False,
-                        "directed_at_robot": False,
-                        "present_in_latest": False,
-                    }
-                ]
-            ),
-        )
-        decision = await agent.decide(
-            [camera_frame(1), camera_frame(2)],
-            RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
-        )
-        self.assertEqual(decision.action, "ignore")
-        self.assertIsNone(decision.skill)
-
-    async def test_active_skill_returns_continue(self):
-        agent = SocialVisionAgent(
-            response_format="json",
-            confirm_hold_s=0,
-            invoker=FakeVisionInvoker(
-                [
-                    {
-                        "action": "execute_skill",
-                        "skill": "heart",
-                        "observation": "heart still held",
-                        "hand_visible": True,
-                        "directed_at_robot": True,
-                        "present_in_latest": True,
-                    }
-                ]
-            ),
-        )
-        decision = await agent.decide(
-            [camera_frame(1), camera_frame(2)],
-            RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
-            policy_context={"active_skill": "heart"},
-        )
-        self.assertEqual(decision.action, "continue")
-
-    async def test_gesture_label_thumbs_up_maps_to_random_dance(self):
-        agent = SocialVisionAgent(
-            confirm_hold_s=0,
-            invoker=FakeVisionInvoker(["thumbs_up"]),
-            task_context="用户点赞时随机跳舞",
-            response_format="gesture_label",
-        )
-        decision = await agent.decide(
-            [camera_frame(1), camera_frame(2)],
-            RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
-        )
-        self.assertEqual(decision.action, "execute_skill")
-        self.assertEqual(decision.skill, "random_dance")
-
-    async def test_gesture_label_active_random_dance_continues(self):
-        agent = SocialVisionAgent(
-            confirm_hold_s=0,
-            invoker=FakeVisionInvoker(["thumbs_up"]),
-            task_context="用户竖起大拇指的时候就随机跳舞",
-            response_format="gesture_label",
-        )
-        decision = await agent.decide(
-            [camera_frame(1), camera_frame(2)],
-            RobotState(hardware=False, connected=True),
-            build_go2_autonomy_skills(),
-            policy_context={"active_skill": "random_dance"},
-        )
-        self.assertEqual(decision.action, "continue")
+        self.assertIsNone(result)
+        self.assertEqual(robot.events, [])
 
 
 if __name__ == "__main__":

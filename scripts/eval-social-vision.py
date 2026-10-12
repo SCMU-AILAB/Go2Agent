@@ -28,7 +28,6 @@ async def main():
     parser.add_argument("manifest", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--profile", choices=("legacy", "egocentric"), default="egocentric")
     parser.add_argument("--no-think", action="store_true")
     parser.add_argument("--speech", action="store_true", help="evaluate model-generated speech as well as gestures")
     parser.add_argument("--task", default=DEFAULT_VISION_GOAL)
@@ -41,7 +40,7 @@ async def main():
     import ollama
     invoker._client = ollama.AsyncClient(host="http://127.0.0.1:11435", trust_env=False)
     agent = SocialVisionAgent(invoker=invoker, model_name=args.model,
-                              prompt_profile=args.profile, generate_speech=args.speech,
+                              generate_speech=args.speech,
                               task_context=args.task, timeout_s=90)
     rows = []
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -57,7 +56,7 @@ async def main():
                 frames.append(CameraFrame(observed_at_s=f["observed_at_s"], rgb=data,
                     depth=None, observation=PerceptionResult(observed_at_s=f["observed_at_s"], source="offline")))
             started = time.monotonic()
-            row = {"case": case, "model": args.model, "profile": args.profile}
+            row = {"case": case, "model": args.model}
             try:
                 result = await agent.decide(frames, RobotState(hardware=False, connected=True),
                                             build_go2_all_skills())

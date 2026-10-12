@@ -199,16 +199,17 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
                 '{"action":"execute_skill","skill":"heart","arguments":'
             )
 
-    async def test_skill_catalog_includes_values_and_argument_schema(self) -> None:
-        payload = _skill_catalog_payload([go2_skill("heart")])
-        item = payload[0]
-        self.assertEqual(item["name"], "heart")
-        self.assertEqual(item["description"], go2_skill("heart").metadata.description)
-        self.assertEqual(item["argument_defaults"], {})
-        self.assertEqual(item["required_arguments"], [])
-        self.assertIn("arguments_schema", item)
-        self.assertEqual(item["arguments_schema"]["properties"], {})
-        self.assertIn("required_resources", item)
+    async def test_skill_catalog_is_compact_with_argument_schema(self) -> None:
+        payload = _skill_catalog_payload([go2_skill("heart"), go2_skill("move_forward")])
+        heart, move = payload
+        self.assertEqual(heart["name"], "heart")
+        self.assertEqual(heart["description"], go2_skill("heart").metadata.description)
+        self.assertEqual(heart["arguments_schema"]["properties"], {})
+        self.assertEqual(heart["arguments_schema"]["required"], [])
+        self.assertIn("distance_m", move["arguments_schema"]["properties"])
+        # Runtime-only metadata is enforced by the Runtime, not shown to the model.
+        self.assertNotIn("required_resources", heart)
+        self.assertNotIn("timeout_s", heart)
 
     async def test_unwraps_single_action_object_from_video_model_list(self) -> None:
         decision = VisionDecisionAgent._parse_output(

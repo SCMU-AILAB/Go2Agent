@@ -58,8 +58,6 @@ class Go2VisionCatalogTests(unittest.IsolatedAsyncioTestCase):
         decision = await agent.decide(frames(), self.state, self.skills)
 
         self.assertEqual(decision.skill, "damp")
-        self.assertTrue(agent.allow_operator_skills)
-        self.assertEqual(agent.response_format, "decision")
         self.assertIn('"name": "damp"', invoker.prompt)
         self.assertIn('"name": "front_flip"', invoker.prompt)
 

@@ -83,7 +83,7 @@ class ConsoleController extends ChangeNotifier {
   String progressText = '等待执行';
   String modelOutput = '';
   String currentTask = '';
-  double visionConfirmHoldS = 0.5;
+  double visionConfirmHoldS = 0.0;
 
   /// Local chat history for the dialog page (frontend-only; no backend field).
   final List<DialogTurn> dialog = [];
@@ -521,9 +521,9 @@ class ConsoleController extends ChangeNotifier {
     try {
       final snapshot = await api.updateVisionConfirmHold(seconds);
       _applySnapshot(snapshot);
-      onMessage('手势确认时长：${seconds.toStringAsFixed(2)} 秒');
+      onMessage('视觉决策确认时长：${seconds.toStringAsFixed(2)} 秒');
     } catch (error) {
-      addLog('ERROR', 'config', '更新手势确认时长失败：$error');
+      addLog('ERROR', 'config', '更新视觉决策确认时长失败：$error');
       onMessage('更新失败：$error');
     }
   }

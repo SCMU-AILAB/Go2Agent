@@ -23,10 +23,9 @@ from perception.realsense import RealSenseBindings
 
 
 class VisionProfileArgumentTests(unittest.TestCase):
-    def test_new_profile_and_rollback_thinking_flags(self):
-        with patch("sys.argv", ["perception", "--vision-social-profile", "egocentric", "--vision-disable-thinking"]):
+    def test_thinking_flag_and_rollback(self):
+        with patch("sys.argv", ["perception", "--vision-disable-thinking"]):
             args = parse_args()
-            self.assertEqual(args.vision_social_profile, "egocentric")
             self.assertTrue(args.vision_disable_thinking)
             self.assertFalse(args.hardware)
         with patch("sys.argv", ["perception", "--vision-disable-thinking", "--no-vision-disable-thinking"]):

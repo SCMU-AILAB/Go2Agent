@@ -16,6 +16,6 @@ void main() {
   test('defaults confirm hold to the backend default', () {
     final payload = consolePayload()..remove('visionConfirmHoldS');
 
-    expect(ConsoleSnapshot.fromJson(payload).visionConfirmHoldS, 0.5);
+    expect(ConsoleSnapshot.fromJson(payload).visionConfirmHoldS, 0.0);
   });
 }

@@ -26,7 +26,6 @@ from agent import (
     EventDecisionAgent,
     LlamaCppVisionInvoker,
     OllamaVisionInvoker,
-    UnifolmDecisionInvoker,
     UnifolmVisionInvoker,
     VisionDecisionAgent,
     VisionPolicyOutcome,
@@ -121,12 +120,6 @@ def parse_args() -> argparse.Namespace:
         help="social uses task-driven decisions; both modes expose the full Go2 catalog",
     )
     parser.add_argument(
-        "--vision-social-profile",
-        choices=("legacy", "egocentric"),
-        default="legacy",
-        help="social prompt profile; egocentric makes camera-relative gesture intent explicit",
-    )
-    parser.add_argument(
         "--vision-disable-thinking",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -143,11 +136,6 @@ def parse_args() -> argparse.Namespace:
         help="policy model override; defaults depend on --policy",
     )
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_HOST"))
-    parser.add_argument(
-        "--decision-model",
-        default=os.getenv("OLLAMA_MODEL", "qwen3.5:9b"),
-        help="structured decision model when --vision-backend unifolm",
-    )
     parser.add_argument(
         "--vision-url",
         default=os.getenv("VISION_URL") or os.getenv("UNIFOLM_VISION_URL"),
@@ -672,9 +660,6 @@ async def _run(args: argparse.Namespace) -> int:
             "camera_serial": args.camera_serial,
             "hardware": args.hardware,
             "robot_model": robot_model,
-            "vision_social_profile": args.vision_social_profile
-            if args.vision_task == "social"
-            else None,
             "vision_thinking_disabled": args.vision_disable_thinking,
             "vision_frame_count": (
                 args.vision_frame_count if args.policy == "vision" else None
@@ -736,12 +721,9 @@ async def _run(args: argparse.Namespace) -> int:
                     inference_timeout_s=args.vision_timeout_s,
                 )
             elif args.vision_backend == "unifolm":
-                vision_invoker = UnifolmDecisionInvoker(
+                vision_invoker = UnifolmVisionInvoker(
                     selected_model,
                     base_url=args.vision_url or DEFAULT_UNIFOLM_URL,
-                    decision_model=args.decision_model,
-                    decision_url=args.ollama_url,
-                    task=args.vision_goal,
                     max_new_tokens=args.vision_max_new_tokens,
                     timeout_s=args.vision_timeout_s,
                 )
@@ -773,12 +755,8 @@ async def _run(args: argparse.Namespace) -> int:
                 goal=args.vision_goal,
                 **(
                     {
-                        "prompt_profile": args.vision_social_profile,
                         "generate_speech": args.vision_generate_speech,
                         "task_context": args.vision_goal,
-                        "operator_instruction": args.vision_goal,
-                        "response_format": "decision",
-                        "allow_operator_skills": True,
                     }
                     if args.vision_task == "social"
                     else {}
@@ -804,8 +782,7 @@ async def _run(args: argparse.Namespace) -> int:
                 (
                     CudaVisionInvoker,
                     UnifolmVisionInvoker,
-                    UnifolmDecisionInvoker,
-                    LlamaCppVisionInvoker,
+                                    LlamaCppVisionInvoker,
                 ),
             ):
                 ready_data.update(vision_invoker.backend_info)

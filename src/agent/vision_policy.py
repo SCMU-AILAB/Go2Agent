@@ -289,44 +289,31 @@ class TransformersVisionInvoker:
 def _skill_catalog_payload(
     skill_catalog: Sequence[RobotSkill[SkillArgs]],
 ) -> list[dict[str, object]]:
+    """Compact model-facing catalog: what each skill does and its arguments.
+
+    Runtime-only metadata (resources, timeouts, retries) stays out of the
+    prompt; the Runtime still enforces it.
+    """
     catalog: list[dict[str, object]] = []
     for skill in skill_catalog:
         schema = skill.args_model.model_json_schema()
         raw_properties = schema.get("properties", {})
         raw_required = schema.get("required", [])
-        required_names = (
-            {name for name in raw_required if isinstance(name, str)}
-            if isinstance(raw_required, list)
-            else set()
-        )
-        arguments: dict[str, object] = {}
-        if isinstance(raw_properties, Mapping):
-            for name, raw_descriptor in raw_properties.items():
-                if not isinstance(name, str) or not isinstance(raw_descriptor, Mapping):
-                    continue
-                if "default" in raw_descriptor:
-                    arguments[name] = raw_descriptor["default"]
-                elif "const" in raw_descriptor:
-                    arguments[name] = raw_descriptor["const"]
-                elif name in required_names:
-                    arguments[name] = "<required>"
         catalog.append(
             {
                 "name": skill.metadata.name,
                 "description": skill.metadata.description,
-                "argument_defaults": arguments,
-                "required_arguments": sorted(required_names),
-                "arguments_schema": {
-                    "type": schema.get("type", "object"),
-                    "properties": raw_properties,
-                    "required": sorted(required_names),
-                    "additionalProperties": False,
-                },
                 "tags": list(skill.metadata.tags),
-                "required_resources": list(skill.metadata.required_resources),
-                "timeout_s": skill.metadata.timeout_s,
-                "max_retries": skill.metadata.max_retries,
-                "interruptible": skill.metadata.interruptible,
+                "arguments_schema": {
+                    "properties": (
+                        raw_properties if isinstance(raw_properties, Mapping) else {}
+                    ),
+                    "required": (
+                        sorted(name for name in raw_required if isinstance(name, str))
+                        if isinstance(raw_required, list)
+                        else []
+                    ),
+                },
             }
         )
     return catalog

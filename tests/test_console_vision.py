@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from agent.social_vision import _OPEN_DECISION_PROMPT, SocialVisionAgent
-from agent.unifolm_vision import UnifolmDecisionInvoker
+from agent.social_vision import SocialVisionAgent
+from agent.unifolm_vision import UnifolmVisionInvoker
 from app.api import create_app
 from app.backend import BackendConfig, ConsoleBackend
 from perception import CameraFrame, PerceptionResult
@@ -76,13 +76,10 @@ class VisionInvoker:
         if self.bad:
             return "bad json"
         return {
-            "action": "execute_skill",
+            "action": "execute_and_speak",
             "skill": "wave",
-            "observation": "person waving side to side",
-            "hand_visible": True,
-            "directed_at_robot": True,
-            "present_in_latest": True,
             "speech": "你好呀！",
+            "reason": "person waving",
         }
 
 
@@ -161,13 +158,12 @@ class ConsoleVisionTests(unittest.TestCase):
             agent_factory=fake_agent_factory,
         )
         agent = backend._build_vision_agent("看到人坐下就坐下")
-        self.assertEqual(agent.response_format, "decision")
-        self.assertIsInstance(agent._invoker, UnifolmDecisionInvoker)
-        self.assertEqual(agent._invoker.task, "看到人坐下就坐下")
+        # UnifoLM itself sees the frames and decides; no text decision model.
+        self.assertIsInstance(agent._invoker, UnifolmVisionInvoker)
+        self.assertEqual(agent._invoker.max_new_tokens, 256)
         self.assertIn("看到人坐下就坐下", agent.task_context)
-        self.assertTrue(agent.allow_operator_skills)
-        self.assertEqual(backend.config.vision_confirm_hold_s, 0.5)
-        self.assertIn("registered `wave`", _OPEN_DECISION_PROMPT)
+        self.assertEqual(backend.config.vision_confirm_hold_s, 0.0)
+        self.assertEqual(agent.confirm_hold_s, 0.0)
 
     def test_default_camera_applies_rotation_before_jpeg_encoding(self):
         backend = ConsoleBackend(
@@ -189,9 +185,7 @@ class ConsoleVisionTests(unittest.TestCase):
             agent_factory=fake_agent_factory,
             camera_factory=lambda: camera,
             vision_agent_factory=lambda text: SocialVisionAgent(
-                response_format="json",
                 invoker=invoker,
-                prompt_profile="egocentric",
                 generate_speech=True,
                 task_context=backend.system_prompt + "\n" + text,
                 confirm_hold_s=0,
@@ -257,20 +251,33 @@ class ConsoleVisionTests(unittest.TestCase):
             self.assertEqual(len(invoker.calls), count)
         self.assertFalse(camera.opened)
 
-    def test_stale_frames_and_bad_output_never_execute(self):
-        for fault in ("stale", "bad"):
-            with self.subTest(fault=fault):
-                backend, camera, invoker = self.build()
-                camera.stale = fault == "stale"
-                invoker.bad = fault == "bad"
-                with TestClient(create_app(backend=backend)) as client:
-                    wait_for(client, lambda s: s["camera"]["frameAvailable"])
-                    client.post("/api/v1/tasks", json={"instruction": "回应挥手"})
-                    wait_for(
-                        client, lambda s: not s["busy"] and s["modelStatus"] == "失败"
-                    )
-                    self.assertNotIn(("wave", "right"), backend.robot.events)
-                    self.assertIsNone(backend._vision_worker)
+    def test_stale_frames_never_execute(self):
+        backend, camera, _invoker = self.build()
+        camera.stale = True
+        with TestClient(create_app(backend=backend)) as client:
+            wait_for(client, lambda s: s["camera"]["frameAvailable"])
+            client.post("/api/v1/tasks", json={"instruction": "回应挥手"})
+            wait_for(client, lambda s: not s["busy"] and s["modelStatus"] == "失败")
+            self.assertEqual(backend.robot.events, [])
+            self.assertIsNone(backend._vision_worker)
+
+    def test_bad_model_output_is_ignored_and_keeps_observing(self):
+        backend, _camera, invoker = self.build()
+        invoker.bad = True
+        with TestClient(create_app(backend=backend)) as client:
+            wait_for(client, lambda s: s["camera"]["frameAvailable"])
+            client.post("/api/v1/tasks", json={"instruction": "回应挥手"})
+            snapshot = wait_for(
+                client,
+                lambda s: any(
+                    tool["name"] == "vision.decide"
+                    and tool["result"]["decision"]["action"] == "ignore"
+                    for tool in s["tools"]
+                ),
+            )
+            self.assertTrue(snapshot["busy"])
+            self.assertEqual(backend.robot.events, [])
+            client.post("/api/v1/tasks/current/cancel", json={})
 
     def test_camera_disconnect_stops_inference_and_clears_preview_on_switch(self):
         backend, camera, _invoker = self.build()

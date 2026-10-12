@@ -59,14 +59,14 @@ class _VisionHoldPanelState extends State<VisionHoldPanel> {
   Widget build(BuildContext context) {
     final c = widget.controller;
     return panel(
-      header: sectionTitle(Icons.timer_outlined, '手势确认时长'),
+      header: sectionTitle(Icons.timer_outlined, '视觉决策确认时长'),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              '持续识别到同一手势达到该秒数后才执行；可减少误触发。',
+              '同一视觉决策连续保持该秒数后才执行；0 表示关闭（默认）。',
               style: TextStyle(color: ConsoleColors.dim, fontSize: 11, height: 1.4),
             ),
             const SizedBox(height: 10),
@@ -81,7 +81,7 @@ class _VisionHoldPanelState extends State<VisionHoldPanel> {
                     style: const TextStyle(color: ConsoleColors.ink, fontSize: 14),
                     cursorColor: ConsoleColors.accent,
                     decoration: InputDecoration(
-                      hintText: '例如 1.5',
+                      hintText: '例如 0 或 1.0',
                       suffixText: '秒',
                       helperText:
                           '当前生效：${c.visionConfirmHoldS.toStringAsFixed(2)} 秒',

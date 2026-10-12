@@ -66,13 +66,14 @@ Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、Go2 专用装配�
 ## 一键启动 Go2 控制台
 
 此脚本连真机但**不会**自动提交动作任务。默认语音把转写结果作为持续视觉目标；
-视觉观察使用 `192.168.31.143:8011` 的 UnifoLM，结构化技能决策和文本指令
-通过 SSH 隧道使用同机的 `qwen3.5:9b`：
+视觉模型 `qwen3.5:9b`（Ollama，经 SSH 隧道 `127.0.0.1:11435`）直接看画面并输出受
+schema 约束的技能决策，文本指令也使用同一 Ollama：
 
 ```bash
 sh scripts/run-go2-console.sh
 # 默认：真机 + 本地相机 + 外接麦克风/扬声器 + vision 语音目标
-# 网卡可用 GO2_NETWORK 覆盖；视觉模型用 GO2_VISION_URL 覆盖
+# 网卡可用 GO2_NETWORK 覆盖；视觉后端/模型/地址用 GO2_VISION_BACKEND、
+# GO2_VISION_MODEL、GO2_VISION_URL 覆盖
 ```
 
 控制台的「文本指令」也使用 Ollama，默认模型 `qwen3.5:9b`，默认地址
@@ -115,9 +116,9 @@ Go2 目录包含 `follow_person`：前端选择「本地相机」和
 它还不是身份追踪或避障导航；请在开阔平地、遥控器在手的条件下验收。
 需要完全离线的有限动作词表时，可改用 `GO2_VOICE_AGENT=local_commands`。
 
-Go2 真机直接使用启动脚本。默认视觉观察连接 `192.168.31.143:8011`，
-决策 Agent 和文本 Agent 共用狗端的 `127.0.0.1:11435` 隧道；可分别用
-`GO2_VISION_URL` 和 `OLLAMA_HOST` 覆盖：
+Go2 真机直接使用启动脚本。视觉 Agent（`qwen3.5:9b` 直接看图决策）和文本 Agent
+都使用狗端的 `127.0.0.1:11435` 隧道；可用 `OLLAMA_HOST` 覆盖，视觉模型也可用
+`GO2_VISION_URL` 单独指定：
 
 ```bash
 sh scripts/run-go2-console.sh
@@ -430,14 +431,14 @@ sh scripts/run-jetson-unifolm-vision.sh --hardware --network eth0
 
 #### 宇树 UnifoLM-ER-1（Go2，可选）
 
-仓库仍保留 `--vision-backend unifolm`，连接
-`http://192.168.31.143:8011`。UnifoLM 对场景描述和简单视觉问题能正常回答，但直接
-要求动作决策 JSON 时可能返回点位坐标。此后端现在先让 UnifoLM 描述画面，再由
-`qwen3.5:9b` 根据该观察、当前任务和完整技能目录生成受 schema 约束的决策；因此
-同时需要可用的文本 Ollama 地址（`--ollama-url` / `OLLAMA_HOST`）。坐标或空观察会被
-拒绝，不会转成动作。Go2 控制台默认使用这条双模型路径；需要 Qwen 直接看图时
-可设置 `GO2_VISION_BACKEND=ollama GO2_VISION_MODEL=qwen3.5:9b`，并将
-`GO2_VISION_URL` 指向 Ollama 地址。
+仓库仍保留 `--vision-backend unifolm`（`GO2_VISION_BACKEND=unifolm
+GO2_VISION_MODEL=unitreerobotics/UnifoLM-ER-1 GO2_VISION_URL=http://<host>:8011`），
+但控制台默认不再使用。视觉模型本身接收画面、任务和技能目录并直接输出决策 JSON，
+中间没有第二个文本决策模型；UnifoLM 服务端不做 JSON 约束解码，非法输出按 `ignore`
+处理。2026-10-12 在 NUS 第一视角手势测试集（30 段，未参与训练）上用同一决策代码对比：
+UnifoLM 格式无效 10–13/30、对镜头挥手正确 1–3/5、非挥手误触发 8–17/25；
+`qwen3.5:9b` 格式无效 0/30、正确 4–5/5、误触发 5–9/25（主要是把"向他人挥手"
+当成向机器人挥手）。样本小、场景单一，只作方向参考。
 视觉 Agent 每轮读取
 视觉目标、最新画面、D435i 本地观测、可用 Skill 目录和执行历史，再输出执行、
 说话、继续、打断或忽略。模型输出不能跳过本地 Skill、深度和时效校验。

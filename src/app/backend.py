@@ -27,7 +27,7 @@ from agent.decision import AgentDecision
 from agent.llamacpp_vision import LlamaCppVisionInvoker
 from agent.service import system_prompt_for
 from agent.social_vision import SocialVisionAgent
-from agent.unifolm_vision import UnifolmDecisionInvoker
+from agent.unifolm_vision import UnifolmVisionInvoker
 from agent.vision_policy import OllamaVisionInvoker, VisionPolicyWorker
 from core.runtime import SkillRuntime
 from perception import (
@@ -144,9 +144,9 @@ class ConsoleSnapshot(ApiModel):
     voice: VoiceView
     tools: list[ToolCall]
     logs: list[ConsoleLog]
-    # The VLM already supplies the semantic confirmation. A short hold keeps
-    # transient greetings responsive while still requiring two model windows.
-    vision_confirm_hold_s: float = 0.5
+    # The VLM decision is the semantic check; an optional hold (seconds of
+    # repeated identical decisions) is off by default for responsiveness.
+    vision_confirm_hold_s: float = 0.0
 
 
 class ConsoleEvent(ApiModel):
@@ -202,7 +202,7 @@ class BackendConfig:
     # Match run-remote-vision.sh; configurable for recognition/latency replay.
     vision_window_s: float = 0.8
     vision_frame_count: int = 3
-    vision_confirm_hold_s: float = 0.5
+    vision_confirm_hold_s: float = 0.0
 
     def __post_init__(self) -> None:
         if self.robot_model != "go2":
@@ -364,13 +364,12 @@ class ConsoleBackend(SkillToolObserver):
         )
 
     def _build_vision_agent(self, instruction: str) -> SocialVisionAgent:
+        # The vision model sees the frames and returns the decision directly.
         if self.config.vision_backend == "unifolm":
-            invoker = UnifolmDecisionInvoker(
+            invoker = UnifolmVisionInvoker(
                 self.config.vision_model,
                 base_url=self.config.vision_url,
-                decision_model=self.config.model_name or "qwen3.5:9b",
-                decision_url=self.config.ollama_url,
-                task=instruction,
+                max_new_tokens=256,
                 timeout_s=120,
             )
         elif self.config.vision_backend == "llamacpp":
@@ -391,12 +390,8 @@ class ConsoleBackend(SkillToolObserver):
             )
         return SocialVisionAgent(
             model_name=self.config.vision_model,
-            prompt_profile="egocentric",
             generate_speech=True,
             task_context=f"{self.system_prompt}\nCurrent task: {instruction}",
-            operator_instruction=instruction,
-            response_format="decision",
-            allow_operator_skills=True,
             confirm_hold_s=self.vision_confirm_hold_s,
             timeout_s=120,
             invoker=invoker,
@@ -1245,7 +1240,7 @@ class ConsoleBackend(SkillToolObserver):
         await self._log(
             "INFO",
             "config",
-            f"手势确认时长已更新为 {value:.2f} 秒（新视觉任务生效）。",
+            f"视觉决策确认时长已更新为 {value:.2f} 秒（新视觉任务生效）。",
         )
         self._emit_state()
         return self.snapshot()
