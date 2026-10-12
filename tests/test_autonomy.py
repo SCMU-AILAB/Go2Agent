@@ -54,7 +54,7 @@ class ScriptedDecisionAgent:
         if event.type == WorldEventType.PERSON_ENTERED:
             return AgentDecision(
                 action="execute_and_speak",
-                skill="wave",
+                skill="hello",
                 arguments={},
                 speech="你好！",
                 reason="new person",
@@ -134,12 +134,12 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_decision_prompt_is_built_from_registry_catalog(self) -> None:
         runtime = SkillRuntime(SimulatedRobotAdapter())
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
         runtime.register(go2_skill("move_backward"))
 
         prompt = build_decision_system_prompt(runtime.registry.list())
 
-        self.assertIn("wave:", prompt)
+        self.assertIn("hello:", prompt)
         self.assertIn("move_backward:", prompt)
 
     def test_decision_contract_rejects_missing_skill(self) -> None:
@@ -157,21 +157,21 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
     def test_decision_normalizes_compact_skill_action(self) -> None:
         decision = AgentDecision.model_validate(
             {
-                "action": "wave",
-                "skill": "wave",
+                "action": "hello",
+                "skill": "hello",
                 "arguments": {},
                 "speech": "您好！",
             }
         )
 
         self.assertEqual(decision.action, "execute_and_speak")
-        self.assertEqual(decision.skill, "wave")
+        self.assertEqual(decision.skill, "hello")
 
     def test_decision_infers_skill_from_compact_action(self) -> None:
-        decision = AgentDecision.model_validate({"action": "wave", "arguments": {}})
+        decision = AgentDecision.model_validate({"action": "hello", "arguments": {}})
 
         self.assertEqual(decision.action, "execute_skill")
-        self.assertEqual(decision.skill, "wave")
+        self.assertEqual(decision.skill, "hello")
 
     def test_decision_normalizes_noop_alias(self) -> None:
         decision = AgentDecision.model_validate(
@@ -185,28 +185,28 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
         decision = AgentDecision.model_validate(
             {
                 "action": "execute_skill",
-                "skill": "wave",
+                "skill": "hello",
                 "arguments": {},
                 "speech": "您好，欢迎来到我们的机器人！",
             }
         )
 
         self.assertEqual(decision.action, "execute_and_speak")
-        self.assertEqual(decision.skill, "wave")
+        self.assertEqual(decision.skill, "hello")
 
     async def test_event_agent_accepts_compact_skill_action(self) -> None:
         agent = EventDecisionAgent(
             invoker=FakeDecisionInvoker(
                 {
-                    "action": "wave",
-                    "skill": "wave",
+                    "action": "hello",
+                    "skill": "hello",
                     "arguments": {},
                     "speech": "您好！",
                 }
             ),
             skill_catalog=cast(
                 tuple[RobotSkill[SkillArgs], ...],
-                (go2_skill("wave"),),
+                (go2_skill("hello"),),
             ),
         )
         event = WorldEvent(type=WorldEventType.PERSON_ENTERED, timestamp_s=1.0)
@@ -214,13 +214,13 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
         decision = await agent.decide(event, {})
 
         self.assertEqual(decision.action, "execute_and_speak")
-        self.assertEqual(decision.skill, "wave")
+        self.assertEqual(decision.skill, "hello")
 
     async def test_event_agent_returns_validated_structured_decision(self) -> None:
         invoker = FakeDecisionInvoker(
             {
                 "action": "execute_and_speak",
-                "skill": "wave",
+                "skill": "hello",
                 "arguments": {},
                 "speech": "你好！",
             }
@@ -234,7 +234,7 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
 
         decision = await agent.decide(event, {"person_greeted": False})
 
-        self.assertEqual(decision.skill, "wave")
+        self.assertEqual(decision.skill, "hello")
         messages = invoker.inputs[0].get("messages")
         if not isinstance(messages, list) or not isinstance(messages[0], HumanMessage):
             self.fail("Decision Agent input must contain a HumanMessage")
@@ -249,7 +249,7 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
             ),
             skill_catalog=cast(
                 tuple[RobotSkill[SkillArgs], ...],
-                (go2_skill("wave"),),
+                (go2_skill("hello"),),
             ),
         )
         event = WorldEvent(
@@ -274,7 +274,7 @@ class AgentDecisionTests(unittest.IsolatedAsyncioTestCase):
             await agent.decide(event, {})
 
     async def test_person_left_bypasses_model(self) -> None:
-        invoker = FakeDecisionInvoker({"action": "execute_skill", "skill": "wave"})
+        invoker = FakeDecisionInvoker({"action": "execute_skill", "skill": "hello"})
         agent = EventDecisionAgent(invoker=invoker)
         event = WorldEvent(
             type=WorldEventType.PERSON_LEFT,
@@ -298,7 +298,7 @@ class AutonomousDecisionLoopTests(unittest.IsolatedAsyncioTestCase):
     ]:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
         runtime.register(go2_skill("move_backward"))
         agent = ScriptedDecisionAgent()
         speech = FakeSpeechOutput()
@@ -316,7 +316,7 @@ class AutonomousDecisionLoopTests(unittest.IsolatedAsyncioTestCase):
         repeated = await loop.process(observation(1.1, 2.0))
 
         self.assertEqual(len(first), 1)
-        self.assertEqual(first[0].decision.skill, "wave")
+        self.assertEqual(first[0].decision.skill, "hello")
         self.assertTrue(first[0].skill_result and first[0].skill_result.success)
         self.assertTrue(first[0].speech_spoken)
         self.assertEqual(repeated, ())

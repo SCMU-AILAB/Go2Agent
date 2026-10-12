@@ -70,11 +70,11 @@ class VideoBufferTests(unittest.TestCase):
 
 class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
     def test_different_generated_speech_cannot_bypass_action_cooldown(self):
-        first = AgentDecision(action="execute_and_speak", skill="wave", speech="你好")
+        first = AgentDecision(action="execute_and_speak", skill="hello", speech="你好")
         second = AgentDecision(
-            action="execute_and_speak", skill="wave", speech="很高兴见到你"
+            action="execute_and_speak", skill="hello", speech="很高兴见到你"
         )
-        silent = AgentDecision(action="execute_skill", skill="wave")
+        silent = AgentDecision(action="execute_skill", skill="hello")
         self.assertEqual(
             VisionPolicyWorker._decision_signature(first),
             VisionPolicyWorker._decision_signature(second),
@@ -92,7 +92,7 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
                 json.dumps(
                     {
                         "action": "execute_skill",
-                        "skill": "wave",
+                        "skill": "hello",
                         "arguments": {},
                         "speech": None,
                         "reason": "person approached",
@@ -101,7 +101,7 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         runtime = SkillRuntime(SimulatedRobotAdapter())
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
         agent = VisionDecisionAgent(invoker=invoker)
 
         decision = await agent.decide(
@@ -109,17 +109,17 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
             RobotState(hardware=False, connected=True),
             runtime.registry.list(),
             policy_context={
-                "last_selected_skill": "wave",
+                "last_selected_skill": "hello",
                 "seconds_since_last_selection": 3.0,
             },
         )
 
-        self.assertEqual(decision.skill, "wave")
+        self.assertEqual(decision.skill, "hello")
         self.assertEqual(len(invoker.calls[0][0]), 2)
         self.assertIn('"frame_count": 2', invoker.calls[0][1])
-        self.assertIn('"name": "wave"', invoker.calls[0][1])
+        self.assertIn('"name": "hello"', invoker.calls[0][1])
         self.assertNotIn('"name": "wave_hand"', invoker.calls[0][1])
-        self.assertIn('"last_selected_skill": "wave"', invoker.calls[0][1])
+        self.assertIn('"last_selected_skill": "hello"', invoker.calls[0][1])
 
     async def test_continue_and_interrupt_are_valid_noop_decisions(self) -> None:
         for action in ("continue", "interrupt"):
@@ -134,7 +134,7 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
             window_end_s=2.0,
             decision=AgentDecision(action="ignore"),
             robot_state=RobotState(hardware=False, connected=True),
-            policy_context={"last_selected_skill": "wave"},
+            policy_context={"last_selected_skill": "hello"},
             model_metrics={"inference_s": 0.25},
         ).to_dict()
 
@@ -147,7 +147,7 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["model_metrics"], {"inference_s": 0.25})
         self.assertEqual(
             payload["policy_context"],
-            {"last_selected_skill": "wave"},
+            {"last_selected_skill": "hello"},
         )
         self.assertEqual(payload["decision_age_s"], 1.0)
 
@@ -179,7 +179,7 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_malformed_execute_decision_is_rejected(self) -> None:
         with self.assertRaisesRegex(Exception, "JSON object"):
             VisionDecisionAgent._parse_output(
-                '{"action":"execute_skill","skill":"wave"'
+                '{"action":"execute_skill","skill":"hello"'
             )
 
     async def test_truncated_heart_is_rejected_even_with_allowlist(
@@ -231,7 +231,7 @@ class VisionDecisionAgentTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "action": "ignore",
                     "skill": None,
-                    "arguments": {"skill_catalog": {"wave": "definition"}},
+                    "arguments": {"skill_catalog": {"hello": "definition"}},
                     "speech": None,
                     "reason": "nothing actionable",
                 }
@@ -316,7 +316,7 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
             async with asyncio.timeout(1.0):
                 while not any(name == "move_velocity" for name, _ in robot.events):
                     await asyncio.sleep(0.005)
-            await enqueue("wave", {})
+            await enqueue("hello", {})
             await asyncio.wait_for(robot.stopping.wait(), 1.0)
             worker.set_safety_latched(True)
             await asyncio.sleep(0.15)
@@ -366,12 +366,12 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
             VisionDecisionAgent(invoker=FakeVisionInvoker([{"action": "ignore"}])),
             VideoBuffer(window_s=2.0, max_frames=60),
         )
-        worker._active_skill = "wave"
+        worker._active_skill = "hello"
         worker._active_started_at_s = time.monotonic() - 1.0
         worker._active_task = asyncio.create_task(asyncio.sleep(1.0))
         worker._last_decision = AgentDecision(
             action="execute_skill",
-            skill="wave",
+            skill="hello",
             arguments={},
         )
 
@@ -381,14 +381,14 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
             worker._active_task.cancel()
             await asyncio.gather(worker._active_task, return_exceptions=True)
 
-        self.assertEqual(context["active_skill"], "wave")
+        self.assertEqual(context["active_skill"], "hello")
         self.assertEqual(context["robot_motion"], "executing")
         self.assertGreaterEqual(float(context["active_skill_elapsed_s"]), 1.0)
         self.assertEqual(
             context["last_decision"],
             {
                 "action": "execute_skill",
-                "skill": "wave",
+                "skill": "hello",
                 "arguments": {},
                 "speech": None,
                 "reason": None,
@@ -411,11 +411,11 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_execution_drops_action_that_ages_in_queue(self) -> None:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
         frame = camera_frame(time.monotonic() - 1.0)
         decision = AgentDecision(
             action="execute_skill",
-            skill="wave",
+            skill="hello",
             arguments={},
         )
         worker = VisionPolicyWorker(
@@ -563,14 +563,14 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_stale_visual_action_is_not_executed(self) -> None:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
         buffer = VideoBuffer(window_s=2.0, max_frames=60)
         buffer.push(camera_frame(time.monotonic() - 10.0))
         invoker = FakeVisionInvoker(
             [
                 {
                     "action": "execute_skill",
-                    "skill": "wave",
+                    "skill": "hello",
                     "arguments": {},
                 }
             ]
@@ -685,14 +685,14 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_depth_safety_latch_blocks_go2_greeting(self) -> None:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
         buffer = VideoBuffer(window_s=2.0, max_frames=60)
         buffer.push(camera_frame(1.0))
         invoker = FakeVisionInvoker(
             [
                 {
                     "action": "execute_skill",
-                    "skill": "wave",
+                    "skill": "hello",
                     "arguments": {},
                 }
             ]
@@ -751,14 +751,14 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_identical_skill_is_suppressed_during_cooldown(self) -> None:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
         buffer = VideoBuffer(window_s=2.0, max_frames=60)
         buffer.push(camera_frame(1.0))
         invoker = FakeVisionInvoker(
             [
                 {
                     "action": "execute_skill",
-                    "skill": "wave",
+                    "skill": "hello",
                     "arguments": {},
                 }
             ]
@@ -830,7 +830,7 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
         second_started = asyncio.Event()
 
         async def execute(decision: AgentDecision) -> tuple[SkillResult | None, bool]:
-            if decision.skill == "wave":
+            if decision.skill == "hello":
                 first_started.set()
                 await asyncio.Event().wait()
             second_started.set()
@@ -851,7 +851,7 @@ class VisionPolicyWorkerTests(unittest.IsolatedAsyncioTestCase):
 
         await worker.start()
         try:
-            await worker._decision_queue.put(request("wave"))
+            await worker._decision_queue.put(request("hello"))
             await asyncio.wait_for(first_started.wait(), timeout=1)
             await worker._decision_queue.put(request("sit"))
             await asyncio.wait_for(second_started.wait(), timeout=1)

@@ -77,7 +77,7 @@ class VisionInvoker:
             return "bad json"
         return {
             "action": "execute_and_speak",
-            "skill": "wave",
+            "skill": "hello",
             "speech": "你好呀！",
             "reason": "person waving",
         }
@@ -132,7 +132,7 @@ class ConsoleVisionTests(unittest.TestCase):
             client.post("/api/v1/tasks/current/cancel", json={})
             self.assertTrue(invoker.cancelled)
             self.assertTrue(invoker.closed)
-            self.assertNotIn(("wave", "right"), backend.robot.events)
+            self.assertNotIn(("hello", "right"), backend.robot.events)
             self.assertIsNone(backend._vision_worker)
 
     def test_default_vision_factory_uses_console_preferences(self):
@@ -238,7 +238,7 @@ class ConsoleVisionTests(unittest.TestCase):
             )
             self.assertEqual(
                 client.post(
-                    "/api/v1/skills/wave/execute", json={"arguments": {}}
+                    "/api/v1/skills/hello/execute", json={"arguments": {}}
                 ).status_code,
                 409,
             )

@@ -159,9 +159,9 @@ class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_wave_runs_through_runtime(self) -> None:
         robot = FakeRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
 
-        result = await runtime.execute("wave")
+        result = await runtime.execute("hello")
 
         self.assertTrue(result.success)
         self.assertEqual(result.status, SkillStatus.SUCCEEDED)
@@ -173,9 +173,9 @@ class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_wave_rejects_unsupported_arm(self) -> None:
         robot = FakeRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
 
-        result = await runtime.execute("wave", arm="left")
+        result = await runtime.execute("hello", arm="left")
 
         self.assertFalse(result.success)
         self.assertEqual(result.failure_code, FailureCode.INVALID_ARGUMENTS)
@@ -184,9 +184,9 @@ class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_wave_requires_connected_hardware(self) -> None:
         robot = FakeRobotAdapter(hardware=True, connected=False)
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
 
-        result = await runtime.execute("wave")
+        result = await runtime.execute("hello")
 
         self.assertEqual(result.status, SkillStatus.PRECONDITION_FAILED)
         self.assertEqual(result.failure_code, FailureCode.PRECONDITION_NOT_MET)
@@ -195,9 +195,9 @@ class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_robot_error_is_structured_without_implicit_stop(self) -> None:
         robot = FakeRobotAdapter(wave_error=True)
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
 
-        result = await runtime.execute("wave")
+        result = await runtime.execute("hello")
 
         self.assertEqual(result.failure_code, FailureCode.ROBOT_ERROR)
         self.assertEqual(robot.stop_count, 0)
@@ -295,7 +295,7 @@ class SkillRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     def test_registry_rejects_duplicate_names(self) -> None:
         registry = SkillRegistry()
-        registry.register(go2_skill("wave"))
+        registry.register(go2_skill("hello"))
 
         with self.assertRaisesRegex(ValueError, "duplicate skill"):
-            registry.register(go2_skill("wave"))
+            registry.register(go2_skill("hello"))

@@ -28,7 +28,8 @@ class Go2LlmHintTests(unittest.TestCase):
             "stretch": ("伸懒腰",),
             "sit": ("坐下",),
             "stand_up": ("站起来",),
-            "dance1": ("跳舞",),
+            "dance1": ("舞蹈一",),
+            "random_dance": ("跳舞",),
             "move_forward": ("向前",),
             "turn_left": ("左转",),
         }
@@ -38,10 +39,36 @@ class Go2LlmHintTests(unittest.TestCase):
                 with self.subTest(tool=name, needle=needle):
                     self.assertIn(needle, description)
 
-    def test_hello_description_forbids_heart_substitution(self) -> None:
-        description = self.tools["hello"].description or ""
-        self.assertIn("Never substitute", description)
-        self.assertIn("heart", description)
+    def test_similar_skills_disambiguate_each_other(self) -> None:
+        for name, other in (
+            ("hello", "heart"),
+            ("heart", "hello"),
+            ("stand_down", "sit"),
+            ("sit", "stand_down"),
+            ("move_left", "turn_left"),
+            ("turn_right", "move_right"),
+            ("dance1", "random_dance"),
+            ("rise_sit", "stand_up"),
+        ):
+            with self.subTest(skill=name):
+                self.assertIn(other, self.tools[name].description or "")
+
+    def test_lying_down_is_not_staying_still(self) -> None:
+        self.assertIn("stay still", self.tools["stand_down"].description or "")
+
+    def test_motion_arguments_document_units(self) -> None:
+        for name, field, unit in (
+            ("move_forward", "distance_m", "meters"),
+            ("turn_left", "angle_deg", "degrees"),
+            ("move", "lateral_m_s", "positive left"),
+        ):
+            schema = self.tools[name].args_schema.model_json_schema()
+            with self.subTest(skill=name):
+                self.assertIn(unit, schema["properties"][field]["description"])
+
+    def test_aliases_are_not_registered(self) -> None:
+        self.assertNotIn("wave", self.tools)
+        self.assertNotIn("stop_move", self.tools)
 
     def test_move_descriptions_state_bounds_and_stand_up(self) -> None:
         description = self.tools["move_forward"].description or ""

@@ -29,10 +29,11 @@ class FollowPersonSkill(RobotSkill[SkillArgs]):
     metadata = SkillMetadata(
         name="follow_person",
         description=(
-            "Continuously follow one visible person (跟着人走/跟随我) using local "
-            "D435i depth and image position; keep about 1.5 m away. "
-            "Use for a persistent following goal, not a one-step move. "
-            "Automatically stops on lost/ambiguous target, stale camera or obstacle."
+            "Keep following the one visible person at about 1.5 m (跟着我/跟随/跟着人走), "
+            "steered locally by D435i depth. Select once: it keeps running until "
+            "stop is called or it ends itself on a lost or ambiguous target, "
+            "stale camera or close obstacle. Needs exactly one person in view. "
+            "Not a one-step move."
         ),
         tags=("motion", "go2", "closed_loop"),
         required_resources=("mobile_base",),

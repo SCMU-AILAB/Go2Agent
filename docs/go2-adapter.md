@@ -92,9 +92,9 @@ Go2 专用移动技能已实现周期刷新；距离仍是速度乘时长的开�
 
 Go2 使用 `skills.register_go2_skills()` 注册完整目录。
 自主目录包含姿态（`stand_up` / `stand_down` / `sit` / `rise_sit` /
-`balance_stand`）、原生 `hello`、视觉兼容的 `wave`（底层调用 `hello`）、
-周期性刷新的移动/转向技能，以及 `stop` / `stop_move`。`damp` 与
-`recovery_stand` 同样默认注册，文本和视觉 Agent 共享全部 46 个技能。
+`balance_stand`）、原生 `hello`、
+周期性刷新的移动/转向技能，以及 `stop`。`damp` 与
+`recovery_stand` 同样默认注册，文本和视觉 Agent 共享全部 44 个技能。
 
 `follow_person` 是单目标视觉反馈 Skill：持续收到 D435i 单人检测、有效深度及
 安全空间时维持约 1.5 m；前进速度保持在 0.20--0.30 m/s、0.3 rad/s 转向。丢失、多人、

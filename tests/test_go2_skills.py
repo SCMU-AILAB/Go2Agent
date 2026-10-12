@@ -91,7 +91,8 @@ class Go2CatalogTests(unittest.TestCase):
         names = {skill.metadata.name for skill in build_go2_autonomy_skills()}
         self.assertIn("stand_up", names)
         self.assertIn("hello", names)
-        self.assertIn("wave", names)
+        self.assertNotIn("wave", names)
+        self.assertNotIn("stop_move", names)
         self.assertIn("move", names)
         self.assertIn("stop", names)
         self.assertIn("random_dance", names)
@@ -140,11 +141,6 @@ class Go2SkillExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.robot = RecordingGo2Adapter()
         self.runtime = SkillRuntime(self.robot)  # type: ignore[arg-type]
         register_go2_skills(self.runtime)
-
-    async def test_wave_skill_uses_native_hello(self) -> None:
-        result = await self.runtime.execute("wave")
-        self.assertTrue(result.success)
-        self.assertEqual(self.robot.events, [("loco", ("hello", {}))])
 
     async def test_random_dance_injected_chooser_dance1(self) -> None:
         from core.context import SkillContext

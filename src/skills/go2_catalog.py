@@ -22,7 +22,7 @@ from .motions import (
     Go2TurnLeftSkill,
     Go2TurnRightSkill,
 )
-from .motions.go2_controls import StopMoveSkill, StopSkill
+from .motions.go2_controls import StopSkill
 from .motions.go2_follow import FollowPersonSkill
 from .posture import PostureSkill, PostureSpec
 
@@ -30,105 +30,111 @@ from .posture import PostureSkill, PostureSpec
 GO2_RANDOM_DANCE_POOL: tuple[str, ...] = ("dance1", "dance2")
 
 # Skill names map 1:1 to SportClient methods documented in docs/go2-adapter.md.
-# Descriptions are tool-selection text for the cloud LLM: include Chinese
-# trigger phrases, when to use, and when not to substitute another skill.
+# Descriptions are the model-facing contract shared by the text and vision
+# Agents. Each states what the action physically does, its Chinese names, and
+# how it differs from similar skills. They describe the action, not which
+# instruction or visual cue should trigger it; that is the task's job.
+_OPERATOR_RULE = (
+    "Only when the operator's instruction explicitly names this exact action."
+)
+
 GO2_AUTONOMY_POSTURES = (
     PostureSpec(
         "stand_up",
         "stand_up",
         (
-            "Stand the Go2 up on all fours (站起来/起身/立正). "
-            "Use before any move_forward/turn skill if the dog may be lying "
-            "or sitting. Not a dance or greeting."
+            "Stand up on all four legs from lying down (站起来/起身/起立). "
+            "Needed before walking if the dog is lying down. To get up from "
+            "sitting use rise_sit. Not a greeting or a dance."
         ),
     ),
     PostureSpec(
         "stand_down",
         "stand_down",
         (
-            "Lie the Go2 down (趴下/躺下/休息). "
-            "Use when the user asks to lie down or rest. Not sit."
+            "Lie down flat on the floor (趴下/躺下/卧倒/休息). A posture change, "
+            "not sit. Not a way to stay still: to remain in place, take no action."
         ),
     ),
     PostureSpec(
         "balance_stand",
         "balance_stand",
         (
-            "Enter Go2 balance standing mode (平衡站立/站好). "
-            "Use for balanced idle stand only; not a greeting or dance."
+            "Switch to balanced standing, the normal ready stance (平衡站立/站稳). "
+            "Not needed merely to stay still; not a greeting or a dance."
         ),
     ),
     PostureSpec(
         "sit",
         "sit",
         (
-            "Make the Go2 sit (坐下/坐好). "
-            "Use for sitting posture only; not lie down or stand up."
+            "Sit down on the hind legs (坐下/坐好). Not lie down (stand_down). "
+            "Get up again with rise_sit."
         ),
     ),
     PostureSpec(
         "rise_sit",
         "rise_sit",
         (
-            "Rise from the Go2 sitting posture (从坐姿起身). "
-            "Use only when currently sitting and the user asks to get up."
+            "Get up from the sitting posture back to standing (从坐姿起身). "
+            "Only meaningful while sitting; from lying down use stand_up."
         ),
     ),
     PostureSpec(
         "hello",
         "hello",
         (
-            "Play the Go2 native greeting (打招呼/你好/问好). "
-            "Use only for greeting. Never substitute for 比心/heart, "
-            "跳舞/dance, 坐下/sit, or locomotion."
+            "Native greeting: lifts a front paw and waves (打招呼/问好/挥手/你好). "
+            "The only greeting action, also used to return a wave. Not heart, "
+            "not a dance, not a posture change."
         ),
     ),
     PostureSpec(
         "stretch",
         "stretch",
         (
-            "Play Go2's native stretch (伸懒腰/拉伸/活动一下). "
-            "Use for stretch only; not dance or greeting."
+            "Native stretch, like waking up (伸懒腰/拉伸/活动筋骨). "
+            "Not a dance or a greeting."
         ),
     ),
     PostureSpec(
         "content",
         "content",
         (
-            "Play Go2's native content action (开心/满足). "
-            "Use when the user asks the dog to look pleased; not heart or dance."
+            "Native happy/content expression (开心/高兴/满足). Shows the dog is "
+            "pleased; not heart, not a greeting, not a dance."
         ),
     ),
     PostureSpec(
         "heart",
         "heart",
         (
-            "Play Go2's native heart gesture (比心/送心/爱心). "
-            "Use when the user asks for a heart. Not hello/wave and not dance."
+            "Native heart gesture made with the front paws (比心/送心/爱心). "
+            "Not a greeting (hello) and not a dance."
         ),
     ),
     PostureSpec(
         "scrape",
         "scrape",
         (
-            "Play Go2's native scrape action (刮地示意). "
-            "Use only when the user names scrape/作揖-like demo; not sit or stand_down."
+            "Native 作揖 / 拜年 gesture with the front paws (作揖/拜年/恭喜). "
+            "Not sit, not lie down, not a greeting wave."
         ),
     ),
     PostureSpec(
         "dance1",
         "dance1",
         (
-            "Play Go2's first native dance (跳舞/舞蹈一/跳一支舞). "
-            "Prefer dance1 unless the user asks for the second dance."
+            "Native dance routine number one (舞蹈一/第一支舞). Use when this "
+            "specific dance is named; for an unspecified dance use random_dance."
         ),
     ),
     PostureSpec(
         "dance2",
         "dance2",
         (
-            "Play Go2's second native dance (舞蹈二/再来一段舞). "
-            "Use when the user wants a different dance from dance1."
+            "Native dance routine number two (舞蹈二/第二支舞). Use when this "
+            "specific dance is named; for an unspecified dance use random_dance."
         ),
     ),
 )
@@ -138,8 +144,8 @@ GO2_OPERATOR_POSTURES = (
         "damp",
         "damp",
         (
-            "OPERATOR-ONLY dangerous: switch Go2 to damping mode (阻尼). "
-            "Only use when the operator explicitly requests damping mode."
+            "OPERATOR-ONLY, dangerous: damping mode, all joints go limp and the "
+            f"dog collapses (阻尼/软化). {_OPERATOR_RULE}"
         ),
         operator_only=True,
         dangerous=True,
@@ -148,58 +154,45 @@ GO2_OPERATOR_POSTURES = (
         "recovery_stand",
         "recovery_stand",
         (
-            "OPERATOR-ONLY: Go2 recovery stand (恢复站立). "
-            "Use only for explicit recovery by an operator, not normal 站起来."
+            "OPERATOR-ONLY: recover to standing after a fall or roll-over "
+            f"(恢复站立/翻身起来). Not the normal stand_up. {_OPERATOR_RULE}"
         ),
         operator_only=True,
     ),
     *(
-        PostureSpec(name, name, description, operator_only=True, dangerous=True)
-        for name, description in (
-            (
-                "front_flip",
-                "OPERATOR-ONLY dangerous: Go2 front flip (前空翻). Use only for an explicit operator request.",
-            ),
-            (
-                "front_jump",
-                "OPERATOR-ONLY dangerous: Go2 front jump (前跳). Use only for an explicit operator request.",
-            ),
-            (
-                "front_pounce",
-                "OPERATOR-ONLY dangerous: Go2 front pounce (前扑). Use only for an explicit operator request.",
-            ),
-            (
-                "left_flip",
-                "OPERATOR-ONLY dangerous: Go2 left flip (左侧翻). Use only for an explicit operator request.",
-            ),
-            (
-                "back_flip",
-                "OPERATOR-ONLY dangerous: Go2 back flip (后空翻). Use only for an explicit operator request.",
-            ),
+        PostureSpec(
+            name,
+            name,
+            f"OPERATOR-ONLY, dangerous: {text}. {_OPERATOR_RULE}",
+            operator_only=True,
+            dangerous=True,
+        )
+        for name, text in (
+            ("front_flip", "front flip (前空翻)"),
+            ("front_jump", "jump forward (前跳/向前跳)"),
+            ("front_pounce", "pounce forward (前扑)"),
+            ("left_flip", "sideways flip to the left (左侧翻)"),
+            ("back_flip", "back flip (后空翻)"),
         )
     ),
     *(
-        PostureSpec(name, name, description, operator_only=True)
-        for name, description in (
-            (
-                "free_walk",
-                "OPERATOR-ONLY: select Go2 free walk gait (自由行走). Restricted area only.",
-            ),
-            (
-                "static_walk",
-                "OPERATOR-ONLY: select Go2 static walk gait (静态行走). Restricted area only.",
-            ),
-            (
-                "trot_run",
-                "OPERATOR-ONLY: select Go2 trot/run gait (小跑/跑步). Restricted area only.",
-            ),
-            (
-                "economic_gait",
-                "OPERATOR-ONLY: select Go2 economic gait (省电步态). Restricted area only.",
-            ),
+        PostureSpec(
+            name,
+            name,
+            f"OPERATOR-ONLY: {text}. {_OPERATOR_RULE}",
+            operator_only=True,
+        )
+        for name, text in (
+            ("free_walk", "select the free walk gait (自由行走步态)"),
+            ("static_walk", "select the static walk gait (静态行走步态)"),
+            ("trot_run", "select the trot/run gait (小跑/跑步步态)"),
+            ("economic_gait", "select the power-saving gait (省电步态)"),
             (
                 "switch_avoid_mode",
-                "OPERATOR-ONLY: Go2 obstacle-avoidance mode switch (避障模式). Not free navigation.",
+                (
+                    "toggle the built-in obstacle-avoidance mode (避障模式); "
+                    "not navigation"
+                ),
             ),
         )
     ),
@@ -210,62 +203,43 @@ GO2_FLAG_SPECS = (
         "pose",
         "pose",
         (
-            "Enable/disable Go2 pose mode with boolean flag (姿态模式). "
-            "Pass flag=true to enable, flag=false to disable. "
-            "Not a greeting, dance, or sit."
+            "Pose mode (姿态模式/摆姿势): flag=true enters it, the body tilts and "
+            "turns in place without walking; flag=false exits. "
+            "Not a greeting, dance or sit."
         ),
     ),
     *(
-        PostureSpec(name, name, description, operator_only=True, dangerous=dangerous)
-        for name, description, dangerous in (
+        PostureSpec(
+            name,
+            name,
             (
-                "hand_stand",
-                "OPERATOR-ONLY dangerous: Go2 hand stand 倒立 (flag true/false).",
-                True,
+                f"OPERATOR-ONLY{', dangerous' if dangerous else ''}: {text}; "
+                f"flag=true enables, flag=false disables. {_OPERATOR_RULE}"
             ),
-            (
-                "free_bound",
-                "OPERATOR-ONLY dangerous: Go2 free bound mode (flag true/false).",
-                True,
-            ),
-            (
-                "free_jump",
-                "OPERATOR-ONLY dangerous: Go2 free jump mode (flag true/false).",
-                True,
-            ),
-            (
-                "free_avoid",
-                "OPERATOR-ONLY: Go2 free avoidance mode (flag true/false).",
-                False,
-            ),
-            (
-                "classic_walk",
-                "OPERATOR-ONLY: Go2 classic walk mode (flag true/false).",
-                False,
-            ),
-            (
-                "walk_upright",
-                "OPERATOR-ONLY dangerous: Go2 upright walking 直立行走 (flag true/false).",
-                True,
-            ),
-            (
-                "cross_step",
-                "OPERATOR-ONLY: Go2 cross step mode (flag true/false).",
-                False,
-            ),
+            operator_only=True,
+            dangerous=dangerous,
+        )
+        for name, text, dangerous in (
+            ("hand_stand", "handstand on the front legs (倒立)", True),
+            ("free_bound", "free bound gait (自由跳跃步态)", True),
+            ("free_jump", "free jump mode (自由跳)", True),
+            ("free_avoid", "free obstacle-avoidance mode (自由避障)", False),
+            ("classic_walk", "classic walk mode (经典步态)", False),
+            ("walk_upright", "walk upright on the hind legs (直立行走)", True),
+            ("cross_step", "cross-step gait (交叉步)", False),
             (
                 "switch_joystick",
                 (
-                    "OPERATOR-ONLY dangerous: switch Go2 joystick ownership "
-                    "(flag true/false). Can break app/SDK control handoff."
+                    "hand control to or from the remote joystick (遥控器控制权); "
+                    "can break app/SDK control"
                 ),
                 True,
             ),
             (
                 "auto_recover_set",
                 (
-                    "OPERATOR-ONLY: enable/disable Go2 auto recovery "
-                    "(flag true/false). Not recovery_stand."
+                    "automatic recovery after a fall (自动翻身恢复); "
+                    "not recovery_stand"
                 ),
                 False,
             ),
@@ -305,23 +279,6 @@ class Go2FlagSkill(RobotSkill[Go2FlagArgs]):
         )
 
 
-def _go2_wave_hello_skill() -> PostureSkill:
-    """Compatibility name 'wave' backed by the native Go2 hello action.
-
-    Go2 has no arm wave; this alias performs the same SportClient hello call.
-    """
-    return PostureSkill(
-        PostureSpec(
-            "wave",
-            "hello",
-            (
-                "Alias of hello: plays the same Go2 native greeting (挥手/打招呼). "
-                "Not a humanoid arm wave."
-            ),
-        )
-    )
-
-
 class RandomGo2DanceSkill(RobotSkill[SkillArgs]):
     """Pick one safe native dance from a fixed pool after Runtime checks."""
 
@@ -335,10 +292,9 @@ class RandomGo2DanceSkill(RobotSkill[SkillArgs]):
         self.metadata = SkillMetadata(
             name="random_dance",
             description=(
-                "随机跳一支 Go2 原生舞蹈（随机跳舞）：从 dance1/dance2 中随机选择一个。"
-                "不是跳跃、空翻或危险特技。 "
-                "Randomly play one native Go2 dance (dance1 or dance2). "
-                "Not a jump, flip, or dangerous stunt."
+                "Play one native dance chosen at random from dance1/dance2 "
+                "(跳舞/跳支舞/随机跳舞). Use for a dance request that does not "
+                "name a specific routine. Not a jump, flip or stunt."
             ),
             tags=("motion", "dance", "go2"),
             required_resources=("mobile_base",),
@@ -375,7 +331,6 @@ def build_go2_autonomy_skills() -> tuple[RobotSkill[SkillArgs], ...]:
     skills = (
         *(PostureSkill(spec) for spec in GO2_AUTONOMY_POSTURES),
         *(Go2FlagSkill(spec) for spec in GO2_FLAG_SPECS if not spec.operator_only),
-        _go2_wave_hello_skill(),
         RandomGo2DanceSkill(),
         Go2MoveForwardSkill(),
         Go2MoveBackwardSkill(),
@@ -384,7 +339,6 @@ def build_go2_autonomy_skills() -> tuple[RobotSkill[SkillArgs], ...]:
         Go2TurnLeftSkill(),
         Go2TurnRightSkill(),
         StopSkill(),
-        StopMoveSkill(),
         Go2MoveSkill(),
         FollowPersonSkill(),
     )

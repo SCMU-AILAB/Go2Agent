@@ -15,6 +15,8 @@ from langchain_ollama import ChatOllama
 from adapters.langchain import SkillToolObserver, build_langchain_tools
 from core.runtime import SkillRuntime
 
+from .vision_policy import _skill_catalog_payload
+
 GO2_SYSTEM_PROMPT = """You are the conversational controller for a Unitree Go2 quadruped.
 
 Reply in the user's language and keep spoken responses concise.
@@ -51,19 +53,7 @@ def build_runtime_system_prompt(
     to models that are weak at tool discovery. The registry remains the only
     source of truth; this is generated at Agent construction time.
     """
-    entries: list[dict[str, object]] = []
-    for skill in runtime.registry.list():
-        entries.append(
-            {
-                "name": skill.metadata.name,
-                "description": skill.metadata.description,
-                "tags": list(skill.metadata.tags),
-                "required_resources": list(skill.metadata.required_resources),
-                "timeout_s": skill.metadata.timeout_s,
-                "interruptible": skill.metadata.interruptible,
-                "arguments_schema": skill.args_model.model_json_schema(),
-            }
-        )
+    entries = _skill_catalog_payload(runtime.registry.list())
     catalog = json.dumps(entries, ensure_ascii=False, default=str)
     return (
         f"{system_prompt.rstrip()}\n\n"

@@ -12,7 +12,10 @@ class StopArgs(SkillArgs):
 class StopSkill(RobotSkill[StopArgs]):
     metadata = SkillMetadata(
         name="stop",
-        description="Stop Go2 locomotion immediately.",
+        description=(
+            "Stop now (停/停下/停止/别动): cancels any running skill, including "
+            "follow_person, and halts movement. A software stop, not a power-off."
+        ),
         tags=("motion", "safety"),
         required_resources=("mobile_base",),
         timeout_s=12.0,
@@ -25,20 +28,4 @@ class StopSkill(RobotSkill[StopArgs]):
         return SkillResult.ok("Go2 software stop command accepted")
 
 
-class StopMoveSkill(RobotSkill[StopArgs]):
-    metadata = SkillMetadata(
-        name="stop_move",
-        description="Stop Go2 locomotion.",
-        tags=("motion", "safety", "sdk_loco"),
-        required_resources=("mobile_base",),
-        timeout_s=12.0,
-        interruptible=False,
-    )
-    args_model = StopArgs
-
-    async def execute(self, ctx: SkillContext, args: StopArgs) -> SkillResult:
-        await ctx.robot.stop()
-        return SkillResult.ok("Go2 stop_move command accepted")
-
-
-__all__ = ["StopArgs", "StopMoveSkill", "StopSkill"]
+__all__ = ["StopArgs", "StopSkill"]

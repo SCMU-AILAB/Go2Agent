@@ -126,14 +126,14 @@ class AgentAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_agent_calls_skill_then_reads_result_before_final_reply(self) -> None:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
         model = ToolCapableFakeChatModel(
             responses=[
                 AIMessage(
                     content="",
                     tool_calls=[
                         {
-                            "name": "wave",
+                            "name": "hello",
                             "args": {},
                             "id": "wave-call",
                             "type": "tool_call",
@@ -153,7 +153,7 @@ class AgentAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_langchain_tool_invokes_skill_runtime(self) -> None:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
         tools = build_langchain_tools(runtime)
 
         raw_result = await tools[0].ainvoke({})
@@ -179,7 +179,7 @@ class AgentAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_zero_argument_tool_rejects_extra_fields(self) -> None:
         robot = SimulatedRobotAdapter()
         runtime = SkillRuntime(robot)
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
 
         with self.assertRaises(ValidationError):
             await build_langchain_tools(runtime)[0].ainvoke({"arm": "left"})
@@ -188,7 +188,7 @@ class AgentAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_skill_result_returns_through_tool(self) -> None:
         runtime = SkillRuntime(FailingRobotAdapter())
-        runtime.register(go2_skill("wave"))
+        runtime.register(go2_skill("hello"))
         tools = build_langchain_tools(runtime)
 
         raw_result = await tools[0].ainvoke({})
@@ -200,7 +200,7 @@ class AgentAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["message"], "wave rejected")
 
     async def test_wave_runner_executes_without_agent(self) -> None:
-        result = await run_action("wave", hardware=False)
+        result = await run_action("hello", hardware=False)
 
         self.assertEqual(
             {key: result.to_dict()[key] for key in ("success", "status")},

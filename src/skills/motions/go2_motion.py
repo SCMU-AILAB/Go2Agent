@@ -21,18 +21,51 @@ GO2_VELOCITY_REFRESH_S = 0.02
 
 
 class Go2LinearMoveArgs(SkillArgs):
-    distance_m: float = Field(default=0.2, ge=0.05, le=0.3)
+    distance_m: float = Field(
+        default=0.2,
+        ge=0.05,
+        le=0.3,
+        description=(
+            "Distance in meters, 0.05-0.3 per call (20 cm = 0.2). For a longer "
+            "distance, call again after this step finishes."
+        ),
+    )
 
 
 class Go2TurnArgs(SkillArgs):
-    angle_deg: float = Field(default=15.0, ge=5.0, le=45.0)
+    angle_deg: float = Field(
+        default=15.0,
+        ge=5.0,
+        le=45.0,
+        description=(
+            "Rotation in degrees, 5-45 per call. For a larger angle, call "
+            "again after this turn finishes."
+        ),
+    )
 
 
 class Go2MoveArgs(SkillArgs):
-    forward_m_s: float = Field(default=0.1, ge=-0.3, le=0.3)
-    lateral_m_s: float = Field(default=0.0, ge=-0.3, le=0.3)
-    yaw_rad_s: float = Field(default=0.0, ge=-0.6, le=0.6)
-    duration_s: float = Field(default=0.5, ge=0.1, le=2.0)
+    forward_m_s: float = Field(
+        default=0.1,
+        ge=-0.3,
+        le=0.3,
+        description="Forward speed in m/s; positive forward, negative backward.",
+    )
+    lateral_m_s: float = Field(
+        default=0.0,
+        ge=-0.3,
+        le=0.3,
+        description="Sideways speed in m/s; positive left, negative right.",
+    )
+    yaw_rad_s: float = Field(
+        default=0.0,
+        ge=-0.6,
+        le=0.6,
+        description="Turn rate in rad/s; positive turns left, negative right.",
+    )
+    duration_s: float = Field(
+        default=0.5, ge=0.1, le=2.0, description="How long to move, in seconds."
+    )
 
 
 class _Go2BoundedMotionSkill[ArgsT: SkillArgs](RobotSkill[ArgsT]):
@@ -109,9 +142,9 @@ class Go2MoveForwardSkill(_Go2LinearMoveSkill):
     metadata = SkillMetadata(
         name="move_forward",
         description=(
-            "Move the Go2 forward a short bounded open-loop distance "
-            "(向前走/前进), then stop. Max 0.3 m. Call stand_up first if "
-            "not already standing. Not obstacle-aware navigation."
+            "Walk straight forward a short distance, then stop (向前走/前进/往前). "
+            "At most 0.3 m per call. The dog must be standing (stand_up first "
+            "if lying down). Open loop, not obstacle-aware navigation."
         ),
         tags=("motion", "go2"),
         required_resources=("mobile_base",),
@@ -125,9 +158,9 @@ class Go2MoveBackwardSkill(_Go2LinearMoveSkill):
     metadata = SkillMetadata(
         name="move_backward",
         description=(
-            "Move the Go2 backward a short bounded open-loop distance "
-            "(后退/向后走), then stop. Max 0.3 m. Prefer stand_up first. "
-            "Safety-focused; not reverse navigation."
+            "Walk straight backward a short distance, then stop (后退/向后走/退后). "
+            "At most 0.3 m per call. The dog must be standing (stand_up first "
+            "if lying down). Open loop, not navigation."
         ),
         tags=("motion", "safety", "go2"),
         required_resources=("mobile_base",),
@@ -141,8 +174,8 @@ class Go2MoveLeftSkill(_Go2LinearMoveSkill):
     metadata = SkillMetadata(
         name="move_left",
         description=(
-            "Move the Go2 left (向左走/左侧移) a short bounded distance, "
-            "then stop. Max 0.3 m. Lateral step, not a turn."
+            "Side-step to the left without turning, then stop (向左平移/左移/往左挪). "
+            "At most 0.3 m per call. Not turn_left, which rotates in place."
         ),
         tags=("motion", "go2"),
         required_resources=("mobile_base",),
@@ -156,8 +189,8 @@ class Go2MoveRightSkill(_Go2LinearMoveSkill):
     metadata = SkillMetadata(
         name="move_right",
         description=(
-            "Move the Go2 right (向右走/右侧移) a short bounded distance, "
-            "then stop. Max 0.3 m. Lateral step, not a turn."
+            "Side-step to the right without turning, then stop (向右平移/右移/往右挪). "
+            "At most 0.3 m per call. Not turn_right, which rotates in place."
         ),
         tags=("motion", "go2"),
         required_resources=("mobile_base",),
@@ -200,8 +233,8 @@ class Go2TurnLeftSkill(_Go2TurnSkill):
     metadata = SkillMetadata(
         name="turn_left",
         description=(
-            "Yaw the Go2 left by a small bounded angle (左转/向左转), "
-            "then stop. In-place turn, not lateral move_left."
+            "Rotate in place to the left, then stop (左转/向左转). At most 45 "
+            "degrees per call. Not move_left, which side-steps."
         ),
         tags=("motion", "go2"),
         required_resources=("mobile_base",),
@@ -215,8 +248,8 @@ class Go2TurnRightSkill(_Go2TurnSkill):
     metadata = SkillMetadata(
         name="turn_right",
         description=(
-            "Yaw the Go2 right by a small bounded angle (右转/向右转), "
-            "then stop. In-place turn, not lateral move_right."
+            "Rotate in place to the right, then stop (右转/向右转). At most 45 "
+            "degrees per call. Not move_right, which side-steps."
         ),
         tags=("motion", "go2"),
         required_resources=("mobile_base",),
@@ -232,10 +265,10 @@ class Go2MoveSkill(_Go2BoundedMotionSkill[Go2MoveArgs]):
     metadata = SkillMetadata(
         name="move",
         description=(
-            "Low-level bounded velocity move with optional yaw (带速度移动), "
-            "refreshed until duration_s ends. Prefer named move_forward/"
-            "turn_left skills unless combined velocity is required. "
-            "Not navigation; max ~0.3 m/s."
+            "Low-level combined motion: move with the given velocities for "
+            "duration_s seconds, then stop (边走边转/组合移动). Use only when a "
+            "combination is needed, e.g. forward while turning; otherwise use "
+            "the named move/turn skills. Not navigation."
         ),
         tags=("motion", "sdk_loco", "go2"),
         required_resources=("mobile_base",),

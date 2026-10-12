@@ -203,13 +203,13 @@ class ApiTests(unittest.TestCase):
         with TestClient(create_app(backend=backend)) as client:
             catalog = client.get("/api/v1/skills")
             execution = client.post(
-                "/api/v1/skills/wave/execute",
+                "/api/v1/skills/hello/execute",
                 json={"arguments": {}},
             )
 
             self.assertEqual(catalog.status_code, 200)
             self.assertIn(
-                "wave",
+                "hello",
                 {skill["name"] for skill in catalog.json()["skills"]},
             )
             self.assertEqual(execution.status_code, 200)

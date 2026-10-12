@@ -1,6 +1,6 @@
 """Go2 motion skills."""
 
-from .go2_controls import StopArgs, StopMoveSkill, StopSkill
+from .go2_controls import StopArgs, StopSkill
 from .go2_motion import (
     GO2_VELOCITY_REFRESH_S,
     Go2LinearMoveArgs,
@@ -28,6 +28,5 @@ __all__ = [
     "Go2TurnLeftSkill",
     "Go2TurnRightSkill",
     "StopArgs",
-    "StopMoveSkill",
     "StopSkill",
 ]

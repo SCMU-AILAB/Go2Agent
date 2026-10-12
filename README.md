@@ -38,18 +38,18 @@ Go2 侧已提供：`UnitreeGo2Adapter` / `UnitreeGo2Config`、Go2 专用装配�
 | 类别 | Skills |
 | --- | --- |
 | 姿态 | `stand_up` / `stand_down` / `sit` / `rise_sit` / `balance_stand` |
-| 原生表演 | `hello` / `stretch` / `content` / `heart`（比心） / `scrape` / `dance1` / `dance2` |
-| 视觉别名 | `wave` → 底层 `hello`（不是人形手臂挥手） |
+| 原生表演 | `hello`（打招呼，抬前爪挥动） / `stretch` / `content` / `heart`（比心） / `scrape`（作揖） / `dance1` / `dance2` / `random_dance` |
 | 开关（布尔 `flag`） | `pose`（`{"flag":true\|false}`） |
 | 短距移动 | `move_forward` / `move_backward` / `move_left` / `move_right` / `turn_left` / `turn_right` / `move` |
-| 停止 | `stop` / `stop_move` |
+| 停止 | `stop`（同时取消正在运行的技能） |
+| 闭环 | `follow_person` |
 
 **控制与特技目录（同样默认注册）**
 
 - 危险动作：`damp`、`front_flip`、`front_jump`、`front_pounce`、`left_flip`、`back_flip`，以及 flag 类 `hand_stand` / `free_bound` / `free_jump` / `walk_upright` / `switch_joystick`
 - 步态/模式：`recovery_stand`、`free_walk`、`static_walk`、`trot_run`、`economic_gait`、`switch_avoid_mode`，以及 `free_avoid` / `classic_walk` / `cross_step` / `auto_recover_set`
 
-`register_go2_skills()` 默认注册全部 46 个技能，文本 Agent、视觉 Agent 和 API
+`register_go2_skills()` 默认注册全部 44 个技能（不再注册重复别名 `wave`、`stop_move`），文本 Agent、视觉 Agent 和 API
 使用同一 Registry。`operator_only` 和 `dangerous` 标签是动作提示，不是视觉目录过滤器；
 参数校验、资源锁、感知前提和深度停止继续生效。
 
@@ -294,7 +294,7 @@ API 路由不会直接调用 Unitree SDK。
 uv run go2agent --input text
 ```
 
-文本会先送入 LangChain `create_agent`。例如用户要求挥手时，Agent 调用 `wave`
+文本会先送入 LangChain `create_agent`。例如用户要求打招呼时，Agent 调用 `hello`
 工具，工具只调用 `SkillRuntime.execute()`，不会生成或解析 action 字符串。
 增加 `--no-audio` 可禁用主机 TTS。
 
@@ -470,7 +470,7 @@ sh scripts/run-unifolm-vision.sh --hardware --network eth0
 2026-09-18 实测当前相机空场景返回 `none`，服务端推理约 0.11 秒，HTTP 往返约
 0.16 秒，并被狗端判定为 `ignore`。这只验证传输、格式和安全拒绝链路，不代表真实
 挥手/比耶/比心识别准确率；真机动作前仍需现场逐项验证。
-Go2 当前可直接映射 `wave` 和 `heart`。`handshake`、`high_five` 若不在 Go2
+Go2 当前可直接映射 `hello` 和 `heart`。`handshake`、`high_five` 若不在 Go2
 SkillRegistry 中会被拒绝，不会绕过 Runtime 调用不存在的动作。
 
 单标签 UnifoLM 路径不生成视觉回复文本；语音输入与文字 Agent 使用本地
@@ -643,7 +643,7 @@ CUDA VLM，不会连接或驱动实体 Go2：
 ```
 
 需要保留两帧时可显式传 `--vision-frame-count 2`，但会增加延迟。
-Go2 动作使用 `mobile_base`，深度安全锁阻止相应动作；`stop` / `stop_move` 仍可调用。
+Go2 动作使用 `mobile_base`，深度安全锁阻止相应动作；`stop` 仍可调用。
 
 完成现场安全检查后，才显式增加真机参数：
 
@@ -688,7 +688,7 @@ uv run --extra perception go2-perception \
 事件策略处理三种稀疏事件：
 
 ```text
-person_entered   -> Decision Agent -> wave / speech / ignore
+person_entered   -> Decision Agent -> hello / speech / ignore
 person_left      -> Decision Agent -> normally ignore
 person_too_close -> Decision Agent -> move_backward / speech / ignore
 ```

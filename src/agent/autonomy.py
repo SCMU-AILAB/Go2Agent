@@ -238,7 +238,7 @@ class AutonomousDecisionLoop:
         if (
             skill_result is not None
             and skill_result.success
-            and decision.skill == "wave"
+            and decision.skill == "hello"
         ):
             async with self._lock:
                 if self.world_state.person_visible:
