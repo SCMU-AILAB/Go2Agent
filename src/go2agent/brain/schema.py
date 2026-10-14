@@ -67,7 +67,7 @@ def decision_json_schema(actions: tuple[ActionSpec, ...]) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "thought": {"type": "string", "maxLength": 200},
+            "thought": {"type": "string", "maxLength": 60},
             "say": {"type": "string", "maxLength": 120},
             "task": {"type": "string", "maxLength": 200},
             "mode": {"type": "string", "enum": ["keep", "replace", "append"]},

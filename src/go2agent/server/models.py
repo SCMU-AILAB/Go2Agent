@@ -56,8 +56,7 @@ class VLLMConfig:
 
     def command(self, model: str) -> list[str]:
         return [
-            sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-            "--model", model,
+            str(Path(sys.executable).with_name("vllm")), "serve", model,
             "--served-model-name", self.served_name,
             "--host", "127.0.0.1", "--port", str(self.port),
             "--gpu-memory-utilization", str(self.gpu_memory_utilization),
@@ -66,6 +65,8 @@ class VLLMConfig:
             "--limit-mm-per-prompt", f'{{"image": {self.max_images}, "video": 0}}',
             "--mm-processor-kwargs", f'{{"max_pixels": {self.max_image_pixels}}}',
             "--enable-prefix-caching",
+            # Compact JSON: indentation and newlines are pure decode time (~1/3 of the output tokens).
+            "--structured-outputs-config", '{"disable_any_whitespace": true}',
             *self.extra_args,
         ]  # fmt: skip
 
