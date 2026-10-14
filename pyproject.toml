@@ -1,0 +1,46 @@
+[project]
+name = "go2agent"
+version = "0.2.0"
+description = "Vision-driven autonomous agent for quadruped robots: slow VLM brain + fast closed-loop behaviors"
+readme = "README.md"
+authors = [{ name = "Yao0454", email = "yaoyifeng20070524@outlook.com" }]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "httpx>=0.28",
+    "numpy>=2",
+    "opencv-python-headless>=4.10,<5",
+    "pydantic>=2.10",
+    "uvicorn[standard]>=0.32",
+    "websockets>=14",
+]
+
+[project.optional-dependencies]
+# dog-side hardware
+# Go2: install unitree_sdk2_python from source on the dog host (not on PyPI)
+realsense = ["pyrealsense2; platform_machine != 'aarch64'"]
+audio = ["sounddevice>=0.5"]
+# GPU-server services (perception, ASR, TTS); VLM is served by vLLM separately
+server = ["ultralytics>=8.3", "lap>=0.5", "faster-whisper>=1.1"]
+
+[project.scripts]
+go2agent = "go2agent.cli:main"
+go2agent-server = "go2agent.server.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.25", "ruff>=0.8"]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.10"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]

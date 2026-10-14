@@ -1,0 +1,20 @@
+__pycache__/
+*.py[oc]
+build/
+dist/
+*.egg-info
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# runtime data and model weights
+/runs/
+/models/
+
+# Swift / Xcode
+frontend/**/xcuserdata/
+frontend/**/DerivedData/
+frontend/**/.build/
+
+.codex/
+.DS_Store
