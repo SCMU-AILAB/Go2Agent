@@ -193,7 +193,7 @@ class RemoteTracker(Tracker):
         while True:
             connected_at: float | None = None
             try:
-                async with connect(self.url, open_timeout=5, close_timeout=1) as socket:
+                async with connect(self.url, open_timeout=5, close_timeout=1, proxy=None) as socket:
                     connected_at = time.monotonic()
                     self._socket = socket
                     tasks = [

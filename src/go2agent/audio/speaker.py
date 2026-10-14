@@ -121,7 +121,7 @@ class Speaker:
 
     async def _run(self) -> None:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self._timeout)
+            self._client = httpx.AsyncClient(timeout=self._timeout, trust_env=False)
         while True:
             text, future = await self._queue.get()
             try:

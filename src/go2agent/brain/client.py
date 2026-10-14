@@ -40,6 +40,7 @@ class VLMClient:
             headers={"Authorization": f"Bearer {config.api_key}"},
             timeout=config.timeout,
             transport=transport,
+            trust_env=False,  # LAN service: never route through http_proxy from the shell profile
         )
 
     async def close(self) -> None:

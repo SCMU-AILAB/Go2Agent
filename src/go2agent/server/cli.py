@@ -76,7 +76,7 @@ async def _serve(app: FastAPI, host: str, port: int, vlm: models.VLLMManager | N
 
 def _model_command(args: argparse.Namespace) -> None:
     url = args.url.rstrip("/")
-    with httpx.Client(timeout=None if args.action == "load" else 10) as http:
+    with httpx.Client(timeout=None if args.action == "load" else 10, trust_env=False) as http:
         if args.action == "status":
             r = http.get(f"{url}/models")
         else:

@@ -97,7 +97,7 @@ class VLLMManager:
         self._proc: subprocess.Popen[bytes] | None = None
         self._status = ModelStatus()
         self._lock = asyncio.Lock()
-        self.proxy = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=2.0))
+        self.proxy = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=2.0), trust_env=False)
 
     @property
     def base_url(self) -> str:
@@ -161,7 +161,7 @@ class VLLMManager:
 
     async def _wait_ready(self) -> str | None:
         deadline = time.monotonic() + self.config.load_timeout_s
-        async with httpx.AsyncClient(timeout=2.0) as http:
+        async with httpx.AsyncClient(timeout=2.0, trust_env=False) as http:
             while time.monotonic() < deadline:
                 assert self._proc is not None
                 if self._proc.poll() is not None:

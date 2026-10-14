@@ -74,3 +74,10 @@ async def test_failed_load_reports_error(manager):
     st = await manager.load("broken")
     assert st["state"] == ModelState.FAILED and "exited with code 3" in st["error"]
     assert not manager.ready
+
+
+async def test_loopback_ignores_proxy_env(manager, monkeypatch):
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")  # unreachable proxy
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    st = await manager.load()
+    assert st["state"] == ModelState.READY

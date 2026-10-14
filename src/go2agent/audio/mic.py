@@ -222,7 +222,7 @@ class Microphone:
 
     def _recognize(self) -> None:
         generation = self._generation
-        client = self._client or httpx.Client(timeout=self._timeout)
+        client = self._client or httpx.Client(timeout=self._timeout, trust_env=False)
         try:
             while self._running.is_set():
                 samples = self._utterances.get()
