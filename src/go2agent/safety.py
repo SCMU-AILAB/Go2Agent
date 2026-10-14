@@ -134,6 +134,12 @@ class SafetyGate:
         with self._lock:
             if self._estopped:
                 return "estop"
+        st = self.robot.state()
+        if not st.connected:
+            return "robot_not_connected"
+        if st.busy:
+            return "robot_busy"
+        with self._lock:
             self._moving = False
         self.robot.perform(action)
         return None

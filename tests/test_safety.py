@@ -83,3 +83,14 @@ def test_watchdog_stops_stalled_motion(clock):
     assert g.check_watchdog()
     assert robot.cmd.is_zero
     assert not g.check_watchdog()
+
+
+def test_perform_refused_when_robot_busy_or_disconnected(clock):
+    robot, g = gate(clock)
+    assert g.perform("hello") is None
+    assert g.perform("heart") == "robot_busy"
+    clock.advance(3.1)
+    assert g.perform("heart") is None
+    robot.connected = False
+    clock.advance(3.1)
+    assert g.perform("hello") == "robot_not_connected"
