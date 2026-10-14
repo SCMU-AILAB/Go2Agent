@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import math
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
-from go2agent.behaviors.base import Args, Behavior, Status, Step, Tick
+from go2agent.behaviors.base import Behavior, BehaviorArgs, BehaviorEnv, Status, Step, Tick
 from go2agent.behaviors.geometry import bearing, distance
 from go2agent.core.types import Track, Velocity
 
@@ -22,10 +22,14 @@ def _clamp(v: float, lim: float) -> float:
     return max(-lim, min(lim, v))
 
 
-class _TargetBehavior(Behavior):
+class TargetArgs(BehaviorArgs):
+    target: int = Field(description="track id of the target")
+
+
+class _TargetBehavior[A: TargetArgs](Behavior[A]):
     """Shared target lookup with a grace period for brief tracker dropouts."""
 
-    def __init__(self, args, env) -> None:
+    def __init__(self, args: A, env: BehaviorEnv) -> None:
         super().__init__(args, env)
         self._lost_since: float | None = None
 
@@ -49,15 +53,15 @@ class _TargetBehavior(Behavior):
         return b, _clamp(K_YAW * b, MAX_WZ)
 
 
-class FollowArgs(Args):
+class FollowArgs(TargetArgs):
     target: int = Field(description="track id of the target to follow")
     distance: float = Field(1.2, ge=0.6, le=3.0, description="distance to keep, meters")
 
 
-class Follow(_TargetBehavior):
+class Follow(_TargetBehavior[FollowArgs]):
     name = "follow"
     description = "Keep following a tracked target at a distance until replaced, or until the target is lost."
-    Args = FollowArgs
+    args_model = FollowArgs
 
     def step(self, t: Tick) -> Step:
         track = self._target(t)
@@ -73,15 +77,15 @@ class Follow(_TargetBehavior):
         return Step(velocity=Velocity(vx, 0.0, wz))
 
 
-class ApproachArgs(Args):
+class ApproachArgs(TargetArgs):
     target: int = Field(description="track id of the target to walk up to")
     stop_distance: float = Field(0.8, ge=0.5, le=3.0, description="stop this far from the target, meters")
 
 
-class Approach(_TargetBehavior):
+class Approach(_TargetBehavior[ApproachArgs]):
     name = "approach"
     description = "Walk up to a tracked target and stop in front of it, facing it."
-    Args = ApproachArgs
+    args_model = ApproachArgs
 
     def step(self, t: Tick) -> Step:
         track = self._target(t)
@@ -99,14 +103,14 @@ class Approach(_TargetBehavior):
         return Step(velocity=Velocity(max(vx, 0.0), 0.0, wz))
 
 
-class FaceArgs(Args):
+class FaceArgs(TargetArgs):
     target: int = Field(description="track id of the target to turn toward")
 
 
-class Face(_TargetBehavior):
+class Face(_TargetBehavior[FaceArgs]):
     name = "face"
     description = "Turn in place until a tracked target is centered in view."
-    Args = FaceArgs
+    args_model = FaceArgs
 
     def step(self, t: Tick) -> Step:
         track = self._target(t)
@@ -118,21 +122,21 @@ class Face(_TargetBehavior):
         return Step(velocity=Velocity(0.0, 0.0, wz))
 
 
-class SearchArgs(Args):
+class SearchArgs(BehaviorArgs):
     direction: Literal["left", "right"] = "left"
     label: str = Field("person", description="object class to look for")
     timeout: float = Field(8.0, ge=1.0, le=30.0, description="seconds before giving up")
 
 
-class Search(Behavior):
+class Search(Behavior[SearchArgs]):
     name = "search"
     description = (
         "Rotate in place until a new object of `label` comes into view (succeeds with its id), "
         "or fail with not_found after `timeout`."
     )
-    Args = SearchArgs
+    args_model = SearchArgs
 
-    def __init__(self, args, env) -> None:
+    def __init__(self, args: SearchArgs, env: BehaviorEnv) -> None:
         super().__init__(args, env)
         self._known: set[int] | None = None
 
@@ -150,18 +154,18 @@ class Search(Behavior):
         return Step(velocity=Velocity(0.0, 0.0, 0.5 if self.args.direction == "left" else -0.5))
 
 
-class MoveArgs(Args):
+class MoveArgs(BehaviorArgs):
     dx: float = Field(0.0, ge=-1.0, le=3.0, description="meters forward (negative = backward)")
     dy: float = Field(0.0, ge=-2.0, le=2.0, description="meters to the left (negative = right)")
     dyaw: float = Field(0.0, ge=-math.pi, le=math.pi, description="radians to turn, positive = left")
 
 
-class Move(Behavior):
+class Move(Behavior[MoveArgs]):
     """Open-loop relative move: translate, then rotate, at fixed speeds."""
 
     name = "move"
     description = "Move by a relative offset in the robot frame, then turn by dyaw."
-    Args = MoveArgs
+    args_model = MoveArgs
     SPEED = 0.3
     TURN = 0.6
 
@@ -178,16 +182,16 @@ class Move(Behavior):
         return Step.ok()
 
 
-class PerformArgs(Args):
+class PerformArgs(BehaviorArgs):
     action: str = Field(description="native action name from the action list")
 
 
-class Perform(Behavior):
+class Perform(Behavior[PerformArgs]):
     name = "perform"
     description = "Run one native action from the action list and wait for it to finish."
-    Args = PerformArgs
+    args_model = PerformArgs
 
-    def __init__(self, args, env) -> None:
+    def __init__(self, args: PerformArgs, env: BehaviorEnv) -> None:
         super().__init__(args, env)
         self._sent = False
 
@@ -203,33 +207,33 @@ class Perform(Behavior):
         return Step(Status.RUNNING)
 
 
-class WaitArgs(Args):
+class WaitArgs(BehaviorArgs):
     seconds: float = Field(ge=0.0, le=60.0)
 
 
-class Wait(Behavior):
+class Wait(Behavior[WaitArgs]):
     name = "wait"
     description = "Stay still for some seconds."
-    Args = WaitArgs
+    args_model = WaitArgs
 
     def step(self, t: Tick) -> Step:
         return Step.ok() if self.elapsed(t) >= self.args.seconds else Step()
 
 
-class StopArgs(Args):
+class StopArgs(BehaviorArgs):
     pass
 
 
-class Stop(Behavior):
+class Stop(Behavior[StopArgs]):
     name = "stop"
     description = "Stop moving and clear any queued behaviors."
-    Args = StopArgs
+    args_model = StopArgs
 
     def step(self, t: Tick) -> Step:
         return Step.ok()
 
 
-BEHAVIORS: dict[str, type[Behavior]] = {
+BEHAVIORS: dict[str, type[Behavior[Any]]] = {
     b.name: b for b in (Follow, Approach, Face, Search, Move, Perform, Wait, Stop)
 }
 TARGET_BEHAVIORS = frozenset({"follow", "approach", "face"})

@@ -23,6 +23,11 @@ class FakeDetector:
         ]
 
 
+class EmptyDetector:
+    def track(self, bgr: np.ndarray) -> list[TrackMsg]:
+        return []
+
+
 def send_frame(socket, seq, stamp=10.0):
     ok, jpeg = cv2.imencode(".jpg", np.full((48, 64, 3), seq, dtype=np.uint8))
     assert ok
@@ -113,6 +118,7 @@ def test_inference_drops_stale_frames_without_blocking_socket(monkeypatch):
                 send_frame(ws, seq)
             assert decoded_latest.wait(2), "Socket stopped reading while inference ran"
             # Let the receive coroutine store the decoded last frame.
+            assert client.portal is not None
             client.portal.call(asyncio.sleep, 0.02)
             release.set()
             assert TracksMsg.model_validate_json(ws.receive_text()).seq == 1
@@ -126,7 +132,7 @@ def test_manual_track_expiry_and_opencv_fallback(monkeypatch):
     now = [10.0]
     monkeypatch.setattr(perception, "time", SimpleNamespace(monotonic=lambda: now[0]))
     monkeypatch.setattr(perception, "_opencv_tracker", lambda *_: None)
-    state = perception._TrackingState(SimpleNamespace(track=lambda _: []), ("person",))
+    state = perception._TrackingState(EmptyDetector(), ("person",))
     bgr = np.zeros((100, 100, 3), np.uint8)
     request = AddBox(request_id=1, frame_seq=1, box=(0.1, 0.2, 0.4, 0.8), label="object")
     state.add_box(request, bgr)

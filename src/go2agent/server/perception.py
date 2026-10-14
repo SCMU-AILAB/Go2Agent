@@ -65,8 +65,10 @@ class YoloDetector:
             previous_counter = BaseTrack._count
             BaseTrack._count = self._track_counter
             try:
-                result = self._model.track(
-                    bgr, persist=True, tracker="bytetrack.yaml", device=self._device, verbose=False
+                result = list(
+                    self._model.track(
+                        bgr, persist=True, tracker="bytetrack.yaml", device=self._device, verbose=False
+                    )
                 )[0]
             finally:
                 self._track_counter = BaseTrack._count
@@ -78,17 +80,22 @@ class YoloDetector:
             TrackMsg(
                 id=int(track_id),
                 label=result.names[int(class_id)],
-                box=tuple(float(v) for v in box),
+                box=(float(box[0]), float(box[1]), float(box[2]), float(box[3])),
                 score=float(score),
             )
             for track_id, class_id, box, score in zip(
-                boxes.id.cpu().tolist(),
-                boxes.cls.cpu().tolist(),
-                boxes.xyxyn.cpu().tolist(),
-                boxes.conf.cpu().tolist(),
+                _to_list(boxes.id),
+                _to_list(boxes.cls),
+                _to_list(boxes.xyxyn),
+                _to_list(boxes.conf),
                 strict=True,
             )
         ]
+
+
+def _to_list(values: Any) -> list[Any]:
+    """Ultralytics box fields are torch tensors (or numpy arrays on some backends)."""
+    return values.tolist() if isinstance(values, np.ndarray) else values.cpu().tolist()
 
 
 def _iou(a: Box, b: Box) -> float:
@@ -142,16 +149,13 @@ class _TrackingState:
         return track_id
 
     def add_box(self, request: AddBox, bgr: np.ndarray | None) -> AddBoxResult:
-        error = None
         box = request.box
         if bgr is None:
-            error = "Frame is no longer in the recent-frame cache"
-        elif not all(math.isfinite(v) and 0 <= v <= 1 for v in box) or not (
+            return self._refuse(request, "Frame is no longer in the recent-frame cache")
+        if not all(math.isfinite(v) and 0 <= v <= 1 for v in box) or not (
             box[0] < box[2] and box[1] < box[3]
         ):
-            error = "Box must be normalized xyxy with positive width and height"
-        if error:
-            return AddBoxResult(request_id=request.request_id, track_id=None, error=error)
+            return self._refuse(request, "Box must be normalized xyxy with positive width and height")
         track_id = self._allocate_id()
         self._manual[track_id] = _ManualTrack(
             TrackMsg(id=track_id, label=request.label, box=box, score=1.0),
@@ -159,6 +163,10 @@ class _TrackingState:
             _opencv_tracker(bgr, box),
         )
         return AddBoxResult(request_id=request.request_id, track_id=track_id)
+
+    @staticmethod
+    def _refuse(request: AddBox, error: str) -> AddBoxResult:
+        return AddBoxResult(request_id=request.request_id, track_id=None, error=error)
 
     def process(self, header: FrameHeader, bgr: np.ndarray) -> TracksMsg:
         started = time.monotonic()

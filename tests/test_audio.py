@@ -101,6 +101,7 @@ async def test_microphone_sends_wav_and_delivers_on_event_loop():
         )
         mic.start()
         stream = mic._stream
+        assert isinstance(stream, FakeStream)
         try:
             assert stream.kwargs["device"] == "USB microphone"
             assert stream.kwargs["samplerate"] == 16000 and stream.kwargs["channels"] == 1
@@ -130,6 +131,7 @@ async def test_microphone_mutes_and_waits_300ms_after_playback(clock):
         mic.start()
         try:
             stream = mic._stream
+            assert isinstance(stream, FakeStream)
             stream.feed(utterance())
             muted[0] = False
             stream.feed(utterance())  # Starts the tail after playback ends.
@@ -164,6 +166,7 @@ async def test_microphone_close_suppresses_late_transcription():
     with httpx.Client(transport=httpx.MockTransport(asr)) as client:
         mic = Microphone("http://fake/asr", delivered.append, client=client, stream_factory=FakeStream)
         mic.start()
+        assert isinstance(mic._stream, FakeStream)
         mic._stream.feed(utterance())
         try:
             await eventually(entered.is_set)

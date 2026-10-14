@@ -32,7 +32,7 @@ def test_keep_does_nothing_replace_preempts_append_queues():
     e.submit([make("follow", target=1)], "replace")
     e.tick(tick(0, [person()], depth=2.0))
     e.submit([make("wait", seconds=1)], "keep")
-    assert e.current.name == "follow" and not e.queue
+    assert e.current is not None and e.current.name == "follow" and not e.queue
     e.submit([make("wait", seconds=1)], "append")
     assert len(e.queue) == 1
     e.submit([make("face", target=1)], "replace")

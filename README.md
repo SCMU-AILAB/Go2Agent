@@ -7,7 +7,7 @@
 行为在狗端以 20Hz 闭环执行，所有运动经过唯一的安全闸。
 
 ```
-GPU 服务器 (3080 20G): VLM (vLLM) | 感知 (YOLO+ByteTrack) | ASR | TTS
+GPU 服务器 (3080 20G, :8100): VLM (vLLM, 手动加载) | 感知 (YOLO+ByteTrack) | ASR | TTS
           ▲ 局域网
 狗端: brain → executor → behaviors (20Hz) → safety → robot
       sensors (D435i) · audio · api ↔ App
@@ -27,19 +27,22 @@ GPU 服务器 (3080 20G): VLM (vLLM) | 感知 (YOLO+ByteTrack) | ASR | TTS
 | `src/go2agent/brain` | VLM 客户端、提示词、输出 schema、校验、离线评测 |
 | `src/go2agent/runtime.py` | 装配与主循环 |
 | `src/go2agent/api` | 给 App 的 REST + WebSocket |
-| `src/go2agent/server` | GPU 服务器上的感知 / ASR / TTS 服务 |
-| `deploy/gpu-server` | VLM 启动脚本 |
+| `src/go2agent/server` | GPU 服务器：感知 / ASR / TTS 服务，VLM（vLLM）生命周期与 `/v1` 代理 |
 | `frontend/` | 原生 App（另行开发） |
 
 ## 运行
 
 ```bash
-uv sync                       # 开发机
+uv sync --all-extras          # 开发机
 uv run pytest                 # 全部测试，无需硬件 / 模型
+uv run ruff check src tests && uv run basedpyright   # 必须零报错
 
-# GPU 服务器
-deploy/gpu-server/serve-vlm.sh                  # VLM，:8000，模型名 brain
-uv sync --extra server && uv run go2agent-server all --port 8100   # 感知 + ASR + TTS
+# GPU 服务器：感知 + ASR + TTS + VLM 生命周期，全部在 :8100
+uv sync --extra server
+uv run go2agent-server all                # 模型文件取自 --models-dir（默认 /models）
+uv run go2agent-server model load         # 手动加载 VLM（vLLM 子进程），就绪后返回
+uv run go2agent-server model status
+uv run go2agent-server model unload       # 结束 vLLM 进程，显存全部释放
 
 # 狗端（真机）
 uv run go2agent run --server <GPU服务器IP> --robot go2 --camera realsense
@@ -47,6 +50,17 @@ uv run go2agent run --server <GPU服务器IP> --robot go2 --camera realsense
 # 不连真狗：模拟机器人 + 视频文件
 uv run go2agent run --server <GPU服务器IP> --robot sim --camera video:clip.mp4 --task "跟着穿黑衣服的人"
 ```
+
+模型目录（`--models-dir`，每个模型家族一个子目录；不存在时回退到 hub 名称并自动下载）：
+
+| 路径 | 用途 |
+| --- | --- |
+| `Qwen3-VL/Qwen3-VL-8B-Instruct-FP8/` | 慢脑 VLM（`--vlm-model`） |
+| `yolo/yolo11s.pt` | 人体检测 + 跟踪 |
+| `faster-whisper/large-v3-turbo/` | ASR（`--asr-model`） |
+| `piper/zh_CN-huayan-medium.onnx(.json)` | TTS（`--voice`） |
+
+VLM 不会自动加载；未加载时 `/v1` 返回 503，狗端慢脑视为「暂时无法思考」（当前行为继续，10s 后停止）。
 
 真机测试时遥控器必须在手；软件急停（App 按钮、语音「停」）不能替代遥控器。API 无鉴权，只在可信局域网使用。
 

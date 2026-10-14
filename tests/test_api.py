@@ -5,7 +5,7 @@ from go2agent.api.server import create_app
 
 
 def client(clock):
-    rt, robot, *_ = make_runtime(clock, [])
+    rt, *_ = make_runtime(clock, [])
     rt.control_step(clock())
     return rt, TestClient(create_app(rt))
 

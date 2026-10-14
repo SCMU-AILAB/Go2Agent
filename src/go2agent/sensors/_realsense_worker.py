@@ -40,7 +40,7 @@ def main() -> int:
     started = False
     try:
         import numpy as np
-        import pyrealsense2 as rs
+        import pyrealsense2 as rs  # pyright: ignore[reportMissingImports]  # Linux x86_64 only
 
         pipeline = rs.pipeline()
         config = rs.config()
@@ -73,7 +73,7 @@ def main() -> int:
             _send(transport, {"type": "error", "message": str(exc)})
         return 1
     finally:
-        if started:
+        if started and pipeline is not None:
             try:
                 pipeline.stop()
             except Exception:

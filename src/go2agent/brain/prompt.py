@@ -37,7 +37,7 @@ SYSTEM_PROMPT = """你是一只四足机器狗的大脑。你通过相机持续�
 def _behavior_doc() -> str:
     lines = []
     for b in BEHAVIORS.values():
-        props = b.Args.model_json_schema().get("properties", {})
+        props = b.args_model.model_json_schema().get("properties", {})
         args = ", ".join(
             f"{k}"
             + (f"={v['default']}" if "default" in v else "")

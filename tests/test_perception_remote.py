@@ -12,10 +12,16 @@ import pytest
 import uvicorn
 from websockets.asyncio.server import serve
 
-from go2agent.core.types import Frame
+from go2agent.core.types import Frame, Tracks
 from go2agent.perception.protocol import AddBoxResult, FrameHeader, TrackMsg, TracksMsg
 from go2agent.perception.remote import RemoteTracker
 from go2agent.server.perception import create_app
+
+
+def tracks_of(tracker: RemoteTracker) -> Tracks:
+    tracks = tracker.latest()
+    assert tracks is not None
+    return tracks
 
 
 def frame(seq, *, stamp=None, width=800, height=400):
@@ -80,7 +86,7 @@ async def test_client_with_real_app_and_add_box():
         await tracker.start()
         try:
             await eventually(lambda: tracker.latest() is not None)
-            result = tracker.latest()
+            result = tracks_of(tracker)
             assert result.frame_seq == 1 and result.items[0].label == "person"
             assert result.items[0].id == 1 and tracker.healthy
             assert seen[0].shape == (320, 640, 3)
@@ -88,8 +94,9 @@ async def test_client_with_real_app_and_add_box():
             track_id = await tracker.add_box(1, (0.6, 0.2, 0.8, 0.6), "box")
             assert track_id != 1
             tracker.submit(frame(2))
-            await eventually(lambda: tracker.latest().frame_seq == 2)
-            assert tracker.latest().get(track_id).label == "box"
+            await eventually(lambda: (r := tracker.latest()) is not None and r.frame_seq == 2)
+            added = tracks_of(tracker).get(track_id)
+            assert added is not None and added.label == "box"
             with pytest.raises(ValueError, match="recent-frame cache"):
                 await tracker.add_box(999, (0, 0, 1, 1), "missing")
             await asyncio.sleep(0.51)
@@ -226,6 +233,6 @@ async def test_reconnect_clears_ids_and_fails_pending_requests():
                 TracksMsg(seq=2, stamp=time.monotonic(), items=[], infer_ms=1).model_dump_json()
             )
             await eventually(lambda: tracker.healthy)
-            assert tracker.latest().frame_seq == 2
+            assert tracks_of(tracker).frame_seq == 2
         finally:
             await tracker.close()

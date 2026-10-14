@@ -18,17 +18,23 @@ dependencies = [
 [project.optional-dependencies]
 # dog-side hardware
 # Go2: install unitree_sdk2_python from source on the dog host (not on PyPI)
-realsense = ["pyrealsense2; platform_machine != 'aarch64'"]
+realsense = ["pyrealsense2; sys_platform == 'linux' and platform_machine == 'x86_64'"]
 audio = ["sounddevice>=0.5"]
-# GPU-server services (perception, ASR, TTS); VLM is served by vLLM separately
-server = ["ultralytics>=8.3", "lap>=0.5", "faster-whisper>=1.1", "piper-tts>=1.3"]
+# GPU-server services: perception, ASR, TTS and the VLM (vLLM, managed by go2agent-server)
+server = [
+    "ultralytics>=8.3",
+    "lap>=0.5",
+    "faster-whisper>=1.1",
+    "piper-tts>=1.3",
+    "vllm>=0.11; sys_platform == 'linux'",
+]
 
 [project.scripts]
 go2agent = "go2agent.cli:main"
 go2agent-server = "go2agent.server.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.25", "ruff>=0.8"]
+dev = ["pytest>=8", "pytest-asyncio>=0.25", "ruff>=0.8", "basedpyright>=1.40"]
 
 [build-system]
 requires = ["uv_build>=0.9,<0.10"]
@@ -45,6 +51,14 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
-[tool.pyright]
+[tool.basedpyright]
 venvPath = "."
 venv = ".venv"
+pythonVersion = "3.12"
+include = ["src", "tests"]
+typeCheckingMode = "standard"
+reportUnusedImport = "error"
+reportUnusedVariable = "error"
+reportUnnecessaryIsInstance = "warning"
+reportUnnecessaryComparison = "warning"
+reportDeprecated = "warning"

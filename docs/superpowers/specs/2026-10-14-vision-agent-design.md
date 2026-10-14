@@ -19,7 +19,7 @@
 
 | 机器 | 运行 |
 | --- | --- |
-| GPU 服务器（RTX 3080 20G，局域网） | VLM（Qwen3-VL-8B 量化，vLLM，OpenAI 兼容 API）、感知服务（检测+跟踪）、ASR、TTS |
+| GPU 服务器（RTX 3080 20G，局域网） | VLM（Qwen3-VL-8B FP8，vLLM 子进程由 go2agent-server 手动加载/卸载，经 :8100/v1 代理）、感知服务（检测+跟踪）、ASR、TTS |
 | 狗端主机 | `go2agent` 运行时：brain / executor / behaviors / safety / robot / sensors / audio / api |
 | Mac / iOS | `frontend/` Swift 原生 App，通过 REST + WebSocket 连接狗端 `api` |
 

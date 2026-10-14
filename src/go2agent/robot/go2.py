@@ -159,7 +159,8 @@ class Go2Robot(Robot):
                 self._subscriber.close_channel()
         finally:
             try:
-                self._bindings.channel.release()
+                if self._bindings is not None:
+                    self._bindings.channel.release()
             finally:
                 with self._condition:
                     self._client = self._subscriber = self._worker = None

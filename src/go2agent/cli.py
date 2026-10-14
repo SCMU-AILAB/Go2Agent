@@ -14,6 +14,8 @@ import logging
 import time
 from pathlib import Path
 
+from go2agent.audio.mic import Microphone
+from go2agent.audio.speaker import Speaker
 from go2agent.behaviors.base import BehaviorEnv
 from go2agent.behaviors.geometry import CameraModel
 from go2agent.brain.brain import Brain
@@ -29,12 +31,11 @@ from go2agent.timeline import Timeline, load_think
 
 log = logging.getLogger("go2agent")
 
-VLM_PORT = 8000
-SERVICES_PORT = 8100
+SERVICES_PORT = 8100  # GPU server: perception, voice and the VLM proxy (/v1)
 
 
 def _vlm_url(args: argparse.Namespace) -> str:
-    return args.vlm_url or f"http://{args.server}:{VLM_PORT}/v1"
+    return args.vlm_url or f"http://{args.server}:{SERVICES_PORT}/v1"
 
 
 def _make_robot(args: argparse.Namespace) -> Robot:
@@ -75,13 +76,8 @@ async def _run(args: argparse.Namespace) -> None:
     client = VLMClient(VLMConfig(base_url=_vlm_url(args), model=args.model, timeout=args.vlm_timeout))
     brain = Brain(client, env, tracker)
     timeline = Timeline(None if args.no_log else Path(args.log_dir))
-    speaker = mic = None
-    if args.voice:
-        from go2agent.audio.mic import Microphone
-        from go2agent.audio.speaker import Speaker
-
-        voice_base = f"http://{args.server}:{SERVICES_PORT}"
-        speaker = Speaker(f"{voice_base}/tts", device=_device(args.speaker_device))
+    voice_base = f"http://{args.server}:{SERVICES_PORT}"
+    speaker = Speaker(f"{voice_base}/tts", device=_device(args.speaker_device)) if args.voice else None
     rt = Runtime(
         robot,
         _make_camera(args),
@@ -92,9 +88,11 @@ async def _run(args: argparse.Namespace) -> None:
         task=args.task,
         speaker=speaker.say if speaker else None,
     )
-    if args.voice:
+    mic: Microphone | None = None
+    if speaker is not None:
+        spk = speaker
         mic = Microphone(
-            f"{voice_base}/asr", rt.hear, device=_device(args.mic_device), muted=lambda: speaker.playing
+            f"{voice_base}/asr", rt.hear, device=_device(args.mic_device), muted=lambda: spk.playing
         )
 
     server = uvicorn.Server(
@@ -164,7 +162,7 @@ def main() -> None:
 
     def common(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--server", default="127.0.0.1", help="GPU server host (VLM + perception + voice)")
-        sp.add_argument("--vlm-url", help=f"override, default http://SERVER:{VLM_PORT}/v1")
+        sp.add_argument("--vlm-url", help=f"override, default http://SERVER:{SERVICES_PORT}/v1")
         sp.add_argument("--model", default="brain", help="served model name")
         sp.add_argument("--vlm-timeout", type=float, default=3.0)
         sp.add_argument("--allow-dangerous", action="store_true", help="let the brain use flips/jumps")

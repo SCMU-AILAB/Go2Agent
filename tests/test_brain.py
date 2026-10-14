@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -10,18 +11,30 @@ from go2agent.brain.brain import Brain
 from go2agent.brain.client import VLMClient, VLMConfig
 from go2agent.brain.prompt import Observation, observation_text
 from go2agent.brain.schema import decision_json_schema
-from go2agent.core.types import Event, EventKind, RobotState, Track, Tracks
+from go2agent.core.types import Box, Event, EventKind, Frame, RobotState, Track, Tracks
+from go2agent.perception.base import Tracker
 from go2agent.robot.go2_actions import GO2_ACTIONS
 
 SAFE = tuple(a for a in GO2_ACTIONS if "dangerous" not in a.tags)
 ENV = BehaviorEnv(CameraModel(), {a.name: a for a in SAFE})
 
 
-class FakeTracker:
-    def __init__(self):
-        self.calls = []
+class FakeTracker(Tracker):
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, Box, str]] = []
 
-    async def add_box(self, frame_seq, box, label):
+    async def start(self) -> None: ...
+    async def close(self) -> None: ...
+    def submit(self, frame: Frame) -> None: ...
+
+    def latest(self) -> Tracks | None:
+        return None
+
+    @property
+    def healthy(self) -> bool:
+        return True
+
+    async def add_box(self, frame_seq: int, box: Box, label: str) -> int:
         self.calls.append((frame_seq, box, label))
         return 42
 
@@ -38,7 +51,7 @@ def vlm(reply: dict | str, status=200, seen=None):
 
 def obs(**kw):
     frame = make_frame(10.0, seq=5)
-    base = dict(
+    base: dict[str, Any] = dict(
         now=10.0,
         task="跟着穿黑衣服的人",
         triggers=(Event(EventKind.TASK, 10.0, {"text": "跟着穿黑衣服的人"}),),
@@ -99,13 +112,13 @@ async def test_box_target_creates_track():
     tracker = FakeTracker()
     plan = [{"behavior": "follow", "args": {"target": {"box": [0.1, 0.1, 0.3, 0.8], "label": "person"}}}]
     res = await Brain(vlm(decision(plan=plan)), ENV, tracker=tracker).think(obs())
-    assert res.behaviors[0].args.target == 42
+    assert res.behaviors[0].args.model_dump()["target"] == 42
     assert tracker.calls == [(5, (0.1, 0.1, 0.3, 0.8), "person")]
 
 
 async def test_vlm_failures_are_errors_not_exceptions():
-    assert "http 500" in (await Brain(vlm({}, status=500), ENV).think(obs())).error
-    assert "invalid json" in (await Brain(vlm("not json"), ENV).think(obs())).error
+    assert "http 500" in str((await Brain(vlm({}, status=500), ENV).think(obs())).error)
+    assert "invalid json" in str((await Brain(vlm("not json"), ENV).think(obs())).error)
 
 
 def test_schema_lists_only_allowed_actions():

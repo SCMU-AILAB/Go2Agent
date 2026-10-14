@@ -12,8 +12,8 @@ import httpx
 
 @dataclass(frozen=True, slots=True)
 class VLMConfig:
-    base_url: str = "http://127.0.0.1:8000/v1"
-    model: str = "brain"  # served-model-name, see deploy/gpu-server/serve-vlm.sh
+    base_url: str = "http://127.0.0.1:8100/v1"
+    model: str = "brain"  # served-model-name, see go2agent.server.models
     api_key: str = "EMPTY"
     timeout: float = 3.0
     max_tokens: int = 300

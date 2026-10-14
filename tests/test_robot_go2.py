@@ -152,7 +152,7 @@ def test_busy_until_rpc_finishes_and_zero_does_not_cancel_action(rig, clock):
     clock.advance(10)
     robot._on_state(telemetry())
     assert robot.state().busy
-    assert "busy" in robot.perform("sit")
+    assert "busy" in str(robot.perform("sit"))
     assert "busy" in robot.state().details["command_refusal"]
     client.release.set()
     eventually(lambda: not robot.state().busy)
@@ -244,7 +244,7 @@ def test_stale_velocity_and_action_are_dropped_without_replay(rig, clock):
 def test_disconnected_commands_are_dropped():
     robot = Go2Robot()
     robot.velocity(Velocity(0.1))
-    assert "not connected" in robot.perform("hello")
+    assert "not connected" in str(robot.perform("hello"))
     robot.velocity(Velocity())
     assert not robot.state().connected
     assert "not connected" in robot.state().details["command_refusal"]

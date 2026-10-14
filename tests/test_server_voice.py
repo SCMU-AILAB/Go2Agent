@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from go2agent.audio.mic import encode_wav
-from go2agent.perception.protocol import FrameHeader, TracksMsg
+from go2agent.perception.protocol import FrameHeader, TrackMsg, TracksMsg
 from go2agent.server import asr, cli, tts
 
 
@@ -36,10 +36,15 @@ class FakeTTS:
         return encode_wav(np.zeros(1600, np.float32))
 
 
+class EmptyDetector:
+    def track(self, bgr: np.ndarray) -> list[TrackMsg]:
+        return []
+
+
 def test_combined_endpoints_and_perception_on_same_app():
     recognizer, synthesizer = FakeASR(), FakeTTS()
     app = cli.create_all_app(
-        detector_factory=lambda: SimpleNamespace(track=lambda _: []),
+        detector_factory=EmptyDetector,
         asr_engine_factory=lambda: recognizer,
         tts_engine_factory=lambda: synthesizer,
     )
@@ -177,11 +182,14 @@ def test_piper_voice_path_and_wav_output(monkeypatch, tmp_path):
         tts.PiperEngine(model_dir=tmp_path)
 
 
+VLM_PATHS = {"/models", "/models/brain/load", "/models/brain/unload", "/v1/{path}"}
+
+
 @pytest.mark.parametrize(
     "arguments,paths,port",
     [
-        ([], {"/track", "/asr", "/tts", "/health"}, 8100),
-        (["all", "--port", "9000"], {"/track", "/asr", "/tts", "/health"}, 9000),
+        ([], {"/track", "/asr", "/tts", "/health", *VLM_PATHS}, 8100),
+        (["all", "--port", "9000", "--no-vlm"], {"/track", "/asr", "/tts", "/health"}, 9000),
         (["perception"], {"/track", "/health"}, 8100),
         (["asr", "--model", "tiny", "--device", "cpu"], {"/asr", "/health"}, 8101),
         (["tts", "--voice", "custom", "--model-dir", "/tmp/voices"], {"/tts", "/health"}, 8102),
@@ -189,10 +197,14 @@ def test_piper_voice_path_and_wav_output(monkeypatch, tmp_path):
 )
 def test_cli_commands(monkeypatch, arguments, paths, port):
     served = []
-    monkeypatch.setattr(cli.uvicorn, "run", lambda app, **kwargs: served.append((app, kwargs)))
+
+    async def fake_serve(app, host, port, vlm):
+        served.append((app, host, port))
+
+    monkeypatch.setattr(cli, "_serve", fake_serve)
     cli.main(arguments)
-    app, options = served[0]
-    assert options == {"host": "0.0.0.0", "port": port}
+    app, host, served_port = served[0]
+    assert (host, served_port) == ("0.0.0.0", port)
     actual = set(app.openapi()["paths"])
     if any(getattr(route, "path", None) == "/track" for route in app.routes):
         actual.add("/track")

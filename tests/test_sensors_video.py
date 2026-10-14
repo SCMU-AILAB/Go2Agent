@@ -8,8 +8,16 @@ import cv2
 import numpy as np
 import pytest
 
+from go2agent.core.types import Frame
+from go2agent.sensors.base import Camera
 from go2agent.sensors.realsense import RealSenseCamera
 from go2agent.sensors.video import VideoCamera
+
+
+def frame_of(camera: Camera) -> Frame:
+    frame = camera.latest()
+    assert frame is not None
+    return frame
 
 
 def wait_for(predicate, timeout=3):
@@ -23,7 +31,7 @@ def wait_for(predicate, timeout=3):
 @pytest.fixture
 def video(tmp_path):
     path = tmp_path / "colors.avi"
-    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10, (64, 48))
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter.fourcc(*"MJPG"), 10, (64, 48))
     assert writer.isOpened()
     for bgr in ((0, 0, 255), (0, 255, 0), (255, 0, 0)):
         writer.write(np.full((48, 64, 3), bgr, dtype=np.uint8))
@@ -37,15 +45,17 @@ def test_video_native_fps_rgb_depth_and_eof(video):
     camera.start()
     try:
         wait_for(lambda: camera.latest() is not None)
-        first = camera.latest()
+        first = frame_of(camera)
         assert first.seq == 1 and first.size == (64, 48)
         assert first.rgb.dtype == np.uint8 and first.depth is None
         assert first.rgb[0, 0, 0] > 250 and first.rgb[0, 0, 2] < 5
-        wait_for(lambda: camera.latest().seq == 2)
-        second = camera.latest()
+        wait_for(lambda: (f := camera.latest()) is not None and f.seq == 2)
+        second = frame_of(camera)
         assert 0.07 < second.stamp - first.stamp < 0.3
-        wait_for(lambda: not camera._thread.is_alive())
-        last = camera.latest()
+        thread = camera._thread
+        assert thread is not None
+        wait_for(lambda: not thread.is_alive())
+        last = frame_of(camera)
         assert last.seq == 3 and last.rgb[0, 0, 2] > 250
     finally:
         camera.close()
@@ -60,14 +70,14 @@ def test_video_loop_and_restart(video):
     camera.start()
     assert camera._thread is thread
     try:
-        wait_for(lambda: camera.latest() is not None and camera.latest().seq >= 5)
-        previous = camera.latest().seq
+        wait_for(lambda: (f := camera.latest()) is not None and f.seq >= 5)
+        previous = frame_of(camera).seq
     finally:
         camera.close()
     camera.start()
     try:
         wait_for(lambda: camera.latest() is not None)
-        assert camera.latest().seq > previous
+        assert frame_of(camera).seq > previous
     finally:
         camera.close()
 
@@ -78,7 +88,7 @@ def test_video_fps_override_and_interruptible_close(video):
     try:
         wait_for(lambda: camera.latest() is not None)
         time.sleep(0.05)
-        assert camera.latest().seq == 1
+        assert frame_of(camera).seq == 1
     finally:
         started = time.monotonic()
         camera.close()
@@ -108,8 +118,8 @@ def test_video_device_index_and_unknown_fps(monkeypatch):
     camera = VideoCamera(3)
     camera.start()
     try:
-        wait_for(lambda: camera.latest() is not None and camera.latest().seq >= 2)
-        assert camera.latest().size == (30, 20)
+        wait_for(lambda: (f := camera.latest()) is not None and f.seq >= 2)
+        assert frame_of(camera).size == (30, 20)
     finally:
         camera.close()
     assert released == [True]
@@ -173,7 +183,8 @@ def test_realsense_native_alignment_scale_rotation_and_owned_buffers(monkeypatch
     camera.start()
     try:
         wait_for(lambda: camera.latest() is not None)
-        result = camera.latest()
+        result = frame_of(camera)
+        assert result.depth is not None
     finally:
         camera.close()
     assert aligned and stopped == [True]
@@ -218,9 +229,11 @@ def align(stream):
     camera = RealSenseCamera(width=3, height=2, bridge_python=sys.executable)
     camera.start()
     process = camera._process
+    assert process is not None
     try:
         wait_for(lambda: camera.latest() is not None)
-        result = camera.latest()
+        result = frame_of(camera)
+        assert result.depth is not None
         assert result.rgb.shape == (2, 3, 3) and result.rgb[0, 0, 0] == 255
         assert result.depth.dtype == np.float32
         np.testing.assert_allclose(result.depth, 1.234)

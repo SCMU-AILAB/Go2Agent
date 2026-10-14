@@ -9,7 +9,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import IO, Any
 
 import numpy as np
 
@@ -69,7 +69,7 @@ class RealSenseCamera(Camera):
             self._start_worker(self._bridge_python)
             return
         try:
-            import pyrealsense2 as rs
+            import pyrealsense2 as rs  # pyright: ignore[reportMissingImports]  # Linux x86_64 only
         except (ImportError, OSError) as exc:
             logger.warning("Native RealSense bindings unavailable (%s); using system Python", exc)
             self._start_worker("/usr/bin/python3")
@@ -213,7 +213,7 @@ class RealSenseCamera(Camera):
             self._ready.set()
 
 
-def _read_exact(stream: BinaryIO, size: int) -> bytes:
+def _read_exact(stream: IO[bytes], size: int) -> bytes:
     parts = bytearray()
     while len(parts) < size:
         part = stream.read(size - len(parts))

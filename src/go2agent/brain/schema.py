@@ -43,7 +43,7 @@ _BOX_TARGET = {
 
 
 def _step_schema(name: str, actions: tuple[ActionSpec, ...]) -> dict[str, Any]:
-    args = copy.deepcopy(BEHAVIORS[name].Args.model_json_schema())
+    args = copy.deepcopy(BEHAVIORS[name].args_model.model_json_schema())
     args.pop("title", None)
     props = args.get("properties", {})
     for p in props.values():

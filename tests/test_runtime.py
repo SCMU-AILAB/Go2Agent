@@ -2,27 +2,31 @@ import asyncio
 import json
 
 import httpx
-from conftest import make_frame
+from conftest import FakeClock, make_frame
 
 from go2agent.behaviors.base import BehaviorEnv
 from go2agent.behaviors.geometry import CameraModel
 from go2agent.brain.brain import Brain
 from go2agent.brain.client import VLMClient, VLMConfig
-from go2agent.core.types import EventKind, Track, Tracks
+from go2agent.core.types import Box, EventKind, Frame, Track, Tracks
+from go2agent.perception.base import Tracker
 from go2agent.robot.sim import SimRobot
 from go2agent.runtime import Runtime, RuntimeConfig
 from go2agent.safety import SafetyGate
+from go2agent.sensors.base import Camera
 from go2agent.timeline import Timeline, load_think
 
 
-class StepCamera:
-    def __init__(self, clock):
+class StepCamera(Camera):
+    """Returns a new frame on every call, stamped with the fake clock."""
+
+    def __init__(self, clock: FakeClock) -> None:
         self.clock, self.seq = clock, 0
 
-    def start(self): ...
-    def close(self): ...
+    def start(self) -> None: ...
+    def close(self) -> None: ...
 
-    def latest(self):
+    def latest(self) -> Frame:
         self.seq += 1
         return make_frame(self.clock(), seq=self.seq, depth=2.5)
 
@@ -30,16 +34,23 @@ class StepCamera:
 PERSON = Track(3, "person", (0.4, 0.2, 0.6, 0.9), 0.9)
 
 
-class StaticTracker:
-    def __init__(self, cam, items=(PERSON,)):
-        self.cam, self.items, self.healthy = cam, items, True
+class StaticTracker(Tracker):
+    def __init__(self, cam: StepCamera, items: tuple[Track, ...] = (PERSON,)) -> None:
+        self.cam, self.items = cam, items
 
-    async def start(self): ...
-    async def close(self): ...
-    def submit(self, frame): ...
+    async def start(self) -> None: ...
+    async def close(self) -> None: ...
+    def submit(self, frame: Frame) -> None: ...
 
-    def latest(self):
+    def latest(self) -> Tracks:
         return Tracks(self.cam.seq, self.cam.clock(), tuple(self.items))
+
+    @property
+    def healthy(self) -> bool:
+        return True
+
+    async def add_box(self, frame_seq: int, box: Box, label: str) -> int:
+        raise NotImplementedError
 
 
 def make_runtime(clock, replies, tmp_path=None, **cfg):
@@ -88,11 +99,11 @@ async def test_task_to_motion(clock, tmp_path):
     clock.advance(0.05)
     rt.control_step(clock())
     assert robot.cmd.vx > 0  # person at 2.5m, keep 1.2m -> walk forward
-    kinds = [
-        json.loads(line)["kind"] for line in (rt.timeline.dir / "timeline.jsonl").read_text().splitlines()
-    ]
+    run_dir = rt.timeline.dir
+    assert run_dir is not None
+    kinds = [json.loads(line)["kind"] for line in (run_dir / "timeline.jsonl").read_text().splitlines()]
     assert "task" in kinds and "brain_decision" in kinds
-    messages, _ = load_think(rt.timeline.dir / "thinks" / "0001.json")
+    messages, _ = load_think(run_dir / "thinks" / "0001.json")
     assert messages[1]["content"][0]["image_url"]["url"].startswith("data:image/jpeg")
 
 
@@ -135,7 +146,7 @@ async def test_brain_outage_stops_after_grace(clock):
 
 
 async def test_no_task_ignores_track_events(clock):
-    rt, _, _, seen, _ = make_runtime(clock, [])
+    rt, *_ = make_runtime(clock, [])
     rt.control_step(clock())
     assert not rt._should_think(rt._pending)
     rt.hear("你好")

@@ -34,6 +34,7 @@ def test_check():
 
 async def test_run_cases_end_to_end(tmp_path):
     tl = Timeline(tmp_path)
+    assert tl.dir is not None
     msgs = [
         {"role": "system", "content": "old"},
         {"role": "user", "content": [{"type": "text", "text": "hi"}]},

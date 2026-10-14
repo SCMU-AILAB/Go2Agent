@@ -86,7 +86,7 @@ class Brain:
             if step.behavior == "perform" and args.get("action") not in self.env.actions:
                 raise Rejected(f"第{i + 1}步：动作 {args.get('action')!r} 不在可用动作中")
             try:
-                out.append(cls(cls.Args.model_validate(args), self.env))
+                out.append(cls(cls.args_model.model_validate(args), self.env))
             except ValidationError as e:
                 raise Rejected(f"第{i + 1}步 {step.behavior} 参数错误：{_short(e)}") from e
         return out

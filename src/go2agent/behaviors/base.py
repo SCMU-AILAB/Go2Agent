@@ -50,16 +50,16 @@ class BehaviorEnv:
     actions: dict[str, ActionSpec]  # actions the brain may use
 
 
-class Args(BaseModel):
+class BehaviorArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class Behavior(ABC):
+class Behavior[A: BehaviorArgs](ABC):
     name: ClassVar[str]
     description: ClassVar[str]  # model-facing
-    Args: ClassVar[type[Args]]
+    args_model: ClassVar[type[BehaviorArgs]]  # the concrete A, used to validate and describe args
 
-    def __init__(self, args: Args, env: BehaviorEnv) -> None:
+    def __init__(self, args: A, env: BehaviorEnv) -> None:
         self.args = args
         self.env = env
         self.started: float | None = None

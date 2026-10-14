@@ -20,7 +20,7 @@ def test_clamps_speed(clock):
 
 
 def test_stale_frame_stops(clock):
-    robot, g = gate(clock)
+    _, g = gate(clock)
     frame = make_frame(clock())
     clock.advance(0.6)
     r = g.apply(Velocity(0.3), frame)
@@ -54,8 +54,8 @@ def test_estop_latches_until_release(clock):
 
 def test_dangerous_actions_refused_unless_enabled(clock):
     robot, g = gate(clock)
-    assert "dangerous" in g.perform("front_flip")
-    assert g.perform("nope").startswith("unknown")
+    assert "dangerous" in str(g.perform("front_flip"))
+    assert str(g.perform("nope")).startswith("unknown")
     assert g.perform("hello") is None and robot.performed == ["hello"]
     assert all("dangerous" not in a.tags for a in g.allowed_actions())
     _, g2 = gate(clock, allow_dangerous=True)
