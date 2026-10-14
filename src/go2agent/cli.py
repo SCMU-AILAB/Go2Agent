@@ -1,0 +1,146 @@
+"""`go2agent` command line.
+
+go2agent run --server 192.168.31.143 --robot go2 --camera realsense
+go2agent run --server 192.168.31.143 --robot sim --camera video:clip.mp4 --task "跟着穿黑衣服的人"
+go2agent replay runs/20261014-180000/thinks/0003.json --server 192.168.31.143
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+import time
+from pathlib import Path
+
+from go2agent.behaviors.base import BehaviorEnv
+from go2agent.behaviors.geometry import CameraModel
+from go2agent.brain.brain import Brain
+from go2agent.brain.client import VLMClient, VLMConfig, VLMError
+from go2agent.brain.prompt import system_message
+from go2agent.brain.schema import decision_json_schema
+from go2agent.robot.base import Robot
+from go2agent.robot.go2_actions import GO2_ACTIONS
+from go2agent.runtime import Runtime
+from go2agent.safety import SafetyConfig, SafetyGate
+from go2agent.sensors.base import Camera
+from go2agent.timeline import Timeline, load_think
+
+log = logging.getLogger("go2agent")
+
+VLM_PORT = 8000
+SERVICES_PORT = 8100
+
+
+def _vlm_url(args: argparse.Namespace) -> str:
+    return args.vlm_url or f"http://{args.server}:{VLM_PORT}/v1"
+
+
+def _make_robot(args: argparse.Namespace) -> Robot:
+    if args.robot == "sim":
+        from go2agent.robot.sim import SimRobot
+
+        return SimRobot()
+    from go2agent.robot.go2 import Go2Config, Go2Robot
+
+    return Go2Robot(Go2Config(network_interface=args.network))
+
+
+def _make_camera(args: argparse.Namespace) -> Camera:
+    spec: str = args.camera
+    if spec == "realsense":
+        from go2agent.sensors.realsense import RealSenseCamera
+
+        return RealSenseCamera(rgb_rotation_deg=args.camera_rotation)
+    from go2agent.sensors.video import VideoCamera
+
+    if spec.startswith("device:"):
+        return VideoCamera(int(spec.removeprefix("device:")))
+    if spec.startswith("video:"):
+        return VideoCamera(spec.removeprefix("video:"), loop=True)
+    raise SystemExit(f"unknown --camera {spec!r}; use realsense, video:PATH or device:N")
+
+
+async def _run(args: argparse.Namespace) -> None:
+    import uvicorn
+
+    from go2agent.api.server import create_app
+    from go2agent.perception.remote import RemoteTracker
+
+    robot = _make_robot(args)
+    safety = SafetyGate(robot, SafetyConfig(allow_dangerous=args.allow_dangerous))
+    env = BehaviorEnv(CameraModel(), {a.name: a for a in safety.allowed_actions()})
+    tracker = RemoteTracker(args.perception_url or f"ws://{args.server}:{SERVICES_PORT}/track")
+    client = VLMClient(VLMConfig(base_url=_vlm_url(args), model=args.model, timeout=args.vlm_timeout))
+    brain = Brain(client, env, tracker)
+    timeline = Timeline(None if args.no_log else Path(args.log_dir))
+    rt = Runtime(robot, _make_camera(args), tracker, brain, safety, timeline, task=args.task)
+
+    server = uvicorn.Server(
+        uvicorn.Config(create_app(rt), host=args.api_host, port=args.api_port, log_level="warning")
+    )
+    await rt.start()
+    log.info("api on http://%s:%d", args.api_host, args.api_port)
+    try:
+        await server.serve()
+    finally:
+        await rt.stop()
+
+
+async def _replay(args: argparse.Namespace) -> None:
+    messages, recorded = load_think(Path(args.think))
+    actions = tuple(a for a in GO2_ACTIONS if args.allow_dangerous or "dangerous" not in a.tags)
+    if args.current_prompt:
+        messages[0]["content"] = system_message(actions)
+    client = VLMClient(VLMConfig(base_url=_vlm_url(args), model=args.model, timeout=args.vlm_timeout))
+    print("recorded:", recorded.get("raw") or recorded.get("error"))
+    try:
+        for i in range(args.n):
+            t0 = time.monotonic()
+            try:
+                reply = await client.complete_json(messages, decision_json_schema(actions))
+                print(f"[{i + 1}] {reply.latency_ms:.0f}ms {json.dumps(reply.data, ensure_ascii=False)}")
+            except VLMError as e:
+                print(f"[{i + 1}] {(time.monotonic() - t0) * 1000:.0f}ms error: {e}")
+    finally:
+        await client.close()
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(prog="go2agent")
+    p.add_argument("-v", "--verbose", action="store_true")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def common(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--server", default="127.0.0.1", help="GPU server host (VLM + perception + voice)")
+        sp.add_argument("--vlm-url", help=f"override, default http://SERVER:{VLM_PORT}/v1")
+        sp.add_argument("--model", default="brain", help="served model name")
+        sp.add_argument("--vlm-timeout", type=float, default=3.0)
+        sp.add_argument("--allow-dangerous", action="store_true", help="let the brain use flips/jumps")
+
+    run = sub.add_parser("run", help="run the agent")
+    common(run)
+    run.add_argument("--robot", choices=["sim", "go2"], default="sim")
+    run.add_argument("--network", default="eth0", help="Go2 network interface")
+    run.add_argument("--camera", default="realsense", help="realsense | video:PATH | device:N")
+    run.add_argument("--camera-rotation", type=int, default=0, choices=[0, 90, 180, 270])
+    run.add_argument("--perception-url", help=f"override, default ws://SERVER:{SERVICES_PORT}/track")
+    run.add_argument("--task", default="", help="initial task")
+    run.add_argument("--api-host", default="0.0.0.0")
+    run.add_argument("--api-port", type=int, default=8080)
+    run.add_argument("--log-dir", default="runs")
+    run.add_argument("--no-log", action="store_true")
+
+    rp = sub.add_parser("replay", help="re-send a recorded think to the VLM")
+    common(rp)
+    rp.add_argument("think", help="runs/<run>/thinks/NNNN.json")
+    rp.add_argument("-n", type=int, default=1, help="repeat to measure latency / variance")
+    rp.add_argument("--current-prompt", action="store_true", help="swap in the current system prompt")
+
+    args = p.parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    asyncio.run(_run(args) if args.cmd == "run" else _replay(args))

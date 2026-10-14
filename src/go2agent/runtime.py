@@ -344,6 +344,7 @@ class Runtime:
             self._spawn(self.say(d.say))
 
     def _on_brain_error(self, error: str, now: float) -> None:
+        log.warning("brain call failed: %s", error)
         self.emit(Event(EventKind.BRAIN_ERROR, now, {"reason": error}))
         if self._brain_failing_since is None:
             self._brain_failing_since = now
