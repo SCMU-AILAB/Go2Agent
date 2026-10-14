@@ -53,7 +53,7 @@ def obs(**kw):
 
 
 def decision(mode="replace", plan=(), say=""):
-    return {"thought": "t", "say": say, "mode": mode, "plan": list(plan)}
+    return {"thought": "t", "say": say, "task": "", "mode": mode, "plan": list(plan)}
 
 
 async def test_valid_plan_becomes_behaviors_and_request_is_constrained():

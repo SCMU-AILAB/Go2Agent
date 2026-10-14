@@ -26,6 +26,7 @@ class PlanStep(BaseModel):
 class Decision(BaseModel):
     thought: str = ""
     say: str = ""
+    task: str = ""  # non-empty = the user's speech changed the task; this is the new full task
     mode: Literal["keep", "replace", "append"] = "keep"
     plan: list[PlanStep] = Field(default_factory=list)
 
@@ -68,6 +69,7 @@ def decision_json_schema(actions: tuple[ActionSpec, ...]) -> dict[str, Any]:
         "properties": {
             "thought": {"type": "string", "maxLength": 200},
             "say": {"type": "string", "maxLength": 120},
+            "task": {"type": "string", "maxLength": 200},
             "mode": {"type": "string", "enum": ["keep", "replace", "append"]},
             "plan": {
                 "type": "array",
@@ -75,6 +77,6 @@ def decision_json_schema(actions: tuple[ActionSpec, ...]) -> dict[str, Any]:
                 "items": {"anyOf": [_step_schema(n, actions) for n in names]},
             },
         },
-        "required": ["thought", "say", "mode", "plan"],
+        "required": ["thought", "say", "task", "mode", "plan"],
         "additionalProperties": False,
     }
