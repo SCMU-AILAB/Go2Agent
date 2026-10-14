@@ -25,8 +25,9 @@ class Robot(ABC):
         within a short window when the hardware supports it."""
 
     @abstractmethod
-    def perform(self, action: str) -> None:
-        """Start a native action from `actions()`. Returns immediately."""
+    def perform(self, action: str) -> str | None:
+        """Start a native action from `actions()`. Returns immediately: None if started, else the reason
+        it was refused (busy, not connected, ...). Raises only for an unknown action."""
 
     @abstractmethod
     def stop(self) -> None:

@@ -141,8 +141,7 @@ class SafetyGate:
             return "robot_busy"
         with self._lock:
             self._moving = False
-        self.robot.perform(action)
-        return None
+        return self.robot.perform(action)
 
     def allowed_actions(self) -> tuple[ActionSpec, ...]:
         return tuple(

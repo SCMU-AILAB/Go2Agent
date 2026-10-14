@@ -41,7 +41,7 @@ class SimRobot(Robot):
             self.cmd = cmd
             self._cmd_stamp = self._clock()
 
-    def perform(self, action: str) -> None:
+    def perform(self, action: str) -> str | None:
         spec = next((a for a in self._actions if a.name == action), None)
         if spec is None:
             raise ValueError(f"unknown action {action!r}")
@@ -50,6 +50,7 @@ class SimRobot(Robot):
             self.cmd = Velocity()
             self.performed.append(action)
             self._busy_until = self._clock() + spec.duration
+        return None
 
     def stop(self) -> None:
         with self._lock:
