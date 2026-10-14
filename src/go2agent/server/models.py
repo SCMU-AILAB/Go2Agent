@@ -46,10 +46,11 @@ class VLLMConfig:
     model: str = "Qwen/Qwen3-VL-8B-Instruct-FP8"
     served_name: str = "brain"
     port: int = 8001  # internal; clients use the proxy on the services port
-    gpu_memory_utilization: float = 0.70  # leave room for perception and ASR on the same GPU
-    max_model_len: int = 8192
+    gpu_memory_utilization: float = 0.75  # 3080 20G: ~15G here, the rest for perception and ASR
+    max_model_len: int = 4096  # one think is ~2.5k tokens (system prompt, 3 small images, state)
     max_num_seqs: int = 2
     max_images: int = 4
+    max_image_pixels: int = 640 * 640  # the dog sends <=512px images; caps encoder memory profiling
     load_timeout_s: float = 900.0
     extra_args: tuple[str, ...] = ()
 
@@ -63,6 +64,7 @@ class VLLMConfig:
             "--max-model-len", str(self.max_model_len),
             "--max-num-seqs", str(self.max_num_seqs),
             "--limit-mm-per-prompt", f'{{"image": {self.max_images}, "video": 0}}',
+            "--mm-processor-kwargs", f'{{"max_pixels": {self.max_image_pixels}}}',
             "--enable-prefix-caching",
             *self.extra_args,
         ]  # fmt: skip

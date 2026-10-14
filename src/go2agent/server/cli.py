@@ -119,7 +119,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 default=DEFAULT_VLM,
                 help="<models-dir>/Qwen3-VL/<name> if present, else a hub repo id",
             )
-            command.add_argument("--vlm-gpu-util", type=float, default=0.70)
+            command.add_argument("--vlm-gpu-util", type=float, default=0.75)
             command.add_argument("--vlm-port", type=int, default=8001, help="internal vLLM port")
             command.add_argument("--no-vlm", action="store_true", help="do not offer the VLM lifecycle")
     mc = subparsers.add_parser("model", help="load / unload / status of the VLM on a running server")
