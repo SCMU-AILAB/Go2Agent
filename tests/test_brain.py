@@ -146,5 +146,7 @@ def test_history_frames_are_smaller_than_the_newest():
     widths = []
     for part in msgs[1]["content"][:-1]:
         raw = base64.b64decode(part["image_url"]["url"].split(",", 1)[1])
-        widths.append(cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR).shape[1])
+        image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+        assert image is not None
+        widths.append(image.shape[1])
     assert widths == [256, 512]
