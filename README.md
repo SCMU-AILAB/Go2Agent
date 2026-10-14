@@ -90,4 +90,4 @@ uv run go2agent eval evals/cases.jsonl --server <IP> --current-prompt           
 | WS | `/video?fps=10` | 二进制 JPEG 帧（带编号框） |
 
 时间线记录的 `kind` 取值见 `core/types.py` 的 `EventKind`；`brain_decision` 的 `data` 含
-`thought`、`say`、`task`、`mode`、`plan`、`rejection`、`latency_ms`、`think_id`。
+`thought`、`say`、`new_task`、`mode`、`plan`、`rejection`、`latency_ms`、`think_id`。

@@ -58,7 +58,11 @@ def make_runtime(clock, replies, tmp_path=None, **cfg):
 
     def handler(req):
         seen.append(json.loads(req.content))
-        r = replies.pop(0) if replies else {"thought": "", "say": "", "task": "", "mode": "keep", "plan": []}
+        r = (
+            replies.pop(0)
+            if replies
+            else {"thought": "", "say": "", "new_task": "", "mode": "keep", "plan": []}
+        )
         if isinstance(r, int):
             return httpx.Response(r)
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(r)}}]})
@@ -81,7 +85,7 @@ def follow_reply(say=""):
     return {
         "thought": "看到黑衣服的人",
         "say": say,
-        "task": "",
+        "new_task": "",
         "mode": "replace",
         "plan": [{"behavior": "follow", "args": {"target": 3}}],
     }

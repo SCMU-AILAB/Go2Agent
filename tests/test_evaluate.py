@@ -53,7 +53,7 @@ async def test_run_cases_end_to_end(tmp_path):
 
     def handler(req):
         seen.append(json.loads(req.content))
-        reply = {"thought": "", "say": "", "task": "", "mode": "keep", "plan": []}
+        reply = {"thought": "", "say": "", "new_task": "", "mode": "keep", "plan": []}
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(reply)}}]})
 
     client = VLMClient(VLMConfig(base_url="http://vlm/v1"), httpx.MockTransport(handler))

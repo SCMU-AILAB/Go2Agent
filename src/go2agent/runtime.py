@@ -326,17 +326,17 @@ class Runtime:
         d = res.decision
         if d is None:
             return
-        if self.safety.estopped and any(e.kind is EventKind.USER_SPEECH for e in triggers) and d.task:
+        if self.safety.estopped and any(e.kind is EventKind.USER_SPEECH for e in triggers) and d.new_task:
             self.safety.release()  # a spoken new task after an e-stop resumes operation
-        if d.task:
-            self.task = d.task
+        if d.new_task:
+            self.task = d.new_task
         if not self.safety.estopped:
             self.executor.submit(res.behaviors, res.mode)  # type: ignore[arg-type]
         plan = [repr(b) for b in res.behaviors]
         self.last_decision = {
             "thought": d.thought,
             "say": d.say,
-            "task": d.task,
+            "new_task": d.new_task,
             "mode": res.mode,
             "plan": plan,
             "rejection": res.rejection,

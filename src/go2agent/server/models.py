@@ -66,7 +66,7 @@ class VLLMConfig:
             "--mm-processor-kwargs", f'{{"max_pixels": {self.max_image_pixels}}}',
             "--enable-prefix-caching",
             # Compact JSON: indentation and newlines are pure decode time (~1/3 of the output tokens).
-            "--structured-outputs-config", '{"disable_any_whitespace": true}',
+            "--structured-outputs-config", '{"backend": "xgrammar", "disable_any_whitespace": true}',
             *self.extra_args,
         ]  # fmt: skip
 
