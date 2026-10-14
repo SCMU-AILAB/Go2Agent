@@ -117,14 +117,24 @@ def observation_text(obs: Observation, cam: CameraModel) -> str:
     return "\n".join(parts)
 
 
+@dataclass(frozen=True, slots=True)
+class ImageSizes:
+    """Long side in pixels. Prefill is compute-bound (~0.45 ms per image token on a 3080), so only the
+    newest frame (marks, detail) gets full resolution; older frames only need to show motion."""
+
+    newest: int = 512  # ~192 tokens
+    history: int = 256  # ~48 tokens each
+
+
 def build_messages(
-    obs: Observation, actions: tuple[ActionSpec, ...], cam: CameraModel, image_long_side: int = 512
+    obs: Observation, actions: tuple[ActionSpec, ...], cam: CameraModel, sizes: ImageSizes | None = None
 ) -> list[dict[str, Any]]:
+    sizes = sizes or ImageSizes()
     content: list[dict[str, Any]] = []
     for i, f in enumerate(obs.frames):
         newest = i == len(obs.frames) - 1
         rgb = draw_marks(f.rgb, obs.tracks) if newest else f.rgb
-        rgb = resize_long_side(rgb, image_long_side)
+        rgb = resize_long_side(rgb, sizes.newest if newest else sizes.history)
         content.append({"type": "image_url", "image_url": {"url": data_url(jpeg_bytes(rgb))}})
     content.append({"type": "text", "text": observation_text(obs, cam)})
     return [

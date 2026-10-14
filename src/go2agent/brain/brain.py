@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from go2agent.behaviors.base import Behavior, BehaviorEnv
 from go2agent.behaviors.primitives import BEHAVIORS, TARGET_BEHAVIORS
 from go2agent.brain.client import VLMClient, VLMError
-from go2agent.brain.prompt import Observation, build_messages
+from go2agent.brain.prompt import ImageSizes, Observation, build_messages
 from go2agent.brain.schema import BoxTarget, Decision, decision_json_schema
 from go2agent.perception.base import Tracker
 
@@ -41,17 +41,21 @@ class ThinkResult:
 
 class Brain:
     def __init__(
-        self, client: VLMClient, env: BehaviorEnv, tracker: Tracker | None = None, image_long_side: int = 512
+        self,
+        client: VLMClient,
+        env: BehaviorEnv,
+        tracker: Tracker | None = None,
+        sizes: ImageSizes | None = None,
     ) -> None:
         self.client = client
         self.env = env
         self.tracker = tracker
-        self.image_long_side = image_long_side
+        self.sizes = sizes or ImageSizes()
         self.actions = tuple(env.actions.values())
         self.schema = decision_json_schema(self.actions)
 
     async def think(self, obs: Observation) -> ThinkResult:
-        messages = build_messages(obs, self.actions, self.env.camera, self.image_long_side)
+        messages = build_messages(obs, self.actions, self.env.camera, self.sizes)
         try:
             reply = await self.client.complete_json(messages, self.schema)
         except VLMError as e:

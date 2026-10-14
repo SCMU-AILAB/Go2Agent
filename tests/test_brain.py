@@ -1,7 +1,10 @@
+import base64
 import json
 from typing import Any
 
+import cv2
 import httpx
+import numpy as np
 import pytest
 from conftest import make_frame
 
@@ -9,7 +12,7 @@ from go2agent.behaviors.base import BehaviorEnv
 from go2agent.behaviors.geometry import CameraModel
 from go2agent.brain.brain import Brain
 from go2agent.brain.client import VLMClient, VLMConfig
-from go2agent.brain.prompt import Observation, observation_text
+from go2agent.brain.prompt import Observation, build_messages, observation_text
 from go2agent.brain.schema import decision_json_schema
 from go2agent.core.types import Box, Event, EventKind, Frame, RobotState, Track, Tracks
 from go2agent.perception.base import Tracker
@@ -135,3 +138,13 @@ def test_schema_lists_only_allowed_actions():
 def test_observation_text_mentions_targets_and_rejection():
     text = observation_text(obs(rejection="坏输出"), CameraModel())
     assert "#3 person 正前方" in text and "上次输出被拒绝：坏输出" in text
+
+
+def test_history_frames_are_smaller_than_the_newest():
+    frames = (make_frame(9.0, seq=3, w=640, h=480), make_frame(10.0, seq=5, w=640, h=480))
+    msgs = build_messages(obs(frames=frames), SAFE, CameraModel())
+    widths = []
+    for part in msgs[1]["content"][:-1]:
+        raw = base64.b64decode(part["image_url"]["url"].split(",", 1)[1])
+        widths.append(cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR).shape[1])
+    assert widths == [256, 512]
