@@ -34,6 +34,7 @@ _TASKLESS_TRIGGERS = frozenset({EventKind.TASK, EventKind.USER_SPEECH})
 class RuntimeConfig:
     control_hz: float = 20.0
     periodic_s: float = 4.0  # re-check interval while a behavior runs
+    idle_watch_s: float = 1.5  # look interval while idle with a task and someone in view
     keyframes: int = 3
     keyframe_spacing_s: float = 0.7
     track_lost_s: float = 1.5  # id unseen this long -> TRACK_LOST
@@ -248,13 +249,17 @@ class Runtime:
                 log.exception("think failed")
 
     def _periodic_due(self, now: float) -> bool:
-        active = self.executor.current is not None or bool(self.executor.queue)
-        return (
-            active
-            and bool(self.task)
-            and not self.safety.estopped
-            and now - self._last_think >= self.config.periodic_s
-        )
+        """Re-check while a behavior runs; while idle, keep watching as long as someone is in view
+        (a person already in view who starts waving produces no event)."""
+        if not self.task or self.safety.estopped:
+            return False
+        if self.executor.current is not None or self.executor.queue:
+            interval = self.config.periodic_s
+        elif self._seen:
+            interval = self.config.idle_watch_s
+        else:
+            return False
+        return now - self._last_think >= interval
 
     def _should_think(self, triggers: list[Event]) -> bool:
         if self.task:

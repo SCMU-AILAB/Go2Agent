@@ -140,3 +140,18 @@ async def test_no_task_ignores_track_events(clock):
     assert not rt._should_think(rt._pending)
     rt.hear("你好")
     assert rt._should_think(rt._pending)
+
+
+async def test_periodic_watch_when_idle_only_with_someone_in_view(clock):
+    rt, _, tracker, _, _ = make_runtime(clock, [], idle_watch_s=1.5, periodic_s=4.0, track_lost_s=1.0)
+    rt.task = "有人招手就打招呼"
+    rt.control_step(clock())
+    rt._last_think = clock()
+    clock.advance(1.0)
+    assert not rt._periodic_due(clock())
+    clock.advance(0.6)
+    assert rt._periodic_due(clock())  # idle, person #3 in view
+    tracker.items = ()
+    clock.advance(1.5)
+    rt.control_step(clock())
+    assert not rt._periodic_due(clock())  # nobody in view -> save the GPU
