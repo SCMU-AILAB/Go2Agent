@@ -75,17 +75,50 @@ async def _run(args: argparse.Namespace) -> None:
     client = VLMClient(VLMConfig(base_url=_vlm_url(args), model=args.model, timeout=args.vlm_timeout))
     brain = Brain(client, env, tracker)
     timeline = Timeline(None if args.no_log else Path(args.log_dir))
-    rt = Runtime(robot, _make_camera(args), tracker, brain, safety, timeline, task=args.task)
+    speaker = mic = None
+    if args.voice:
+        from go2agent.audio.mic import Microphone
+        from go2agent.audio.speaker import Speaker
+
+        voice_base = f"http://{args.server}:{SERVICES_PORT}"
+        speaker = Speaker(f"{voice_base}/tts", device=_device(args.speaker_device))
+    rt = Runtime(
+        robot,
+        _make_camera(args),
+        tracker,
+        brain,
+        safety,
+        timeline,
+        task=args.task,
+        speaker=speaker.say if speaker else None,
+    )
+    if args.voice:
+        mic = Microphone(
+            f"{voice_base}/asr", rt.hear, device=_device(args.mic_device), muted=lambda: speaker.playing
+        )
 
     server = uvicorn.Server(
         uvicorn.Config(create_app(rt), host=args.api_host, port=args.api_port, log_level="warning")
     )
     await rt.start()
+    if mic:
+        mic.start()
     log.info("api on http://%s:%d", args.api_host, args.api_port)
     try:
         await server.serve()
     finally:
+        if mic:
+            await mic.close()
+        if speaker:
+            await speaker.close()
         await rt.stop()
+
+
+def _device(spec: str | None) -> str | int | None:
+    """Audio device by index or name substring."""
+    if spec is None or not spec.isdigit():
+        return spec
+    return int(spec)
 
 
 async def _replay(args: argparse.Namespace) -> None:
@@ -140,6 +173,14 @@ def main() -> None:
     run.add_argument("--camera-rotation", type=int, default=0, choices=[0, 90, 180, 270])
     run.add_argument("--perception-url", help=f"override, default ws://SERVER:{SERVICES_PORT}/track")
     run.add_argument("--task", default="", help="initial task")
+    run.add_argument(
+        "--voice",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="microphone + speaker via the GPU server's ASR/TTS",
+    )
+    run.add_argument("--mic-device", help="input device index or name")
+    run.add_argument("--speaker-device", help="output device index or name")
     run.add_argument("--api-host", default="0.0.0.0")
     run.add_argument("--api-port", type=int, default=8080)
     run.add_argument("--log-dir", default="runs")
