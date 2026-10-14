@@ -121,6 +121,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             command.add_argument("--vlm-gpu-util", type=float, default=0.75)
             command.add_argument("--vlm-port", type=int, default=8001, help="internal vLLM port")
+            command.add_argument(
+                "--vlm-arg",
+                action="append",
+                default=[],
+                metavar="ARG",
+                help="extra 'vllm serve' argument, repeatable: --vlm-arg=--enforce-eager",
+            )
             command.add_argument("--no-vlm", action="store_true", help="do not offer the VLM lifecycle")
     mc = subparsers.add_parser("model", help="load / unload / status of the VLM on a running server")
     mc.add_argument("action", choices=("status", "load", "unload"))
@@ -146,7 +153,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             if "/" not in vlm_model:
                 vlm_model = in_models(md, f"Qwen3-VL/{vlm_model}", f"Qwen/{vlm_model}")
             config = models.VLLMConfig(
-                model=vlm_model, port=args.vlm_port, gpu_memory_utilization=args.vlm_gpu_util
+                model=vlm_model,
+                port=args.vlm_port,
+                gpu_memory_utilization=args.vlm_gpu_util,
+                extra_args=tuple(args.vlm_arg),
             )
             vlm = models.VLLMManager(config, Path("logs/vllm.log"))
         app = create_all_app(
