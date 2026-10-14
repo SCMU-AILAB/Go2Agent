@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 import time
+from contextlib import suppress
 
 import cv2
 from websockets.asyncio.client import ClientConnection, connect
@@ -74,11 +75,9 @@ class RemoteTracker(Tracker):
             self._pending = frame
         loop = self._loop
         if loop is not None and not loop.is_closed():
-            try:
+            # The loop can close concurrently with a camera's final submit.
+            with suppress(RuntimeError):
                 loop.call_soon_threadsafe(self._pending_ready.set)
-            except RuntimeError:
-                # The loop can close concurrently with a camera's final submit.
-                pass
 
     def latest(self) -> Tracks | None:
         return self._latest
@@ -137,10 +136,8 @@ class RemoteTracker(Tracker):
             await self._pending_ready.wait()
             if self._inflight is not None:
                 remaining = max(0.0, 1.0 - (time.monotonic() - self._inflight[1]))
-                try:
+                with suppress(TimeoutError):
                     await asyncio.wait_for(self._ack.wait(), timeout=remaining)
-                except TimeoutError:
-                    pass
             with self._pending_lock:
                 frame, self._pending = self._pending, None
                 self._pending_ready.clear()

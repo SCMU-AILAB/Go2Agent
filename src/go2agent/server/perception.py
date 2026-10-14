@@ -6,12 +6,14 @@ import asyncio
 import json
 import logging
 import math
+import threading
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+import anyio
 import cv2
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -20,6 +22,7 @@ from go2agent.core.types import Box
 from go2agent.perception.protocol import AddBox, AddBoxResult, FrameHeader, TrackMsg, TracksMsg
 
 logger = logging.getLogger(__name__)
+_yolo_lock = threading.Lock()
 
 
 class Detector(Protocol):
@@ -39,7 +42,7 @@ def select_device() -> str:
 
 
 class YoloDetector:
-    """Own a YOLO model and its persistent ByteTrack state for one connection."""
+    """Own a model and ByteTrack state; serialize YOLO's shared ID allocator."""
 
     def __init__(self, model: str, classes: Sequence[str], device: str | None = None) -> None:
         from ultralytics import YOLO
@@ -49,12 +52,25 @@ class YoloDetector:
         if unknown:
             raise ValueError(f"Unknown model classes: {', '.join(sorted(unknown))}")
         self._device = device or select_device()
+        self._track_counter = 0
 
     def track(self, bgr: np.ndarray) -> Sequence[TrackMsg]:
+        from ultralytics.trackers.basetrack import BaseTrack
+
         # Keep all classes available for AddBox matching; filter only the public output.
-        result = self._model.track(
-            bgr, persist=True, tracker="bytetrack.yaml", device=self._device, verbose=False
-        )[0]
+        # ByteTrack resets a process-global counter when a new tracker starts.
+        # Preserve it per connection so another client's first frame cannot reuse
+        # IDs already assigned in this connection.
+        with _yolo_lock:
+            previous_counter = BaseTrack._count
+            BaseTrack._count = self._track_counter
+            try:
+                result = self._model.track(
+                    bgr, persist=True, tracker="bytetrack.yaml", device=self._device, verbose=False
+                )[0]
+            finally:
+                self._track_counter = BaseTrack._count
+                BaseTrack._count = previous_counter
         boxes = result.boxes
         if boxes is None or boxes.id is None:
             return []
@@ -76,9 +92,7 @@ class YoloDetector:
 
 
 def _iou(a: Box, b: Box) -> float:
-    overlap = max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(
-        0.0, min(a[3], b[3]) - max(a[1], b[1])
-    )
+    overlap = max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
     union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - overlap
     return overlap / union if union > 0 else 0.0
 
@@ -166,7 +180,9 @@ class _TrackingState:
                     ok, (x, y, width, height) = manual.tracker.update(bgr)
                     if ok and width > 0 and height > 0:
                         h, w = bgr.shape[:2]
-                        box = tuple(max(0.0, min(1.0, v)) for v in (x / w, y / h, (x + width) / w, (y + height) / h))
+                        box = tuple(
+                            max(0.0, min(1.0, v)) for v in (x / w, y / h, (x + width) / w, (y + height) / h)
+                        )
                         manual.item = manual.item.model_copy(update={"box": box, "score": 0.5})
                         manual.last_seen = now
                 except cv2.error:
@@ -220,7 +236,9 @@ class _Session:
                     header = FrameHeader.model_validate(payload)
                 elif payload.get("type") == "add_box":
                     request = AddBox.model_validate(payload)
-                    image = next((bgr for h, bgr in reversed(self.recent) if h.seq == request.frame_seq), None)
+                    image = next(
+                        (bgr for h, bgr in reversed(self.recent) if h.seq == request.frame_seq), None
+                    )
                     self.commands.append((request, image))
                     self.ready.set()
                 else:
@@ -267,7 +285,9 @@ class _Session:
         finally:
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # Starlette may cancel the entire request scope during disconnect.
+            with anyio.CancelScope(shield=True):
+                await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def create_app(
