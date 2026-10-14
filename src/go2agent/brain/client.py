@@ -13,7 +13,7 @@ import httpx
 @dataclass(frozen=True, slots=True)
 class VLMConfig:
     base_url: str = "http://127.0.0.1:8000/v1"
-    model: str = "Qwen/Qwen3-VL-8B-Instruct-AWQ"
+    model: str = "brain"  # served-model-name, see deploy/gpu-server/serve-vlm.sh
     api_key: str = "EMPTY"
     timeout: float = 3.0
     max_tokens: int = 300
