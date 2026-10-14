@@ -107,6 +107,19 @@ async def _replay(args: argparse.Namespace) -> None:
         await client.close()
 
 
+async def _eval(args: argparse.Namespace) -> None:
+    from go2agent.brain.evaluate import run_cases, summarize
+
+    actions = tuple(a for a in GO2_ACTIONS if args.allow_dangerous or "dangerous" not in a.tags)
+    client = VLMClient(VLMConfig(base_url=_vlm_url(args), model=args.model, timeout=args.vlm_timeout))
+    prompt = system_message(actions) if args.current_prompt else None
+    try:
+        results = await run_cases(Path(args.cases), client, decision_json_schema(actions), prompt)
+    finally:
+        await client.close()
+    print(summarize(results))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="go2agent")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -138,9 +151,14 @@ def main() -> None:
     rp.add_argument("-n", type=int, default=1, help="repeat to measure latency / variance")
     rp.add_argument("--current-prompt", action="store_true", help="swap in the current system prompt")
 
+    ev = sub.add_parser("eval", help="score the brain on labeled recorded thinks")
+    common(ev)
+    ev.add_argument("cases", help="cases.jsonl, see go2agent.brain.evaluate")
+    ev.add_argument("--current-prompt", action="store_true", help="swap in the current system prompt")
+
     args = p.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    asyncio.run(_run(args) if args.cmd == "run" else _replay(args))
+    asyncio.run({"run": _run, "replay": _replay, "eval": _eval}[args.cmd](args))
