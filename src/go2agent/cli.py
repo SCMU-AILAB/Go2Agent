@@ -102,7 +102,11 @@ async def _run(args: argparse.Namespace) -> None:
     )
     await rt.start()
     if mic:
-        mic.start()
+        try:
+            mic.start()
+        except Exception as e:  # voice is optional: the agent keeps running without it
+            log.warning("microphone unavailable, continuing without voice input: %s", e)
+            mic = None
     log.info("api on http://%s:%d", args.api_host, args.api_port)
     try:
         await server.serve()
