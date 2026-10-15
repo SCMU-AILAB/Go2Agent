@@ -19,3 +19,10 @@ frontend/**/.build/
 .codex/
 .DS_Store
 .codex-tasks/
+
+# Never commit tool state or generated build trees (a Chrome profile with cookies once slipped in)
+.workbuddy/
+.dart_tool/
+frontend/ios/Flutter/
+frontend/macos/Flutter/
+frontend/ios/Runner/GeneratedPluginRegistrant.*
