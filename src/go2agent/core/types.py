@@ -76,6 +76,22 @@ class ActionSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class Obstacles:
+    """Clearance in meters from the body edge to the nearest obstacle, per direction of travel.
+
+    Each value covers a corridor as wide (front/back) or as long (left/right) as the body plus a margin,
+    so it answers "how far can the robot move this way". `math.inf` = nothing seen within range.
+    `stamp` is time.monotonic() of the measurement.
+    """
+
+    stamp: float
+    front: float
+    left: float
+    back: float
+    right: float
+
+
+@dataclass(frozen=True, slots=True)
 class RobotState:
     stamp: float
     connected: bool

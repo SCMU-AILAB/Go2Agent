@@ -8,12 +8,15 @@ import math
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from go2agent.core.types import ActionSpec, RobotState, Velocity
+import numpy as np
+
+from go2agent.core.types import ActionSpec, Obstacles, RobotState, Velocity
 from go2agent.robot.base import Robot
 from go2agent.robot.go2_actions import GO2_ACTIONS
+from go2agent.robot.heightmap import HeightMapConfig, clearances
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ class Go2Config:
     timeout_s: float = 0.2
     command_timeout_s: float = 0.5
     telemetry_timeout_s: float = 2.0
+    heightmap: HeightMapConfig = field(default_factory=HeightMapConfig)
 
     def __post_init__(self) -> None:
         if type(self.domain_id) is not int or self.domain_id < 0:
@@ -56,6 +60,10 @@ class Go2Config:
                 raise ValueError("Timeouts must be positive and finite")
 
 
+Callback = Callable[[Any], None]
+ObstacleSubscribers = Callable[[Callback, Callback], list[Any]]
+
+
 @dataclass(frozen=True, slots=True)
 class Go2Bindings:
     """Inject SDK factories for tests; one driver owns the process-wide DDS channel."""
@@ -63,6 +71,8 @@ class Go2Bindings:
     channel: Any
     create_sport_client: Callable[[], Any]
     create_state_subscriber: Callable[[Callable[[Any], None]], Any]
+    # (on_height_map, on_pose) -> subscribers, or None when the robot has no LiDAR height map
+    create_obstacle_subscribers: ObstacleSubscribers | None = None
 
 
 class Go2Robot(Robot):
@@ -104,6 +114,9 @@ class Go2Robot(Robot):
         self._action_running = False
         self._busy_until = 0.0
         self._last_error: str | None = None
+        self._obstacle_subs: list[Any] = []
+        self._pose: tuple[float, float, float] | None = None  # LiDAR odometry x, y, yaw
+        self._obstacles: Obstacles | None = None
         self._command_refusal: str | None = None
 
     def connect(self) -> None:
@@ -111,6 +124,7 @@ class Go2Robot(Robot):
             return
         bindings = self._bindings or self._load_bindings()
         subscriber = None
+        obstacle_subs: list[Any] = []
         initialized = False
         try:
             bindings.channel.initialize(self.config.domain_id, self.config.network_interface)
@@ -123,16 +137,22 @@ class Go2Robot(Robot):
                 self._telemetry_stamp = None
             subscriber = bindings.create_state_subscriber(self._on_state)
             subscriber.init_channel()
+            if bindings.create_obstacle_subscribers is not None:
+                obstacle_subs = bindings.create_obstacle_subscribers(self._on_height_map, self._on_pose)
+                for sub in obstacle_subs:
+                    sub.init_channel()
         except Exception:
             try:
-                if subscriber is not None:
-                    subscriber.close_channel()
+                for sub in [subscriber, *obstacle_subs]:
+                    if sub is not None:
+                        sub.close_channel()
             finally:
                 if initialized:
                     bindings.channel.release()
             raise
         with self._condition:
             self._bindings, self._client, self._subscriber = bindings, client, subscriber
+            self._obstacle_subs = obstacle_subs
             self._closing = False
             self._stopped = self._zero_velocity = False
             self._stop_pending = self._moving = self._action_running = False
@@ -155,8 +175,9 @@ class Go2Robot(Robot):
             if self._worker.is_alive():
                 raise TimeoutError("Go2 SDK call did not finish; DDS remains open until the worker stops")
         try:
-            if self._subscriber is not None:
-                self._subscriber.close_channel()
+            for sub in [self._subscriber, *self._obstacle_subs]:
+                if sub is not None:
+                    sub.close_channel()
         finally:
             try:
                 if self._bindings is not None:
@@ -164,6 +185,7 @@ class Go2Robot(Robot):
             finally:
                 with self._condition:
                     self._client = self._subscriber = self._worker = None
+                    self._obstacle_subs = []
 
     def velocity(self, cmd: Velocity) -> None:
         if not all(math.isfinite(v) for v in (cmd.vx, cmd.vy, cmd.wz)):
@@ -222,6 +244,34 @@ class Go2Robot(Robot):
 
     def actions(self) -> tuple[ActionSpec, ...]:
         return GO2_ACTIONS
+
+    def obstacles(self) -> Obstacles | None:
+        with self._condition:
+            return self._obstacles
+
+    def _on_pose(self, message: Any) -> None:
+        try:
+            p, q = message.pose.position, message.pose.orientation
+            yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+            with self._condition:
+                self._pose = (float(p.x), float(p.y), yaw)
+        except Exception:
+            logger.exception("Could not read Go2 LiDAR pose")
+
+    def _on_height_map(self, message: Any) -> None:
+        try:
+            with self._condition:
+                pose = self._pose
+            if pose is None:
+                return
+            data = np.asarray(message.data, dtype=np.float32).reshape(message.height, message.width)
+            origin = (float(message.origin[0]), float(message.origin[1]))
+            stamp = self._clock()
+            result = clearances(data, float(message.resolution), origin, pose, stamp, self.config.heightmap)
+            with self._condition:
+                self._obstacles = result
+        except Exception:
+            logger.exception("Could not process Go2 height map")
 
     def state(self) -> RobotState:
         with self._condition:
@@ -344,10 +394,20 @@ class Go2Robot(Robot):
             raise RuntimeError(
                 "Install unitree_sdk2_bindings on Linux for the robot's Python interpreter"
             ) from exc
+        ros2 = importlib.import_module("unitree_sdk2_cpp.idl.ros2")
+
+        def obstacle_subscribers(on_height_map: Callback, on_pose: Callback) -> list[Any]:
+            sub = channel.ChannelSubscriber
+            return [
+                sub("rt/utlidar/robot_pose", ros2.PoseStamped, on_pose, queue_length=1),
+                sub("rt/utlidar/height_map_array", idl.HeightMap, on_height_map, queue_length=1),
+            ]
+
         return Go2Bindings(
             channel,
             go2.SportClient,
             lambda callback: channel.ChannelSubscriber(
                 "rt/sportmodestate", idl.SportModeState, callback, queue_length=1
             ),
+            obstacle_subscribers,
         )

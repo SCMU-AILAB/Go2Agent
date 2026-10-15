@@ -9,7 +9,7 @@ from typing import Any
 from go2agent.behaviors.geometry import CameraModel, bearing, distance
 from go2agent.behaviors.primitives import BEHAVIORS
 from go2agent.brain.marks import data_url, draw_marks, jpeg_bytes, resize_long_side
-from go2agent.core.types import ActionSpec, Event, Frame, RobotState, Tracks
+from go2agent.core.types import ActionSpec, Event, Frame, Obstacles, RobotState, Tracks
 
 SYSTEM_PROMPT = """你是一只四足机器狗的大脑。你通过相机持续观察周围，根据「任务」决定接下来做什么。
 
@@ -66,6 +66,7 @@ class Observation:
     frames: tuple[Frame, ...]  # oldest -> newest; newest gets marks
     tracks: Tracks | None
     robot: RobotState
+    obstacles: Obstacles | None = None
     history: tuple[str, ...] = ()  # short summaries of previous decisions, oldest first
     rejection: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
@@ -107,6 +108,15 @@ def observation_text(obs: Observation, cam: CameraModel) -> str:
         f"机器人：{'执行原生动作中' if obs.robot.busy else '就绪'}"
         + ("" if obs.robot.connected else "（未连接）"),
     ]
+    if obs.obstacles is not None:
+        o = obs.obstacles
+
+        def fmt(v: float) -> str:
+            return ">2.5m" if math.isinf(v) else f"{v:.1f}m"
+
+        parts.append(
+            f"周围净空（雷达，离车身边缘）：前{fmt(o.front)} 左{fmt(o.left)} 后{fmt(o.back)} 右{fmt(o.right)}"
+        )
     if obs.recent_events:
         parts.append("最近事件：\n" + "\n".join("  " + _event_line(obs.now, e) for e in obs.recent_events))
     if obs.history:

@@ -306,6 +306,7 @@ class Runtime:
             frames=self._keyframes(tracks),
             tracks=tracks,
             robot=self.robot.state(),
+            obstacles=self.robot.obstacles(),
             history=tuple(self._history),
             rejection=self._rejection,
         )

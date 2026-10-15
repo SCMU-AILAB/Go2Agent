@@ -1,9 +1,13 @@
 """Exercise the real driver with a fake SportClient and DDS subscription."""
 
+import math
 import threading
 import time
+from collections.abc import Callable
 from types import SimpleNamespace
+from typing import Any
 
+import numpy as np
 import pytest
 
 from go2agent.core.types import Velocity
@@ -305,3 +309,44 @@ def test_subscription_failure_cleans_up_channel():
         robot.connect()
     assert cleanup == ["close", "release"]
     assert not robot.state().connected
+
+
+def test_lidar_height_map_and_pose_become_obstacle_clearances(clock):
+    lifecycle: list[object] = []
+    channel = SimpleNamespace(initialize=lambda *_: None, release=lambda: lifecycle.append("release"))
+    handlers: dict[str, Callable[[Any], None]] = {}
+
+    def state_subscriber(callback):
+        return SimpleNamespace(init_channel=lambda: callback(telemetry()), close_channel=lambda: None)
+
+    def obstacle_subscribers(on_height_map, on_pose):
+        handlers.update(height_map=on_height_map, pose=on_pose)
+        return [
+            SimpleNamespace(init_channel=lambda: None, close_channel=lambda: lifecycle.append("obstacles"))
+        ]
+
+    bindings = Go2Bindings(channel, FakeClient, state_subscriber, obstacle_subscribers)
+    robot = Go2Robot(bindings=bindings, clock=clock)
+    robot.connect()
+    try:
+        assert robot.obstacles() is None
+        grid = np.full((100, 100), -0.03, np.float32)
+        grid[63:67, 48:52] = 0.4  # map x ~= 0.8..1.0, y ~= -0.1..0.1
+        height_map = SimpleNamespace(
+            data=grid.ravel().tolist(), width=100, height=100, resolution=0.06, origin=[-3.0, -3.0]
+        )
+        handlers["height_map"](height_map)
+        assert robot.obstacles() is None  # no pose yet: cannot place the map relative to the body
+        pose = SimpleNamespace(
+            pose=SimpleNamespace(
+                position=SimpleNamespace(x=0.0, y=0.0, z=0.3), orientation=SimpleNamespace(x=0, y=0, z=0, w=1)
+            )
+        )
+        handlers["pose"](pose)
+        handlers["height_map"](height_map)
+        obstacles = robot.obstacles()
+        assert obstacles is not None and obstacles.stamp == clock()
+        assert 0.3 < obstacles.front < 0.6 and math.isinf(obstacles.back)
+    finally:
+        robot.close()
+    assert "obstacles" in lifecycle

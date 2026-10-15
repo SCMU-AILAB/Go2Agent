@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from go2agent.core.types import ActionSpec, Event, EventKind, Frame, Velocity
+from go2agent.core.types import ActionSpec, Event, EventKind, Frame, Obstacles, Velocity
 from go2agent.robot.base import Robot
 
 log = logging.getLogger(__name__)
@@ -26,7 +26,15 @@ class SafetyConfig:
     max_back_vx: float = 0.3
     max_vy: float = 0.3
     max_wz: float = 0.8
-    obstacle_distance: float = 0.4  # m; forward motion blocked below this
+    obstacle_distance: float = 0.4  # m; camera depth: forward motion blocked below this
+    # Obstacle clearances from the robot (LiDAR height map), measured from the body edge:
+    stop_front: float = 0.25  # m; no forward motion below this
+    stop_back: float = 0.20
+    stop_side: float = 0.15
+    slow_gain: float = 1.0  # allowed speed toward an obstacle = gain * (clearance - stop), m/s per m
+    obstacle_timeout: float = (
+        0.5  # s; older clearances block all translation (turning in place stays allowed)
+    )
     frame_timeout: float = 0.5  # s; all motion stops when the newest frame is older
     watchdog_timeout: float = 0.2  # s; robot stopped if the loop stops calling apply()
     allow_dangerous: bool = False
@@ -49,6 +57,37 @@ def front_distance(depth: np.ndarray) -> float | None:
     return float(np.percentile(valid, 5))
 
 
+def _stop(direction: str, c: SafetyConfig) -> float:
+    return {"front": c.stop_front, "back": c.stop_back}.get(direction, c.stop_side)
+
+
+def limit_by_clearance(
+    vx: float, vy: float, obs: Obstacles, c: SafetyConfig
+) -> tuple[float, float, dict[str, float]]:
+    """Slow, then stop, each velocity component that heads toward a close obstacle.
+
+    Returns the limited (vx, vy) and {direction: clearance} for every component that was reduced.
+    """
+    limited: dict[str, float] = {}
+
+    def cap(speed: float, direction: str, clearance: float) -> float:
+        allowed = max(0.0, c.slow_gain * (clearance - _stop(direction, c)))
+        if speed > allowed:
+            limited[direction] = clearance
+            return allowed
+        return speed
+
+    if vx > 0:
+        vx = cap(vx, "front", obs.front)
+    elif vx < 0:
+        vx = -cap(-vx, "back", obs.back)
+    if vy > 0:
+        vy = cap(vy, "left", obs.left)
+    elif vy < 0:
+        vy = -cap(-vy, "right", obs.right)
+    return vx, vy, limited
+
+
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
@@ -64,7 +103,7 @@ class SafetyGate:
         self._estopped = False
         self._last_apply = clock()
         self._moving = False
-        self._obstacle = False
+        self._blocked: set[str] = set()  # directions currently blocked by an obstacle
         self._watchdog: threading.Thread | None = None
         self._watchdog_stop = threading.Event()
 
@@ -107,16 +146,29 @@ class SafetyGate:
                 wz = _clamp(cmd.wz, -c.max_wz, c.max_wz)
                 if (vx, vy, wz) != (cmd.vx, cmd.vy, cmd.wz):
                     reasons.append("speed_limit")
+                blocked: dict[str, float] = {}
                 if frame.depth is not None and vx > 0:
                     dist = front_distance(frame.depth)
-                    blocked = False
                     if dist is not None and dist < c.obstacle_distance:
-                        blocked = True
                         vx = 0.0
-                        reasons.append("obstacle")
-                        if not self._obstacle:
-                            events.append(Event(EventKind.OBSTACLE_CLOSE, now, {"distance": round(dist, 2)}))
-                    self._obstacle = blocked
+                        blocked["front"] = dist
+                obs = self.robot.obstacles()
+                if obs is not None and (vx or vy):
+                    if now - obs.stamp > c.obstacle_timeout:
+                        vx = vy = 0.0
+                        reasons.append("obstacle_sensor_stale")
+                    else:
+                        vx, vy, limited = limit_by_clearance(vx, vy, obs, c)
+                        if limited:
+                            reasons.append("obstacle_slowdown")
+                        blocked.update({k: v for k, v in limited.items() if v <= _stop(k, c)})
+                if blocked:
+                    reasons.append("obstacle")
+                for direction, dist in blocked.items():
+                    if direction not in self._blocked:
+                        data = {"direction": direction, "distance": round(dist, 2)}
+                        events.append(Event(EventKind.OBSTACLE_CLOSE, now, data))
+                self._blocked = set(blocked)
                 out = Velocity(vx, vy, wz)
             send = not out.is_zero or self._moving
             self._moving = not out.is_zero

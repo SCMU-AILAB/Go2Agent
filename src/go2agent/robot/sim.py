@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from go2agent.core.types import ActionSpec, RobotState, Velocity
+from go2agent.core.types import ActionSpec, Obstacles, RobotState, Velocity
 from go2agent.robot.base import Robot
 from go2agent.robot.go2_actions import GO2_ACTIONS
 
@@ -23,6 +23,7 @@ class SimRobot(Robot):
         self.x = self.y = self.yaw = 0.0
         self.cmd = Velocity()
         self.performed: list[str] = []
+        self.sim_obstacles: Obstacles | None = None  # set by tests / scenarios; None = no sensing
         self._cmd_stamp = 0.0
         self._last_step = 0.0
         self._busy_until = 0.0
@@ -78,6 +79,9 @@ class SimRobot(Robot):
 
     def actions(self) -> tuple[ActionSpec, ...]:
         return self._actions
+
+    def obstacles(self) -> Obstacles | None:
+        return self.sim_obstacles
 
     def _step(self) -> None:
         now = self._clock()

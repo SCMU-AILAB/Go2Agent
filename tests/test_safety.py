@@ -1,6 +1,8 @@
+import math
+
 from conftest import make_frame
 
-from go2agent.core.types import EventKind, Velocity
+from go2agent.core.types import EventKind, Obstacles, Velocity
 from go2agent.robot.sim import SimRobot
 from go2agent.safety import SafetyConfig, SafetyGate
 
@@ -94,3 +96,26 @@ def test_perform_refused_when_robot_busy_or_disconnected(clock):
     robot.connected = False
     clock.advance(3.1)
     assert g.perform("hello") == "robot_not_connected"
+
+
+def test_lidar_slows_then_stops_forward_and_allows_other_directions(clock):
+    robot, g = gate(clock)
+    f = make_frame(clock())
+    robot.sim_obstacles = Obstacles(clock(), front=0.45, left=math.inf, back=math.inf, right=0.10)
+    r = g.apply(Velocity(0.5, 0.0, 0.3), f)
+    assert abs(r.applied.vx - 0.2) < 1e-9 and r.applied.wz == 0.3  # 1.0 * (0.45 - 0.25)
+    assert "obstacle_slowdown" in r.reasons and "obstacle" not in r.reasons
+    robot.sim_obstacles = Obstacles(clock(), front=0.2, left=math.inf, back=math.inf, right=0.10)
+    r = g.apply(Velocity(0.5, -0.2, 0.0), f)
+    assert r.applied == Velocity(0.0, 0.0, 0.0) and "obstacle" in r.reasons
+    assert sorted(e.data["direction"] for e in r.events) == ["front", "right"]
+    assert g.apply(Velocity(0.5, -0.2, 0.0), f).events == ()  # reported once while blocked
+    assert g.apply(Velocity(-0.2, 0.2, 0.0), f).applied == Velocity(-0.2, 0.2, 0.0)
+
+
+def test_stale_obstacle_sensing_blocks_translation_not_turning(clock):
+    robot, g = gate(clock)
+    robot.sim_obstacles = Obstacles(clock(), math.inf, math.inf, math.inf, math.inf)
+    clock.advance(0.6)
+    r = g.apply(Velocity(0.3, 0.1, 0.4), make_frame(clock()))
+    assert r.applied == Velocity(0.0, 0.0, 0.4) and "obstacle_sensor_stale" in r.reasons

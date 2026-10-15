@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from go2agent.core.types import ActionSpec, RobotState, Velocity
+from go2agent.core.types import ActionSpec, Obstacles, RobotState, Velocity
 
 
 class Robot(ABC):
@@ -39,3 +39,10 @@ class Robot(ABC):
     @abstractmethod
     def actions(self) -> tuple[ActionSpec, ...]:
         """Native actions this robot supports."""
+
+    def obstacles(self) -> Obstacles | None:
+        """Latest obstacle clearances, or None if this robot has no obstacle sensing (e.g. no LiDAR).
+
+        A robot that has sensing must keep returning its last measurement even when it gets old; the
+        SafetyGate decides what a stale measurement means."""
+        return None
