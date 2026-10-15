@@ -26,12 +26,17 @@ class RemoteTracker(Tracker):
     cannot make an old observation look fresh. Reconnection clears old track IDs.
     """
 
-    def __init__(self, url: str, *, jpeg_quality: int = 80, max_side: int | None = 640) -> None:
+    def __init__(
+        self, url: str, *, jpeg_quality: int = 80, max_side: int | None = 640, stale_s: float = 1.0
+    ) -> None:
+        """`stale_s`: results older than this make the tracker unhealthy. Over WiFi a single slow upload
+        regularly takes >0.5 s, which made target behaviors fail spuriously."""
         if not 1 <= jpeg_quality <= 100:
             raise ValueError("jpeg_quality must be between 1 and 100")
         if max_side is not None and max_side <= 0:
             raise ValueError("max_side must be positive or None")
         self.url = url
+        self.stale_s = stale_s
         self.jpeg_quality = jpeg_quality
         self.max_side = max_side
         self._pending: Frame | None = None
@@ -89,8 +94,8 @@ class RemoteTracker(Tracker):
         return (
             self._socket is not None
             and latest is not None
-            and now - self._received_at < 0.5
-            and now - latest.stamp < 0.5
+            and now - self._received_at < self.stale_s
+            and now - latest.stamp < self.stale_s
         )
 
     async def add_box(self, frame_seq: int, box: Box, label: str) -> int:

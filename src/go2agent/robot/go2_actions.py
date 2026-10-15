@@ -22,7 +22,9 @@ GO2_ACTIONS: tuple[ActionSpec, ...] = (
     ActionSpec("balance_stand", "Return to the normal balanced standing stance (站稳).", 1.0, _POSTURE),
     ActionSpec("sit", "Sit on the hind legs (坐下). Get up again with rise_sit.", 2.0, _POSTURE),
     ActionSpec("rise_sit", "Get up from sitting back to standing (从坐姿起身).", 2.0, _POSTURE),
-    ActionSpec("hello", "Lift a front paw and wave (打招呼/挥手/你好). The greeting action.", 3.0),
+    ActionSpec(
+        "hello", "Lift a front paw and wave (打招呼/挥手/你好). The greeting action.", 5.0
+    ),  # measured 4.7 s
     ActionSpec("stretch", "Stretch like waking up (伸懒腰).", 4.0),
     ActionSpec("content", "Happy/content expression (开心/高兴).", 3.0),
     ActionSpec("heart", "Make a heart gesture with the front paws (比心).", 3.0),

@@ -96,6 +96,7 @@ class RobotState:
     stamp: float
     connected: bool
     busy: bool = False  # a native action is running
+    action_error: str | None = None  # why the most recent native action failed; cleared when one starts
     details: dict[str, Any] = field(default_factory=dict)
 
 

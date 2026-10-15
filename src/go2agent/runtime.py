@@ -34,7 +34,8 @@ _TASKLESS_TRIGGERS = frozenset({EventKind.TASK, EventKind.USER_SPEECH})
 class RuntimeConfig:
     control_hz: float = 20.0
     periodic_s: float = 4.0  # re-check interval while a behavior runs
-    idle_watch_s: float = 1.5  # look interval while idle with a task and someone in view
+    idle_watch_s: float = 0.0  # look interval while idle with a task and someone in view (0 = back to back)
+    service_debounce_s: float = 1.0  # a service health change is reported once it has lasted this long
     keyframes: int = 3
     keyframe_spacing_s: float = 0.7
     track_lost_s: float = 1.5  # id unseen this long -> TRACK_LOST
@@ -75,6 +76,7 @@ class Runtime:
         self._seen: dict[int, tuple[str, float]] = {}  # track id -> (label, last seen)
         self._tracks_seq = -1
         self._tracker_healthy: bool | None = None
+        self._health_since: float | None = None
         self._events: deque[Event] = deque(maxlen=64)
         self._pending: list[Event] = []
         self._wake = asyncio.Event()
@@ -213,9 +215,7 @@ class Runtime:
             self.tracker.submit(frame)
         tracks = self.tracker.latest()
         healthy = self.tracker.healthy
-        if healthy != self._tracker_healthy:
-            self._tracker_healthy = healthy
-            self.emit(Event(EventKind.SERVICE, now, {"service": "perception", "ok": healthy}))
+        self._report_health(healthy, now)
         self._update_tracks(tracks, now)
 
         out = self.executor.tick(Tick(now, frame, tracks, healthy, self.robot.state()))
@@ -226,6 +226,18 @@ class Runtime:
             self._behavior_since = None
         elif self._behavior_since is None:
             self._behavior_since = now
+
+    def _report_health(self, healthy: bool, now: float) -> None:
+        """Emit perception health changes once they persist (a slow frame must not flood the timeline)."""
+        if healthy == self._tracker_healthy:
+            self._health_since = None
+            return
+        if self._health_since is None:
+            self._health_since = now
+        if self._tracker_healthy is None or now - self._health_since >= self.config.service_debounce_s:
+            self._tracker_healthy = healthy
+            self._health_since = None
+            self.emit(Event(EventKind.SERVICE, now, {"service": "perception", "ok": healthy}))
 
     def _update_tracks(self, tracks: Tracks | None, now: float) -> None:
         if tracks is None or tracks.frame_seq == self._tracks_seq:

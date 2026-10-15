@@ -80,7 +80,7 @@ async def test_client_with_real_app_and_add_box():
             return [TrackMsg(id=10, label="person", box=(0.1, 0.1, 0.5, 0.9), score=0.9)]
 
     async with fastapi_server(create_app(detector_factory=Detector)) as url:
-        tracker = RemoteTracker(url)
+        tracker = RemoteTracker(url, stale_s=0.5)
         assert not tracker.healthy and tracker.latest() is None
         tracker.submit(frame(1))
         await tracker.start()

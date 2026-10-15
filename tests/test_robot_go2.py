@@ -40,12 +40,18 @@ class FakeClient:
         self.block = None
         self.entered, self.release = threading.Event(), threading.Event()
         self.status = {}
+        self.errors: dict[str, Exception] = {}
+        self.timeouts: list[float] = []
+        self.initialized = 0
+        self.started_at: dict[str, float] = {}
+        self.finished_at: dict[str, float] = {}
 
     def set_timeout(self, timeout):
         self.timeout = timeout
+        self.timeouts.append(timeout)
 
     def init(self):
-        pass
+        self.initialized += 1
 
     def __getattr__(self, method):
         if method not in {*ACTION_METHODS.values(), "move", "stop_move"}:
@@ -53,9 +59,13 @@ class FakeClient:
 
         def call(*args):
             self.calls.append((method, args, threading.get_ident()))
+            self.started_at[method] = time.monotonic()
             if self.block == method:
                 self.entered.set()
                 assert self.release.wait(3)
+            self.finished_at[method] = time.monotonic()
+            if method in self.errors:
+                raise self.errors[method]
             return self.status.get(method, 0)
 
         return call
@@ -66,7 +76,7 @@ class FakeClient:
 
 @pytest.fixture
 def rig(clock):
-    client, lifecycle = FakeClient(), []
+    client, action_client, lifecycle = FakeClient(), FakeClient(), []
     channel = SimpleNamespace(
         initialize=lambda domain, interface: lifecycle.append(("initialize", domain, interface)),
         release=lambda: lifecycle.append("release"),
@@ -78,17 +88,23 @@ def rig(clock):
             close_channel=lambda: lifecycle.append("close_channel"),
         )
 
-    robot = Go2Robot(bindings=Go2Bindings(channel, lambda: client, subscriber), clock=clock)
+    clients = iter((client, action_client))
+    robot = Go2Robot(bindings=Go2Bindings(channel, lambda: next(clients), subscriber), clock=clock)
     robot.connect()
-    yield robot, client, lifecycle
+    yield robot, client, action_client, lifecycle
     client.release.set()
+    action_client.release.set()
     robot.close()
 
 
 def test_telemetry_liveness_snapshot_and_lifecycle(rig, clock):
-    robot, client, lifecycle = rig
+    robot, client, action_client, lifecycle = rig
     assert lifecycle == [("initialize", 0, "eth0")]
     assert client.calls == [] and client.timeout == 0.2
+    assert client is not action_client
+    assert client.initialized == action_client.initialized == 1
+    robot.connect()
+    assert client.initialized == action_client.initialized == 1
     message = telemetry()
     robot._on_state(message)
     message.position[0] = 100
@@ -110,7 +126,7 @@ def test_telemetry_liveness_snapshot_and_lifecycle(rig, clock):
 
 
 def test_velocity_nonblocking_and_zero_sent_once(rig):
-    robot, client, _ = rig
+    robot, client, _, _ = rig
     robot.velocity(Velocity())
     robot.velocity(Velocity())
     eventually(lambda: client.count("stop_move") == 1 and not robot.state().details["stopping"])
@@ -132,14 +148,16 @@ def test_velocity_nonblocking_and_zero_sent_once(rig):
 
 @pytest.mark.parametrize("spec", GO2_ACTIONS, ids=lambda spec: spec.name)
 def test_every_catalog_action_maps_and_busy_lasts_for_duration(rig, clock, spec):
-    robot, client, _ = rig
+    robot, client, action_client, _ = rig
     assert set(ACTION_METHODS) == {action.name for action in GO2_ACTIONS}
     assert robot.actions() == GO2_ACTIONS
     started = time.monotonic()
     assert robot.perform(spec.name) is None
     assert time.monotonic() - started < 0.1
     assert robot.state().busy
-    eventually(lambda: client.count(ACTION_METHODS[spec.name]) == 1 and not robot._action_running)
+    eventually(lambda: action_client.count(ACTION_METHODS[spec.name]) == 1 and not robot._action_running)
+    assert client.timeouts == [0.2] and client.calls == []
+    assert action_client.timeout == spec.duration + robot.config.action_timeout_margin_s
     clock.advance(spec.duration - 0.01)
     assert robot.state().busy
     clock.advance(0.02)
@@ -147,10 +165,10 @@ def test_every_catalog_action_maps_and_busy_lasts_for_duration(rig, clock, spec)
 
 
 def test_busy_until_rpc_finishes_and_zero_does_not_cancel_action(rig, clock):
-    robot, client, _ = rig
-    client.block = "hello"
+    robot, client, action_client, _ = rig
+    action_client.block = "hello"
     robot.perform("hello")
-    assert client.entered.wait(1)
+    assert action_client.entered.wait(1)
     robot.velocity(Velocity())
     assert client.count("stop_move") == 0
     clock.advance(10)
@@ -158,13 +176,13 @@ def test_busy_until_rpc_finishes_and_zero_does_not_cancel_action(rig, clock):
     assert robot.state().busy
     assert "busy" in str(robot.perform("sit"))
     assert "busy" in robot.state().details["command_refusal"]
-    client.release.set()
+    action_client.release.set()
     eventually(lambda: not robot.state().busy)
-    assert client.count("sit") == 0
+    assert action_client.count("sit") == 0
 
 
 def test_stop_discards_pending_actions_and_follows_inflight_rpc(rig):
-    robot, client, _ = rig
+    robot, client, action_client, _ = rig
     client.block = "move"
     robot.velocity(Velocity(0.2))
     assert client.entered.wait(1)
@@ -176,12 +194,12 @@ def test_stop_discards_pending_actions_and_follows_inflight_rpc(rig):
     assert client.count("stop_move") == 0
     client.release.set()
     eventually(lambda: client.count("stop_move") == 1 and not robot.state().details["stopping"])
-    assert client.count("hello") == 0 and not robot.state().busy
+    assert action_client.count("hello") == 0 and not robot.state().busy
     assert [name for name, _, _ in client.calls] == ["move", "stop_move"]
 
 
 def test_zero_then_nonzero_during_stop_sends_stop_then_latest_move(rig):
-    robot, client, _ = rig
+    robot, client, _, _ = rig
     client.block = "stop_move"
     robot.velocity(Velocity())
     assert client.entered.wait(1)
@@ -204,12 +222,12 @@ def test_zero_then_nonzero_during_stop_sends_stop_then_latest_move(rig):
 
 @pytest.mark.parametrize("rpc_running", [True, False])
 def test_velocity_during_native_action_is_dropped_without_log_spam(rig, clock, caplog, rpc_running):
-    robot, client, _ = rig
-    client.block = "hello"
+    robot, client, action_client, _ = rig
+    action_client.block = "hello"
     robot.perform("hello")
-    assert client.entered.wait(1)
+    assert action_client.entered.wait(1)
     if not rpc_running:
-        client.release.set()
+        action_client.release.set()
         eventually(lambda: not robot._action_running)
     assert robot.state().busy
     with caplog.at_level("DEBUG", logger="go2agent.robot.go2"):
@@ -218,13 +236,14 @@ def test_velocity_during_native_action_is_dropped_without_log_spam(rig, clock, c
     assert "busy" in robot.state().details["command_refusal"]
     assert len(caplog.records) <= 1
     assert all(record.levelname == "DEBUG" for record in caplog.records)
-    client.release.set()
+    action_client.release.set()
     eventually(lambda: not robot._action_running)
-    clock.advance(3.1)
+    clock.advance(next(spec.duration for spec in GO2_ACTIONS if spec.name == "hello") + 0.1)
     robot._on_state(telemetry())
     assert not robot.state().busy
     assert robot._pending_velocity is None
-    assert [name for name, _, _ in client.calls] == ["hello"]
+    assert [name for name, _, _ in action_client.calls] == ["hello"]
+    assert client.calls == []
     robot.velocity(Velocity(0.1))
     eventually(lambda: client.count("move") == 1)
     assert client.calls[-1][1] == (0.1, 0.0, 0.0)
@@ -232,7 +251,7 @@ def test_velocity_during_native_action_is_dropped_without_log_spam(rig, clock, c
 
 
 def test_stale_velocity_and_action_are_dropped_without_replay(rig, clock):
-    robot, client, _ = rig
+    robot, client, _, _ = rig
     clock.advance(2.01)
     robot.velocity(Velocity(wz=0.2))
     robot.perform("hello")
@@ -256,33 +275,264 @@ def test_disconnected_commands_are_dropped():
 
 
 def test_unavailable_known_action_is_refused(rig):
-    robot, client, _ = rig
-    client.hello = None
+    robot, client, action_client, _ = rig
+    action_client.hello = None
     assert robot.perform("hello") is not None
     assert "do not provide hello" in robot.state().details["command_refusal"]
-    assert not robot.state().busy and not client.calls
+    assert not robot.state().busy and not client.calls and not action_client.calls
 
 
 def test_command_expiry_sends_stop_without_control_loop(rig, clock):
-    robot, client, _ = rig
+    robot, client, _, _ = rig
     robot.velocity(Velocity(0.2))
     eventually(lambda: client.count("move") == 1)
     clock.advance(0.6)
     eventually(lambda: client.count("stop_move") == 1)
 
 
-@pytest.mark.parametrize("status", [1, None, True])
-def test_sdk_errors_are_reported_and_stop_motion(rig, status):
-    robot, client, _ = rig
-    client.status["hello"] = status
+@pytest.mark.parametrize("status", [1, 3104, None, True])
+def test_action_sdk_errors_are_reported_without_stopping_motion(rig, status):
+    robot, client, action_client, _ = rig
+    action_client.status["hello"] = status
     robot.perform("hello")
-    eventually(lambda: client.count("stop_move") == 1)
-    assert "SDK status" in robot.state().details["last_error"]
+    eventually(lambda: robot.state().action_error is not None)
+    state = robot.state()
+    assert "SDK status" in str(state.action_error)
+    assert state.details["last_error"] == state.action_error
+    assert not robot.state().busy
+    time.sleep(0.03)
+    assert client.calls == []
+    robot.velocity(Velocity(0.1))
+    eventually(lambda: client.count("move") == 1)
+    assert client.count("stop_move") == 0
+
+
+def test_stop_reaches_motion_client_while_action_rpc_is_blocked(rig, clock):
+    robot, motion, action, _ = rig
+    action.block = "hello"
+    assert robot.perform("hello") is None
+    assert action.entered.wait(1)
+    started = time.monotonic()
+    robot.stop()
+    robot.velocity(Velocity(0.2))
+    assert time.monotonic() - started < 0.1
+    eventually(lambda: motion.count("stop_move") == 1 and not robot.state().details["stopping"])
+    assert robot.state().busy and robot._action_running
+    assert not action.release.is_set()
+    assert motion.count("move") == 0  # Velocity stays non-blocking but is dropped throughout busy.
+    assert robot._pending_velocity is None
+    assert motion.calls[0][2] != action.calls[0][2]
+    assert motion.timeouts == [0.2]
+    robot.stop()
+    assert "busy" in str(robot.perform("sit"))
+    clock.advance(10)
+    robot._on_state(telemetry())
+    assert robot.state().busy  # An RPC can outlast the estimated duration.
+    action.release.set()
+    eventually(lambda: not robot.state().busy)
+    robot.velocity(Velocity(0.2))
+    eventually(lambda: motion.count("move") == 1)
+    assert motion.count("stop_move") == 1
+    assert motion.finished_at["stop_move"] < action.finished_at["hello"] < motion.started_at["move"]
+
+
+def test_stop_preserves_minimum_action_duration(rig, clock):
+    robot, motion, action, _ = rig
+    action.block = "hello"
+    robot.perform("hello")
+    assert action.entered.wait(1)
+    robot.stop()
+    eventually(lambda: motion.count("stop_move") == 1 and not robot.state().details["stopping"])
+    action.release.set()
+    eventually(lambda: not robot._action_running)
+    duration = next(spec.duration for spec in GO2_ACTIONS if spec.name == "hello")
+    clock.advance(duration - 0.01)
+    assert robot.state().busy
+    clock.advance(0.02)
     assert not robot.state().busy
 
 
+def test_perform_while_moving_waits_for_stop_completion(rig):
+    robot, motion, action, _ = rig
+    robot.velocity(Velocity(0.2))
+    eventually(lambda: motion.count("move") == 1)
+    motion.block = "stop_move"
+    started = time.monotonic()
+    assert robot.perform("hello") is None
+    assert time.monotonic() - started < 0.1
+    assert robot.state().busy
+    assert motion.entered.wait(1)
+    assert action.calls == []  # Entering stop_move alone is not sufficient.
+    assert "busy" in str(robot.perform("sit"))
+    motion.release.set()
+    eventually(lambda: action.count("hello") == 1)
+    assert motion.finished_at["stop_move"] <= action.started_at["hello"]
+    assert [name for name, _, _ in motion.calls] == ["move", "stop_move"]
+    assert [name for name, _, _ in action.calls] == ["hello"]
+
+
+@pytest.mark.parametrize("failure", [3104, RuntimeError("stop disconnected")])
+def test_failed_prerequisite_stop_refuses_action(rig, failure):
+    robot, motion, action, _ = rig
+    if isinstance(failure, Exception):
+        motion.errors["stop_move"] = failure
+    else:
+        motion.status["stop_move"] = failure
+    robot.velocity(Velocity(0.2))
+    eventually(lambda: motion.count("move") == 1)
+    assert robot.perform("hello") is None
+    eventually(lambda: robot.state().action_error is not None)
+    state = robot.state()
+    assert "stop_move failed" in str(state.action_error)
+    assert state.details["last_error"] == state.action_error
+    assert not state.busy
+    assert action.calls == []
+    assert motion.count("stop_move") == 1
+
+
+@pytest.mark.parametrize("blocked_method", ["move", "stop_move"])
+def test_wait_for_stop_is_bounded_and_never_replays_action(rig, blocked_method):
+    robot, motion, action, _ = rig
+    robot.config = Go2Config(action_stop_timeout_s=0.05)
+    motion.block = blocked_method
+    robot.velocity(Velocity(0.2))
+    eventually(lambda: motion.count("move") == 1)
+    assert robot.perform("hello") is None
+    assert motion.entered.wait(1)
+    eventually(lambda: robot.state().action_error is not None, timeout=1)
+    state = robot.state()
+    assert "timed out waiting for stop_move" in str(state.action_error)
+    assert state.details["last_error"] == state.action_error
+    assert not state.busy and state.details["stopping"]
+    assert action.calls == []
+    motion.release.set()
+    eventually(lambda: not robot.state().details["stopping"])
+    robot.velocity(Velocity(0.1))
+    eventually(lambda: motion.count("move") == 2)
+    assert action.calls == []
+
+
+def test_stale_telemetry_after_prerequisite_stop_refuses_action(rig, clock):
+    robot, motion, action, _ = rig
+    robot.velocity(Velocity(0.2))
+    eventually(lambda: motion.count("move") == 1)
+    motion.block = "stop_move"
+    robot.perform("hello")
+    assert motion.entered.wait(1)
+    clock.advance(3)
+    motion.release.set()
+    eventually(lambda: robot.state().action_error is not None)
+    assert "stale" in str(robot.state().action_error)
+    assert not robot.state().busy
+    robot._on_state(telemetry())
+    assert action.calls == []
+
+
+@pytest.mark.parametrize("error", [TimeoutError(), RuntimeError("action disconnected")])
+def test_action_exception_is_reported_and_clears_on_next_action(rig, error):
+    robot, motion, action, _ = rig
+    action.errors["hello"] = error
+    robot.perform("hello")
+    eventually(lambda: robot.state().action_error is not None)
+    state = robot.state()
+    assert state.action_error == (str(error) or type(error).__name__)
+    assert state.details["last_error"] == state.action_error
+    assert not state.busy
+    assert robot.perform("sit") is None
+    eventually(lambda: action.count("sit") == 1)
+    assert robot.state().action_error is None
+    assert action.timeout == 2.0 + robot.config.action_timeout_margin_s
+    assert motion.timeouts == [0.2] and motion.calls == []
+
+
+def test_action_failure_does_not_disturb_inflight_stop(rig):
+    robot, motion, action, _ = rig
+    action.block = "hello"
+    action.status["hello"] = 3104
+    robot.perform("hello")
+    assert action.entered.wait(1)
+    motion.block = "stop_move"
+    robot.stop()
+    assert motion.entered.wait(1)
+    action.release.set()
+    eventually(lambda: robot.state().action_error is not None)
+    assert not robot.state().busy
+    assert robot.state().details["stopping"]
+    robot.velocity(Velocity(0.1))
+    assert motion.count("move") == 0
+    motion.release.set()
+    eventually(lambda: motion.count("move") == 1)
+    assert [name for name, _, _ in motion.calls] == ["stop_move", "move"]
+
+
+@pytest.mark.parametrize("failure", [3104, RuntimeError("move disconnected")])
+def test_motion_failures_still_stop_motion(rig, failure):
+    robot, motion, action, _ = rig
+    if isinstance(failure, Exception):
+        motion.errors["move"] = failure
+    else:
+        motion.status["move"] = failure
+    robot.velocity(Velocity(0.1))
+    eventually(lambda: motion.count("stop_move") == 1 and not robot.state().details["stopping"])
+    assert robot.state().details["last_error"] is not None
+    assert robot.state().action_error is None
+    assert not robot.state().busy and action.calls == []
+
+
+def test_close_stops_motion_then_waits_for_action_before_releasing_dds(rig):
+    robot, motion, action, lifecycle = rig
+    action.block = "hello"
+    robot.perform("hello")
+    assert action.entered.wait(1)
+    motion_worker, action_worker = robot._worker, robot._action_worker
+    errors: list[Exception] = []
+
+    def close():
+        try:
+            robot.close()
+        except Exception as exc:
+            errors.append(exc)
+
+    closer = threading.Thread(target=close)
+    closer.start()
+    try:
+        eventually(lambda: motion.count("stop_move") == 1 and not robot.state().details["stopping"])
+        assert closer.is_alive()
+        assert not robot.state().connected
+        assert "release" not in lifecycle and "close_channel" not in lifecycle
+        assert "not connected" in str(robot.perform("sit"))
+    finally:
+        action.release.set()
+        closer.join(timeout=2)
+    assert not closer.is_alive() and errors == []
+    assert motion_worker is not None and not motion_worker.is_alive()
+    assert action_worker is not None and not action_worker.is_alive()
+    assert lifecycle[-2:] == ["close_channel", "release"]
+    assert not robot.state().busy
+
+
+def test_close_retains_dds_if_action_worker_has_not_finished(rig, monkeypatch):
+    robot, motion, action, lifecycle = rig
+    action.block = "hello"
+    robot.perform("hello")
+    assert action.entered.wait(1)
+    robot.stop()
+    eventually(lambda: motion.count("stop_move") == 1 and not robot.state().details["stopping"])
+    worker = robot._action_worker
+    assert worker is not None
+    with monkeypatch.context() as patch:
+        patch.setattr(worker, "join", lambda timeout: None)
+        with pytest.raises(TimeoutError, match="DDS remains open"):
+            robot.close()
+    assert "release" not in lifecycle and "close_channel" not in lifecycle
+    action.release.set()
+    robot.close()
+    assert not worker.is_alive()
+    assert lifecycle[-2:] == ["close_channel", "release"]
+
+
 def test_invalid_inputs(rig):
-    robot, _, _ = rig
+    robot, _, _, _ = rig
     with pytest.raises(ValueError):
         robot.perform("unsupported")
     with pytest.raises(ValueError):
@@ -291,6 +541,32 @@ def test_invalid_inputs(rig):
         Go2Config(timeout_s=-1)
     with pytest.raises(ValueError):
         Go2Config(domain_id=True)
+    with pytest.raises(ValueError):
+        Go2Config(action_stop_timeout_s=0)
+    with pytest.raises(ValueError):
+        Go2Config(action_timeout_margin_s=float("inf"))
+
+
+def test_action_client_init_failure_releases_dds():
+    motion, action = FakeClient(), FakeClient()
+    clients = iter((motion, action))
+    lifecycle = []
+
+    def fail():
+        raise RuntimeError("action init failed")
+
+    action.init = fail
+    bindings = Go2Bindings(
+        SimpleNamespace(initialize=lambda *_: None, release=lambda: lifecycle.append("release")),
+        lambda: next(clients),
+        lambda _: pytest.fail("Must initialize both clients before subscribing"),
+    )
+    robot = Go2Robot(bindings=bindings)
+    with pytest.raises(RuntimeError, match="action init failed"):
+        robot.connect()
+    assert lifecycle == ["release"]
+    assert not robot.state().connected
+    assert robot._worker is None and robot._action_worker is None
 
 
 def test_subscription_failure_cleans_up_channel():

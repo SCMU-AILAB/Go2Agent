@@ -91,7 +91,7 @@ def test_perform_refused_when_robot_busy_or_disconnected(clock):
     robot, g = gate(clock)
     assert g.perform("hello") is None
     assert g.perform("heart") == "robot_busy"
-    clock.advance(3.1)
+    clock.advance(5.1)  # hello takes ~5 s
     assert g.perform("heart") is None
     robot.connected = False
     clock.advance(3.1)

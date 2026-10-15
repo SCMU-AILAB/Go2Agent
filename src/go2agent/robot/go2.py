@@ -41,21 +41,30 @@ ACTION_METHODS = {
     "left_flip": "left_flip",
 }
 _ACTIONS = {spec.name: spec for spec in GO2_ACTIONS}
+_MAX_ACTION_S = max(spec.duration for spec in GO2_ACTIONS)
 
 
 @dataclass(frozen=True, slots=True)
 class Go2Config:
     network_interface: str = "eth0"
     domain_id: int = 0
-    timeout_s: float = 0.2
+    timeout_s: float = 0.2  # move / stop RPCs; must stay well under the 20 Hz control period budget
+    action_timeout_margin_s: float = 3.0  # native actions block until done: timeout = duration + margin
     command_timeout_s: float = 0.5
     telemetry_timeout_s: float = 2.0
     heightmap: HeightMapConfig = field(default_factory=HeightMapConfig)
+    action_stop_timeout_s: float = 1.0  # maximum wait for the motion lane to stop before an action
 
     def __post_init__(self) -> None:
         if type(self.domain_id) is not int or self.domain_id < 0:
             raise ValueError("domain_id must be a nonnegative integer")
-        for value in (self.timeout_s, self.command_timeout_s, self.telemetry_timeout_s):
+        for value in (
+            self.timeout_s,
+            self.action_timeout_margin_s,
+            self.command_timeout_s,
+            self.telemetry_timeout_s,
+            self.action_stop_timeout_s,
+        ):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("Timeouts must be positive and finite")
 
@@ -75,13 +84,19 @@ class Go2Bindings:
     create_obstacle_subscribers: ObstacleSubscribers | None = None
 
 
-class Go2Robot(Robot):
-    """Serialize SDK calls on one worker, keeping control-loop methods non-blocking.
+@dataclass(frozen=True, slots=True)
+class _ActionRequest:
+    name: str
+    stop_deadline: float | None
 
-    Stop discards pending commands and runs immediately after any in-flight RPC;
-    native calls cannot be interrupted safely. Its latency is bounded by the SDK
-    timeout when the SDK honors that timeout. Busy uses estimated action duration,
-    not physical completion feedback. New actions are refused while busy/stopping.
+
+class Go2Robot(Robot):
+    """Run motion and native actions on independent workers and SportClients.
+
+    Stop discards pending commands and runs after at most one motion RPC; it never
+    waits for a native action. Busy lasts until the action RPC returns and at least
+    its estimated duration, unless the action fails. Moving robots must finish a
+    successful stop before an action starts. New actions are refused while busy/stopping.
     Velocity waits behind a pending stop, but is dropped while busy or not ready.
     Operational refusals are recorded in state.details["command_refusal"], which
     clears when a command is accepted; they do not raise in the control loop.
@@ -99,14 +114,17 @@ class Go2Robot(Robot):
         self._clock = clock
         self._condition = threading.Condition()
         self._client: Any | None = None
+        self._action_client: Any | None = None
         self._subscriber: Any | None = None
         self._worker: threading.Thread | None = None
+        self._action_worker: threading.Thread | None = None
         self._closing = False
         self._telemetry: dict[str, Any] = {}
         self._telemetry_stamp: float | None = None
         self._pending_velocity: tuple[Velocity, float] | None = None
-        self._pending_action: str | None = None
+        self._pending_action: _ActionRequest | None = None
         self._stop_pending = False
+        self._stop_error: str | None = None
         self._stopped = False
         self._zero_velocity = False
         self._moving = False
@@ -114,6 +132,7 @@ class Go2Robot(Robot):
         self._action_running = False
         self._busy_until = 0.0
         self._last_error: str | None = None
+        self._action_error: str | None = None
         self._obstacle_subs: list[Any] = []
         self._pose: tuple[float, float, float] | None = None  # LiDAR odometry x, y, yaw
         self._obstacles: Obstacles | None = None
@@ -132,6 +151,9 @@ class Go2Robot(Robot):
             client = bindings.create_sport_client()
             client.set_timeout(self.config.timeout_s)
             client.init()
+            action_client = bindings.create_sport_client()
+            action_client.set_timeout(_MAX_ACTION_S + self.config.action_timeout_margin_s)
+            action_client.init()
             with self._condition:
                 self._telemetry = {}
                 self._telemetry_stamp = None
@@ -152,6 +174,7 @@ class Go2Robot(Robot):
             raise
         with self._condition:
             self._bindings, self._client, self._subscriber = bindings, client, subscriber
+            self._action_client = action_client
             self._obstacle_subs = obstacle_subs
             self._closing = False
             self._stopped = self._zero_velocity = False
@@ -159,21 +182,28 @@ class Go2Robot(Robot):
             self._pending_action = self._pending_velocity = None
             self._busy_until = 0.0
             self._last_error = None
+            self._action_error = self._stop_error = None
             self._command_refusal = None
         self._worker = threading.Thread(target=self._run, name="go2-sport", daemon=True)
+        self._action_worker = threading.Thread(target=self._run_actions, name="go2-actions", daemon=True)
         self._worker.start()
+        self._action_worker.start()
 
     def close(self) -> None:
         if self._client is None:
             return
-        self.stop()
         with self._condition:
             self._closing = True
+            self.stop()
             self._condition.notify_all()
-        if self._worker is not None:
-            self._worker.join(timeout=self.config.timeout_s * 2 + 2)
-            if self._worker.is_alive():
-                raise TimeoutError("Go2 SDK call did not finish; DDS remains open until the worker stops")
+        for worker, timeout in (
+            (self._worker, 2 * self.config.timeout_s + 2),
+            (self._action_worker, _MAX_ACTION_S + self.config.action_timeout_margin_s + 2),
+        ):
+            if worker is not None:
+                worker.join(timeout=timeout)
+        if any(worker is not None and worker.is_alive() for worker in (self._worker, self._action_worker)):
+            raise TimeoutError("Go2 SDK call did not finish; DDS remains open until both workers stop")
         try:
             for sub in [self._subscriber, *self._obstacle_subs]:
                 if sub is not None:
@@ -185,6 +215,8 @@ class Go2Robot(Robot):
             finally:
                 with self._condition:
                     self._client = self._subscriber = self._worker = None
+                    self._action_client = self._action_worker = None
+                    self._busy_until = 0.0
                     self._obstacle_subs = []
 
     def velocity(self, cmd: Velocity) -> None:
@@ -221,13 +253,16 @@ class Go2Robot(Robot):
                 return self._refuse("Go2 is busy with a native action")
             if self._stop_pending:
                 return self._refuse("Go2 is stopping")
-            if not callable(getattr(self._client, ACTION_METHODS[action], None)):
+            if not callable(getattr(self._action_client, ACTION_METHODS[action], None)):
                 return self._refuse(f"Go2 bindings do not provide {ACTION_METHODS[action]}")
             self._command_refusal = None
+            stop_deadline = None
             if not self._zero_velocity and (self._moving or self._pending_velocity is not None):
                 self._stop_pending = True
+                stop_deadline = time.monotonic() + self.config.action_stop_timeout_s
             self._pending_velocity = None
-            self._pending_action = action
+            self._pending_action = _ActionRequest(action, stop_deadline)
+            self._action_error = None
             self._zero_velocity = True  # Idle ticks must not cancel a native action.
             self._stopped = False
             self._condition.notify_all()
@@ -236,7 +271,6 @@ class Go2Robot(Robot):
     def stop(self) -> None:
         with self._condition:
             self._pending_action = self._pending_velocity = None
-            self._busy_until = 0.0
             self._zero_velocity = True
             if self._client is not None and not self._stopped:
                 self._stop_pending = True
@@ -281,6 +315,7 @@ class Go2Robot(Robot):
                 stamp=now,
                 connected=self._client is not None and not self._closing and self._fresh_telemetry(),
                 busy=self._busy(),
+                action_error=self._action_error,
                 details={
                     **self._telemetry,
                     "telemetry_age": age,
@@ -342,14 +377,6 @@ class Go2Robot(Robot):
                     method, args = "stop_move", ()
                 elif self._closing:
                     return
-                elif self._pending_action is not None:
-                    action, self._pending_action = self._pending_action, None
-                    if not self._fresh_telemetry():
-                        continue
-                    method, args = ACTION_METHODS[action], ()
-                    self._action_running = True
-                    self._stopped = False
-                    self._busy_until = now + _ACTIONS[action].duration
                 elif self._pending_velocity is not None:
                     (cmd, stamp), self._pending_velocity = self._pending_velocity, None
                     if now - stamp > self.config.command_timeout_s or not self._fresh_telemetry():
@@ -371,18 +398,71 @@ class Go2Robot(Robot):
             with self._condition:
                 if method == "stop_move":
                     self._stop_pending = False
+                    self._stop_error = error
                     self._stopped = error is None
                     self._moving = False
-                elif method != "move":
-                    self._action_running = False
                 if error is not None:
                     self._last_error = error
-                    self._pending_action = self._pending_velocity = None
-                    self._busy_until = 0.0
+                    self._pending_velocity = None
                     self._zero_velocity = True
                     if method != "stop_move":
                         self._stop_pending = True
                 self._condition.notify_all()
+
+    def _run_actions(self) -> None:
+        while True:
+            with self._condition:
+                if self._closing:
+                    return
+                request = self._pending_action
+                if request is None:
+                    self._condition.wait()
+                    continue
+                if request.stop_deadline is not None:
+                    remaining = request.stop_deadline - time.monotonic()
+                    if remaining <= 0:
+                        self._fail_action(f"Go2 {request.name}: timed out waiting for stop_move")
+                        continue
+                    if self._stop_pending:
+                        self._condition.wait(timeout=remaining)
+                        continue
+                    if not self._stopped:
+                        self._fail_action(f"Go2 {request.name}: stop_move failed: {self._stop_error}")
+                        continue
+                reason = self._not_ready_reason()
+                if reason is not None:
+                    self._fail_action(f"Go2 {request.name}: {reason}")
+                    continue
+                client = self._action_client
+                if client is None:
+                    self._fail_action(f"Go2 {request.name}: not connected")
+                    continue
+                self._pending_action = None
+                self._action_running = True
+                self._stopped = False  # A new native action invalidates any previous successful stop.
+                self._busy_until = self._clock() + _ACTIONS[request.name].duration
+            method = ACTION_METHODS[request.name]
+            error = None
+            try:
+                client.set_timeout(_ACTIONS[request.name].duration + self.config.action_timeout_margin_s)
+                status = getattr(client, method)()
+                if type(status) is not int or status != 0:
+                    raise RuntimeError(f"Go2 {method} returned SDK status {status!r}")
+            except Exception as exc:
+                error = str(exc) or type(exc).__name__
+                logger.exception("Go2 %s failed", method)
+            with self._condition:
+                self._action_running = False
+                if error is not None:
+                    self._fail_action(error)
+                self._condition.notify_all()
+
+    def _fail_action(self, error: str) -> None:
+        """Called with the condition held; an action error must not alter motion state."""
+        self._action_error = self._last_error = error
+        self._pending_action = None
+        self._busy_until = 0.0
+        self._condition.notify_all()
 
     @staticmethod
     def _load_bindings() -> Go2Bindings:

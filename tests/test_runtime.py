@@ -37,6 +37,7 @@ PERSON = Track(3, "person", (0.4, 0.2, 0.6, 0.9), 0.9)
 class StaticTracker(Tracker):
     def __init__(self, cam: StepCamera, items: tuple[Track, ...] = (PERSON,)) -> None:
         self.cam, self.items = cam, items
+        self.ok = True
 
     async def start(self) -> None: ...
     async def close(self) -> None: ...
@@ -47,7 +48,7 @@ class StaticTracker(Tracker):
 
     @property
     def healthy(self) -> bool:
-        return True
+        return self.ok
 
     async def add_box(self, frame_seq: int, box: Box, label: str) -> int:
         raise NotImplementedError
@@ -207,3 +208,26 @@ async def test_stop_after_failed_start_still_stops_and_closes_the_robot(clock):
     robot.velocity(Velocity(0.3))
     await rt.stop()
     assert robot.cmd.is_zero and not robot.connected
+
+
+async def test_perception_health_flaps_are_debounced(clock):
+    rt, _, tracker, *_ = make_runtime(clock, [], service_debounce_s=1.0)
+
+    def health_events() -> list[bool]:
+        return [e.data["ok"] for e in rt._events if e.kind is EventKind.SERVICE]
+
+    rt.control_step(clock())
+    assert health_events() == [True]  # the first state is reported at once
+    for _ in range(3):  # brief dropouts shorter than the debounce window
+        tracker.ok = False
+        clock.advance(0.3)
+        rt.control_step(clock())
+        tracker.ok = True
+        clock.advance(0.1)
+        rt.control_step(clock())
+    assert health_events() == [True]
+    tracker.ok = False
+    for _ in range(6):
+        clock.advance(0.25)
+        rt.control_step(clock())
+    assert health_events() == [True, False]

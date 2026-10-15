@@ -18,3 +18,4 @@ frontend/**/.build/
 
 .codex/
 .DS_Store
+.codex-tasks/

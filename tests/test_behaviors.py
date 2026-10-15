@@ -111,6 +111,17 @@ def test_perform_starts_once_and_waits_for_duration():
     assert b.tick(tick(0)).perform == "hello"
     s = b.tick(tick(1))
     assert s.status is Status.RUNNING and s.perform is None
-    assert b.tick(tick(3.0, busy=True)).status is Status.RUNNING
-    assert b.tick(tick(3.1)).status is Status.SUCCEEDED
+    assert b.tick(tick(5.0, busy=True)).status is Status.RUNNING
+    assert b.tick(tick(5.1)).status is Status.SUCCEEDED
     assert make("perform", action="moonwalk").tick(tick(0)).reason == "unknown_action"
+
+
+def test_perform_fails_when_the_robot_reports_the_action_failed():
+    b = make("perform", action="hello")
+    b.tick(tick(0))
+    t = tick(0.5)
+    failed = Tick(
+        t.now, t.frame, t.tracks, t.tracker_healthy, RobotState(0.5, True, action_error="status 3104")
+    )
+    step = b.tick(failed)
+    assert step.status is Status.FAILED and "3104" in step.reason

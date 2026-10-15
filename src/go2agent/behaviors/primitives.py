@@ -202,7 +202,11 @@ class Perform(Behavior[PerformArgs]):
         if not self._sent:
             self._sent = True
             return Step(perform=spec.name)
-        if self.elapsed(t) >= spec.duration and not t.robot.busy:
+        if t.robot.busy:
+            return Step(Status.RUNNING)
+        if t.robot.action_error:  # the robot rejected or failed the action: say so instead of "done"
+            return Step.fail(f"action_failed: {t.robot.action_error}")
+        if self.elapsed(t) >= spec.duration:
             return Step.ok()
         return Step(Status.RUNNING)
 

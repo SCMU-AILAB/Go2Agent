@@ -19,11 +19,11 @@ def test_runs_plan_in_order_and_reports_done():
     e.submit([make("perform", action="hello"), make("wait", seconds=1)], "replace")
     e.tick(tick(0))
     assert started == ["hello"]
-    out = e.tick(tick(3.1))
+    out = e.tick(tick(5.1))
     assert [ev.kind for ev in out.events] == [EventKind.BEHAVIOR_DONE]
     assert out.events[0].data["behavior"] == "perform" and not out.events[0].data["queue_empty"]
-    e.tick(tick(3.2))
-    out = e.tick(tick(4.3))
+    e.tick(tick(5.2))
+    out = e.tick(tick(6.3))
     assert out.events[0].data["queue_empty"] and e.idle
 
 
