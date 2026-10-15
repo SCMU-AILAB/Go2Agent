@@ -168,13 +168,23 @@ class Runtime:
         for t in self._tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await t
-        self.safety.stop_watchdog()
-        self.robot.stop()
-        await self.tracker.close()
-        self.camera.close()
-        self.robot.close()
-        await self.brain.client.close()
-        self.timeline.close()
+        # Also runs after a partial start; every step is attempted, the robot is stopped first.
+        steps: list[tuple[str, Callable[[], object]]] = [
+            ("robot stop", self.robot.stop),
+            ("watchdog", self.safety.stop_watchdog),
+            ("tracker", self.tracker.close),
+            ("camera", self.camera.close),
+            ("robot close", self.robot.close),
+            ("brain client", self.brain.client.close),
+            ("timeline", self.timeline.close),
+        ]
+        for name, step in steps:
+            try:
+                result = step()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                log.exception("shutdown step %s failed", name)
 
     # --- control loop -----------------------------------------------------------------------------
 

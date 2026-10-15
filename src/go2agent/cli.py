@@ -98,15 +98,15 @@ async def _run(args: argparse.Namespace) -> None:
     server = uvicorn.Server(
         uvicorn.Config(create_app(rt), host=args.api_host, port=args.api_port, log_level="warning")
     )
-    await rt.start()
-    if mic:
-        try:
-            mic.start()
-        except Exception as e:  # voice is optional: the agent keeps running without it
-            log.warning("microphone unavailable, continuing without voice input: %s", e)
-            mic = None
-    log.info("api on http://%s:%d", args.api_host, args.api_port)
     try:
+        await rt.start()  # a failure here (e.g. no camera) still runs the cleanup below
+        if mic:
+            try:
+                mic.start()
+            except Exception as e:  # voice is optional: the agent keeps running without it
+                log.warning("microphone unavailable, continuing without voice input: %s", e)
+                mic = None
+        log.info("api on http://%s:%d", args.api_host, args.api_port)
         await server.serve()
     finally:
         if mic:

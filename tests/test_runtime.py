@@ -8,7 +8,7 @@ from go2agent.behaviors.base import BehaviorEnv
 from go2agent.behaviors.geometry import CameraModel
 from go2agent.brain.brain import Brain
 from go2agent.brain.client import VLMClient, VLMConfig
-from go2agent.core.types import Box, EventKind, Frame, Track, Tracks
+from go2agent.core.types import Box, EventKind, Frame, Track, Tracks, Velocity
 from go2agent.perception.base import Tracker
 from go2agent.robot.sim import SimRobot
 from go2agent.runtime import Runtime, RuntimeConfig
@@ -195,3 +195,15 @@ async def test_spoken_new_task_after_estop_resumes_with_held_steps(clock):
     assert not rt.safety.estopped and rt.task == "跟着穿红衣服的人"
     rt.control_step(clock())
     assert rt.executor.current is not None and robot.cmd.vx > 0
+
+
+async def test_stop_after_failed_start_still_stops_and_closes_the_robot(clock):
+    rt, robot, *_ = make_runtime(clock, [])
+
+    def broken_close() -> None:
+        raise RuntimeError("camera already gone")
+
+    rt.camera.close = broken_close  # type: ignore[method-assign]
+    robot.velocity(Velocity(0.3))
+    await rt.stop()
+    assert robot.cmd.is_zero and not robot.connected

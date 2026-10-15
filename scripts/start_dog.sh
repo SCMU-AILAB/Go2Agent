@@ -10,8 +10,11 @@
 #   GO2_NETWORK           network interface connected to the Go2 (eth0)
 #   GO2_ROBOT             go2 | sim (go2)
 #   GO2_CAMERA            realsense | video:PATH | device:N (realsense)
-#   GO2_SDK_BINDINGS      unitree_sdk2_bindings source, built once if missing (~/unitree_sdk2/unitree_sdk2_bindings)
-#   GO2_REALSENSE_PYTHON  Python that has pyrealsense2; no arm64 wheel exists (/usr/bin/python3)
+#   GO2_SDK_BINDINGS      unitree_sdk2_bindings source, built once if the SDK is missing
+#                         (~/unitree_sdk2_bindings or ~/unitree_sdk2/unitree_sdk2_bindings)
+#   GO2_REALSENSE_WHEEL   pyrealsense2 wheel built for this Python (PyPI has none for arm64), installed once
+#                         (newest ~/.local/src/librealsense-*/dist/pyrealsense2-*-cp312-*.whl)
+#   GO2_REALSENSE_PYTHON  fallback: another Python with pyrealsense2, used through a worker (/usr/bin/python3)
 #   GO2_AUDIO_INPUT / GO2_AUDIO_OUTPUT   sound device index or name (pulse)
 set -euo pipefail
 
@@ -22,8 +25,11 @@ SERVER="${GO2_SERVER:-192.168.0.239}"
 NETWORK="${GO2_NETWORK:-eth0}"
 ROBOT="${GO2_ROBOT:-go2}"
 CAMERA="${GO2_CAMERA:-realsense}"
-BINDINGS="${GO2_SDK_BINDINGS:-$HOME/unitree_sdk2/unitree_sdk2_bindings}"
-export GO2_REALSENSE_PYTHON="${GO2_REALSENSE_PYTHON:-/usr/bin/python3}"
+first_existing() { for p in "$@"; do [[ -e "$p" ]] && { echo "$p"; return; }; done; echo "${1:-}"; }
+BINDINGS="${GO2_SDK_BINDINGS:-$(first_existing "$HOME/unitree_sdk2_bindings" "$HOME/unitree_sdk2/unitree_sdk2_bindings")}"
+# shellcheck disable=SC2012  # newest file by name order is what we want; names have no newlines
+RS_WHEEL="${GO2_REALSENSE_WHEEL:-$(ls "$HOME"/.local/src/librealsense-*/dist/pyrealsense2-*-cp312-*.whl 2>/dev/null | tail -n 1)}"
+RS_FALLBACK_PYTHON="${GO2_REALSENSE_PYTHON:-/usr/bin/python3}"
 AUDIO_IN="${GO2_AUDIO_INPUT:-pulse}"
 AUDIO_OUT="${GO2_AUDIO_OUTPUT:-pulse}"
 
@@ -46,9 +52,18 @@ if [[ "$ROBOT" == "go2" ]] && ! py "import unitree_sdk2_cpp"; then
   py "import unitree_sdk2_cpp" || die "Go2 SDK bindings still not importable"
 fi
 
-if [[ "$CAMERA" == "realsense" ]] && ! py "import pyrealsense2" &&
-  ! "$GO2_REALSENSE_PYTHON" -c "import pyrealsense2" >/dev/null 2>&1; then
-  die "pyrealsense2 not importable by $GO2_REALSENSE_PYTHON (install librealsense's Python bindings there)"
+if [[ "$CAMERA" == "realsense" ]] && ! py "import pyrealsense2"; then
+  if [[ -n "$RS_WHEEL" && -f "$RS_WHEEL" ]]; then
+    say "installing $RS_WHEEL"
+    uv pip install -q "$RS_WHEEL"
+  fi
+  if ! py "import pyrealsense2"; then
+    # Setting GO2_REALSENSE_PYTHON makes the camera capture through a worker in that interpreter.
+    "$RS_FALLBACK_PYTHON" -c "import pyrealsense2" >/dev/null 2>&1 ||
+      die "pyrealsense2 unavailable: set GO2_REALSENSE_WHEEL to a cp312 aarch64 wheel (build librealsense)"
+    export GO2_REALSENSE_PYTHON="$RS_FALLBACK_PYTHON"
+    warn "pyrealsense2 not in the venv: capturing through $RS_FALLBACK_PYTHON"
+  fi
 fi
 
 voice=(--voice --mic-device "$AUDIO_IN" --speaker-device "$AUDIO_OUT")
