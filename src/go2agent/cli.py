@@ -27,7 +27,7 @@ from go2agent.robot.go2_actions import GO2_ACTIONS
 from go2agent.runtime import Runtime
 from go2agent.safety import SafetyConfig, SafetyGate
 from go2agent.sensors.base import Camera
-from go2agent.timeline import Timeline, load_think
+from go2agent.timeline import Timeline, load_think, summarize
 
 log = logging.getLogger("go2agent")
 
@@ -213,7 +213,18 @@ def main() -> None:
     ev.add_argument("cases", help="cases.jsonl, see go2agent.brain.evaluate")
     ev.add_argument("--current-prompt", action="store_true", help="swap in the current system prompt")
 
+    tl = sub.add_parser("timeline", help="print a run's timeline (decisions, behaviors, tracks)")
+    tl.add_argument("run", nargs="?", help="runs/<run> (default: the newest run in --log-dir)")
+    tl.add_argument("--log-dir", default="runs")
+    tl.add_argument("--since", type=float, default=0.0, help="skip the first N seconds")
+    tl.add_argument("--all", action="store_true", help="include perception health and speech records")
+
     args = p.parse_args()
+    if args.cmd == "timeline":
+        run = Path(args.run) if args.run else max(Path(args.log_dir).iterdir())
+        print(f"run: {run}")
+        print("\n".join(summarize(run, args.since, args.all)))
+        return
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

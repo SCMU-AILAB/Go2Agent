@@ -61,3 +61,25 @@ async def test_run_cases_end_to_end(tmp_path):
     assert [r.ok for r in results] == [True, False]
     assert seen[0]["messages"][0]["content"] == "new"
     assert summarize(results).startswith("1/2 passed")
+
+
+def test_timeline_summary_lists_decisions_and_hides_health_flips(tmp_path):
+    from go2agent.timeline import summarize
+
+    tl = Timeline(tmp_path)
+    tl.record("task", {"text": "hi"}, mono=10.0)
+    tl.record("service", {"service": "perception", "ok": False}, mono=10.5)
+    tl.record(
+        "brain_decision", {"mode": "keep", "plan": [], "thought": "等待", "think_id": "0001"}, mono=11.0
+    )
+    tl.close()
+    assert tl.dir is not None
+    lines = summarize(tl.dir)
+    assert (
+        len(lines) == 2
+        and "task" in lines[0]
+        and '"thought": "等待"' in lines[1]
+        and '"plan"' not in lines[1]
+    )
+    assert len(summarize(tl.dir, everything=True)) == 3
+    assert len(summarize(tl.dir, since=0.8)) == 1

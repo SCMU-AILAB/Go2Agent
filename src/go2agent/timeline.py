@@ -89,3 +89,27 @@ def load_think(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                     _DATA_PREFIX + base64.b64encode((path.parent / url).read_bytes()).decode()
                 )
     return doc["messages"], doc["reply"]
+
+
+_QUIET = frozenset({"service", "say"})
+
+
+def summarize(run: Path, since: float = 0.0, everything: bool = False) -> list[str]:
+    """Human-readable lines for a run: seconds since start, kind, the interesting fields.
+
+    By default perception health flips are hidden; `everything` shows every record."""
+    lines = []
+    records = [json.loads(line) for line in (run / "timeline.jsonl").read_text().splitlines() if line]
+    if not records:
+        return lines
+    t0 = records[0]["mono"]
+    for rec in records:
+        t = rec["mono"] - t0
+        kind, data = rec["kind"], rec["data"]
+        if t < since or (kind in _QUIET and not everything):
+            continue
+        if kind == "brain_decision":
+            fields = ("mode", "plan", "say", "thought", "rejection", "first_step_ms", "think_id")
+            data = {k: data.get(k) for k in fields if data.get(k) not in (None, "", [])}
+        lines.append(f"{t:7.1f}s  {kind:15s} {json.dumps(data, ensure_ascii=False)}")
+    return lines
