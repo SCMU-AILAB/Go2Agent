@@ -25,9 +25,9 @@ class PlanStep(BaseModel):
 
 class Decision(BaseModel):
     mode: Literal["keep", "replace", "append"] = "keep"
-    new_task: str = ""  # non-empty only when the user's speech changed the task: the new full task
     plan: list[PlanStep] = Field(default_factory=list)
     say: str = ""
+    new_task: str = ""  # non-empty only when the user's speech changed the task: the new full task
     thought: str = ""
 
 
@@ -70,15 +70,15 @@ def decision_json_schema(actions: tuple[ActionSpec, ...]) -> dict[str, Any]:
         # the fields that change what the robot does come first and the explanation comes last.
         "properties": {
             "mode": {"type": "string", "enum": ["keep", "replace", "append"]},
-            "new_task": {"type": "string", "maxLength": 200},
             "plan": {
                 "type": "array",
                 "maxItems": 4,
                 "items": {"anyOf": [_step_schema(n, actions) for n in names]},
             },
             "say": {"type": "string", "maxLength": 120},
+            "new_task": {"type": "string", "maxLength": 200},
             "thought": {"type": "string", "maxLength": 60},
         },
-        "required": ["mode", "new_task", "plan", "say", "thought"],
+        "required": ["mode", "plan", "say", "new_task", "thought"],
         "additionalProperties": False,
     }

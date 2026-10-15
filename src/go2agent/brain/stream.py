@@ -1,6 +1,6 @@
 """Incremental parsing of the brain's streamed JSON decision.
 
-The decision schema fixes the field order: mode, new_task, plan, say, thought (see brain/schema.py).
+The decision schema fixes the field order: mode, plan, say, new_task, thought (see brain/schema.py).
 A field is complete once the next field has started (or the object is closed); a plan step is complete once
 the next step has started or the plan array is closed. That lets the runtime act on `mode` and the first
 plan step while the rest of the answer is still being generated.
@@ -8,7 +8,7 @@ plan step while the rest of the answer is still being generated.
     parser = DecisionStream()
     async for chunk in client.stream_json(messages, schema):
         for event in parser.feed(chunk):
-            ...  # ModeEvent, NewTaskEvent, StepEvent, PlanDoneEvent, SayEvent, ThoughtEvent, DoneEvent
+            ...  # ModeEvent, StepEvent, PlanDoneEvent, SayEvent, NewTaskEvent, ThoughtEvent, DoneEvent
     parser.finish()  # raises StreamError if the text never formed a complete decision
 """
 
@@ -20,7 +20,7 @@ from typing import Any
 
 from pydantic_core import from_json
 
-FIELD_ORDER = ("mode", "new_task", "plan", "say", "thought")
+FIELD_ORDER = ("mode", "plan", "say", "new_task", "thought")
 
 
 class StreamError(Exception):
@@ -262,10 +262,10 @@ class DecisionStream:
                     if value not in ("keep", "replace", "append"):
                         raise StreamError(f"invalid mode: {value!r}")
                     events.append(ModeEvent(value))
-                elif field == "new_task":
-                    events.append(NewTaskEvent(value))
                 elif field == "say":
                     events.append(SayEvent(value))
+                elif field == "new_task":
+                    events.append(NewTaskEvent(value))
                 else:
                     events.append(ThoughtEvent(value))
             self._emitted.add(field)

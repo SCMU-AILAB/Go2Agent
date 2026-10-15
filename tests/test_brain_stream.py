@@ -26,7 +26,6 @@ from go2agent.brain.stream import (
 def decision(*, keep: bool = False) -> dict[str, Any]:
     return {
         "mode": "keep" if keep else "replace",
-        "new_task": '跟着穿黑衣服的人，听到"停"就停止。',
         "plan": []
         if keep
         else [
@@ -41,6 +40,7 @@ def decision(*, keep: bool = False) -> dict[str, Any]:
             {"behavior": "perform", "args": {"action": "hello"}},
         ],
         "say": '好的，听到"停"就停。\\\n',
+        "new_task": '跟着穿黑衣服的人，听到"停"就停止。',
         "thought": "目标在画面中。",
     }
 
@@ -48,10 +48,10 @@ def decision(*, keep: bool = False) -> dict[str, Any]:
 def expected_events(data: dict[str, Any], raw: str) -> list[StreamEvent]:
     return [
         ModeEvent(data["mode"]),
-        NewTaskEvent(data["new_task"]),
         *[StepEvent(i, step) for i, step in enumerate(data["plan"])],
         PlanDoneEvent(len(data["plan"])),
         SayEvent(data["say"]),
+        NewTaskEvent(data["new_task"]),
         ThoughtEvent(data["thought"]),
         DoneEvent(data, raw),
     ]
@@ -83,14 +83,13 @@ def test_decision_all_chunk_boundaries(keep: bool, pretty: bool, ensure_ascii: b
         assert parser.finish() is parser.finish()
         assert parser.text == raw
         assert parser.feed("") == []
-    assert FIELD_ORDER == ("mode", "new_task", "plan", "say", "thought")
+    assert FIELD_ORDER == ("mode", "plan", "say", "new_task", "thought")
 
 
 def test_events_arrive_at_field_and_plan_boundaries_without_partial_args() -> None:
     parser = DecisionStream()
     assert parser.feed(' \n {"mode":"append"') == []
-    assert parser.feed(', "new_task"') == [ModeEvent("append")]
-    assert parser.feed(':"走近目标", "plan"') == [NewTaskEvent("走近目标")]
+    assert parser.feed(', "plan"') == [ModeEvent("append")]
     assert parser.feed(':[{"behavior":"follow","args":{"target":{"box":[0.1,0.2,0.3,0.4]') == []
     assert parser.feed(',"label":"带有 ] } 的名字"}') == []
     assert parser.feed(',"distance":1') == []
@@ -105,8 +104,11 @@ def test_events_arrive_at_field_and_plan_boundaries_without_partial_args() -> No
     assert parser.feed('"behavior":"perform","args":{"action":"hello"}}') == []
     second = {"behavior": "perform", "args": {"action": "hello"}}
     assert parser.feed("]") == [StepEvent(1, second), PlanDoneEvent(2)]
+    assert '"new_task"' not in parser.text
     assert parser.feed(',"say":"你好"') == []
-    assert parser.feed(',"thought"') == [SayEvent("你好")]
+    assert parser.feed(',"new_task"') == [SayEvent("你好")]
+    assert parser.feed(':"走近目标"') == []
+    assert parser.feed(',"thought"') == [NewTaskEvent("走近目标")]
     assert parser.feed(':"跟随目标"') == []
     final = parser.feed("}")
     assert final == [ThoughtEvent("跟随目标"), DoneEvent(json.loads(parser.text), parser.text)]
@@ -134,8 +136,8 @@ def test_events_arrive_at_field_and_plan_boundaries_without_partial_args() -> No
         ('{"mode":"a\\u', "X"),
         ('{"mode":"a\\u12', "X"),
         ('{"mode":"keep",', "}"),
-        ('{"mode":"keep","new_task":"","plan":[', ","),
-        ('{"mode":"keep","new_task":"","plan":[{},', "]"),
+        ('{"mode":"keep","plan":[', ","),
+        ('{"mode":"keep","plan":[{},', "]"),
     ],
 )
 def test_invalid_prefix_raises_on_first_bad_character(prefix: str, bad: str) -> None:
@@ -172,12 +174,13 @@ def test_finish_requires_closed_object(raw: str) -> None:
     [
         "{}",
         '{"new_task":"","mode":"keep"}',
+        '{"mode":"keep","new_task":"","plan":[]}',
         '{"mode":"keep","mode":"keep"}',
-        '{"mode":"wrong","new_task":""}',
-        '{"mode":null,"new_task":""}',
-        '{"mode":"keep","new_task":null,"plan":[]}',
-        '{"mode":"keep","new_task":"","plan":{}}',
-        '{"mode":"keep","new_task":"","plan":[{}]}',
+        json.dumps({**decision(), "mode": "wrong"}),
+        json.dumps({**decision(), "mode": None}),
+        json.dumps({**decision(), "new_task": None}),
+        json.dumps({**decision(), "plan": {}}),
+        json.dumps({**decision(), "plan": [{}]}),
         json.dumps({**decision(), "say": None}),
         json.dumps({**decision(), "thought": 1}),
     ],

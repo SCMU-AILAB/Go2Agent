@@ -384,11 +384,16 @@ def _ms(value: float | None) -> int | None:
 
 
 class _LiveDecision:
-    """Applies a decision to the runtime while the brain is still generating it."""
+    """Applies a decision to the runtime while the brain is still generating it.
+
+    After an e-stop the robot stays stopped unless the user's speech gave a new task. new_task streams after
+    the plan, so in that one situation steps are held back until new_task arrives (or the stream ends).
+    """
 
     def __init__(self, rt: Runtime, triggers: list[Event]) -> None:
         self.rt = rt
         self.spoken_to = any(e.kind is EventKind.USER_SPEECH for e in triggers)
+        self.held: list[tuple[Behavior[Any], SubmitMode]] = []
 
     def new_task(self, text: str) -> None:
         if text == self.rt.task:
@@ -396,10 +401,15 @@ class _LiveDecision:
         self.rt.task = text
         if self.rt.safety.estopped and self.spoken_to:
             self.rt.safety.release()  # a spoken new task after an e-stop resumes operation
+            for behavior, mode in self.held:
+                self.rt.executor.submit([behavior], mode)
+        self.held.clear()
 
     def step(self, behavior: Behavior[Any], mode: SubmitMode) -> None:
         if not self.rt.safety.estopped:
             self.rt.executor.submit([behavior], mode)
+        elif self.spoken_to:
+            self.held.append((behavior, mode))
 
     def say(self, text: str) -> None:
         self.rt._spawn(self.rt.say(text))

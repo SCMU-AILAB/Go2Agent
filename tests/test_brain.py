@@ -68,7 +68,7 @@ def obs(**kw):
 
 
 def decision(mode="replace", plan=(), say="", new_task=""):
-    return {"mode": mode, "new_task": new_task, "plan": list(plan), "say": say, "thought": "t"}
+    return {"mode": mode, "plan": list(plan), "say": say, "new_task": new_task, "thought": "t"}
 
 
 async def test_valid_plan_becomes_behaviors_and_request_is_constrained():
@@ -174,10 +174,10 @@ async def test_steps_task_and_speech_are_delivered_in_order_as_they_complete():
     ]
     res = await Brain(vlm(decision(plan=plan, say="你好", new_task="和人打招呼")), ENV).think(obs(), sink)
     assert sink.calls == [
-        ("new_task", "和人打招呼"),
         ("replace", "approach(target=3, stop_distance=0.8)"),
         ("append", "perform(action='hello')"),
         ("say", "你好"),
+        ("new_task", "和人打招呼"),
     ]
     assert res.first_step_ms is not None and res.ttft_ms is not None
     assert res.first_step_ms <= res.latency_ms

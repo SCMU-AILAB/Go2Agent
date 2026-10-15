@@ -61,7 +61,7 @@ def make_runtime(clock, replies, tmp_path=None, **cfg):
         r = (
             replies.pop(0)
             if replies
-            else {"mode": "keep", "new_task": "", "plan": [], "say": "", "thought": ""}
+            else {"mode": "keep", "plan": [], "say": "", "new_task": "", "thought": ""}
         )
         if isinstance(r, int):
             return sse_response("server error", status=r)
@@ -84,9 +84,9 @@ def make_runtime(clock, replies, tmp_path=None, **cfg):
 def follow_reply(say=""):
     return {
         "mode": "replace",
-        "new_task": "",
         "plan": [{"behavior": "follow", "args": {"target": 3}}],
         "say": say,
+        "new_task": "",
         "thought": "看到黑衣服的人",
     }
 
@@ -173,7 +173,7 @@ async def test_periodic_watch_when_idle_only_with_someone_in_view(clock):
 
 
 async def test_restated_task_and_repeated_plan_change_nothing(clock):
-    restate = {**follow_reply(), "new_task": "跟着我"}
+    restate = follow_reply() | {"new_task": "跟着我"}
     rt, *_ = make_runtime(clock, [follow_reply(), restate])
     rt.control_step(clock())
     rt.set_task("跟着我")
@@ -183,3 +183,15 @@ async def test_restated_task_and_repeated_plan_change_nothing(clock):
     assert running is not None and rt.task == "跟着我"
     await rt.think([])
     assert rt.executor.current is running and rt.task == "跟着我"
+
+
+async def test_spoken_new_task_after_estop_resumes_with_held_steps(clock):
+    resume = follow_reply() | {"new_task": "跟着穿红衣服的人"}
+    rt, robot, *_ = make_runtime(clock, [resume])
+    rt.control_step(clock())
+    rt.hear("停！")
+    assert rt.safety.estopped
+    await rt.think(rt._pending)
+    assert not rt.safety.estopped and rt.task == "跟着穿红衣服的人"
+    rt.control_step(clock())
+    assert rt.executor.current is not None and robot.cmd.vx > 0
