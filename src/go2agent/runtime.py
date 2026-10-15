@@ -12,8 +12,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from go2agent.behaviors.base import Tick
-from go2agent.brain.brain import Brain, ThinkResult
+from go2agent.behaviors.base import Behavior, Tick
+from go2agent.brain.brain import Brain, SubmitMode, ThinkResult
 from go2agent.brain.prompt import Observation
 from go2agent.core.types import TRIGGER_EVENTS, Event, EventKind, Frame, Tracks
 from go2agent.executor import Executor
@@ -270,11 +270,11 @@ class Runtime:
         obs = self.observe(triggers, time.monotonic())
         self.thinking = True
         try:
-            res = await self.brain.think(obs)
+            res = await self.brain.think(obs, _LiveDecision(self, triggers))
         finally:
             self.thinking = False
             self._last_think = time.monotonic()
-        await self._apply(res, triggers)
+        await self._apply(res)
         return res
 
     def observe(self, triggers: list[Event], now: float) -> Observation:
@@ -314,39 +314,35 @@ class Runtime:
                 picked.append(f)
         return tuple(reversed(picked))
 
-    async def _apply(self, res: ThinkResult, triggers: list[Event]) -> None:
+    async def _apply(self, res: ThinkResult) -> None:
+        """Record a finished think. Its steps, speech and task change were already applied live."""
         now = time.monotonic()
         think_id = self.timeline.save_think(res.messages, {"raw": res.raw, "error": res.error})
-        if res.error is not None:
+        if res.error is not None and not res.behaviors:
             self._on_brain_error(res.error, now)
             return
+        if res.error is not None:  # the stream broke after some steps were already running
+            self.emit(Event(EventKind.BRAIN_ERROR, now, {"reason": res.error, "partial": True}))
         self._brain_failing_since = None
         self._brain_down_announced = False
         self._rejection = res.rejection
         d = res.decision
-        if d is None:
-            return
-        if self.safety.estopped and any(e.kind is EventKind.USER_SPEECH for e in triggers) and d.new_task:
-            self.safety.release()  # a spoken new task after an e-stop resumes operation
-        if d.new_task:
-            self.task = d.new_task
-        if not self.safety.estopped:
-            self.executor.submit(res.behaviors, res.mode)  # type: ignore[arg-type]
         plan = [repr(b) for b in res.behaviors]
         self.last_decision = {
-            "thought": d.thought,
-            "say": d.say,
-            "new_task": d.new_task,
             "mode": res.mode,
+            "new_task": d.new_task if d else "",
             "plan": plan,
+            "say": d.say if d else "",
+            "thought": d.thought if d else "",
             "rejection": res.rejection,
-            "latency_ms": round(res.latency_ms),
+            "ttft_ms": _ms(res.ttft_ms),
+            "first_step_ms": _ms(res.first_step_ms),
+            "latency_ms": _ms(res.latency_ms),
             "think_id": think_id,
         }
-        self._history.append(f"{d.thought} -> {res.mode} {plan}" + (f" 说「{d.say}」" if d.say else ""))
+        thought = d.thought if d else "（输出不完整）"
+        self._history.append(f"{thought} -> {res.mode} {plan}" + (f" 说「{d.say}」" if d and d.say else ""))
         self.emit(Event(EventKind.BRAIN_DECISION, now, self.last_decision))
-        if d.say:
-            self._spawn(self.say(d.say))
 
     def _on_brain_error(self, error: str, now: float) -> None:
         log.warning("brain call failed: %s", error)
@@ -381,3 +377,27 @@ class Runtime:
                 with contextlib.suppress(asyncio.QueueEmpty):
                     q.get_nowait()
             q.put_nowait(rec)
+
+
+def _ms(value: float | None) -> int | None:
+    return None if value is None else round(value)
+
+
+class _LiveDecision:
+    """Applies a decision to the runtime while the brain is still generating it."""
+
+    def __init__(self, rt: Runtime, triggers: list[Event]) -> None:
+        self.rt = rt
+        self.spoken_to = any(e.kind is EventKind.USER_SPEECH for e in triggers)
+
+    def new_task(self, text: str) -> None:
+        self.rt.task = text
+        if self.rt.safety.estopped and self.spoken_to:
+            self.rt.safety.release()  # a spoken new task after an e-stop resumes operation
+
+    def step(self, behavior: Behavior[Any], mode: SubmitMode) -> None:
+        if not self.rt.safety.estopped:
+            self.rt.executor.submit([behavior], mode)
+
+    def say(self, text: str) -> None:
+        self.rt._spawn(self.rt.say(text))

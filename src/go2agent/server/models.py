@@ -224,7 +224,7 @@ def create_router(manager: VLLMManager) -> APIRouter:
     async def unload() -> dict[str, Any]:
         return await manager.unload()
 
-    @router.api_route("/v1/{path:path}", methods=["GET", "POST"])
+    @router.api_route("/v1/{path:path}", methods=["GET", "POST"], include_in_schema=False)
     async def v1(path: str, request: Request) -> Response:
         if not manager.ready:
             state = manager.status()["state"]

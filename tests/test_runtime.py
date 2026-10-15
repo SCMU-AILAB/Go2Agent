@@ -2,7 +2,7 @@ import asyncio
 import json
 
 import httpx
-from conftest import FakeClock, make_frame
+from conftest import FakeClock, compact, make_frame, sse_response
 
 from go2agent.behaviors.base import BehaviorEnv
 from go2agent.behaviors.geometry import CameraModel
@@ -61,11 +61,11 @@ def make_runtime(clock, replies, tmp_path=None, **cfg):
         r = (
             replies.pop(0)
             if replies
-            else {"thought": "", "say": "", "new_task": "", "mode": "keep", "plan": []}
+            else {"mode": "keep", "new_task": "", "plan": [], "say": "", "thought": ""}
         )
         if isinstance(r, int):
-            return httpx.Response(r)
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(r)}}]})
+            return sse_response("server error", status=r)
+        return sse_response(compact(r))
 
     robot = SimRobot(clock=clock)
     cam = StepCamera(clock)
@@ -83,11 +83,11 @@ def make_runtime(clock, replies, tmp_path=None, **cfg):
 
 def follow_reply(say=""):
     return {
-        "thought": "看到黑衣服的人",
-        "say": say,
-        "new_task": "",
         "mode": "replace",
+        "new_task": "",
         "plan": [{"behavior": "follow", "args": {"target": 3}}],
+        "say": say,
+        "thought": "看到黑衣服的人",
     }
 
 

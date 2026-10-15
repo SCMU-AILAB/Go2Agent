@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
@@ -96,7 +97,94 @@ class VLMStream:
         self.ttft_ms: float | None = None
         self.latency_ms: float | None = None
         self.usage: dict[str, Any] = {}
-        raise NotImplementedError
+        self._client = client
+        self._messages = messages
+        self._schema = schema
+        self._started = False
 
     def __aiter__(self) -> AsyncIterator[str]:
-        raise NotImplementedError
+        if self._started:
+            raise RuntimeError("VLMStream can only be iterated once")
+        self._started = True
+        return self._iterate()
+
+    async def _iterate(self) -> AsyncIterator[str]:
+        c = self._client.config
+        body = {
+            "model": c.model,
+            "messages": self._messages,
+            "max_tokens": c.max_tokens,
+            "temperature": c.temperature,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "decision", "schema": self._schema, "strict": True},
+            },
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        t0 = time.monotonic()
+        try:
+            request = self._client._http.build_request("POST", "/chat/completions", json=body)
+            async with self._timeout(t0):
+                response = await self._client._http.send(request, stream=True)
+            try:
+                if response.status_code != 200:
+                    async with self._timeout(t0):
+                        await response.aread()
+                    raise VLMError(f"http {response.status_code}: {response.text[:200]}")
+                lines = response.aiter_lines()
+                while True:
+                    try:
+                        async with self._timeout(t0):
+                            line = await anext(lines)
+                    except StopAsyncIteration:
+                        break
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        return
+                    content = self._content(raw)
+                    if content:
+                        if self.ttft_ms is None:
+                            self.ttft_ms = (time.monotonic() - t0) * 1000
+                        yield content
+            finally:
+                await response.aclose()
+        except (TimeoutError, httpx.TimeoutException) as e:
+            raise VLMError(f"timeout after {c.timeout}s") from e
+        except httpx.HTTPError as e:
+            raise VLMError(f"unreachable: {e}") from e
+        finally:
+            self.latency_ms = (time.monotonic() - t0) * 1000
+
+    def _timeout(self, t0: float) -> asyncio.Timeout:
+        # Keep one deadline, but never leave a cancellation scope active while the consumer handles a yield.
+        remaining = self._client.config.timeout - (time.monotonic() - t0)
+        if remaining <= 0:
+            raise TimeoutError
+        return asyncio.timeout(remaining)
+
+    def _content(self, raw: str) -> str:
+        try:
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("chunk must be an object")
+            if payload.get("usage") is not None:
+                usage = payload["usage"]
+                if not isinstance(usage, dict):
+                    raise ValueError("usage must be an object")
+                self.usage = usage
+            choices = payload["choices"]
+            if not isinstance(choices, list):
+                raise ValueError("choices must be an array")
+            if not choices:
+                return ""
+            content = choices[0]["delta"].get("content")
+            if content is None:
+                return ""
+            if not isinstance(content, str):
+                raise ValueError("content must be a string")
+            return content
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise VLMError(f"invalid SSE data: {raw[:200]}") from e

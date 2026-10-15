@@ -24,11 +24,11 @@ class PlanStep(BaseModel):
 
 
 class Decision(BaseModel):
-    thought: str = ""
-    say: str = ""
-    new_task: str = ""  # non-empty only when the user's speech changed the task: the new full task
     mode: Literal["keep", "replace", "append"] = "keep"
+    new_task: str = ""  # non-empty only when the user's speech changed the task: the new full task
     plan: list[PlanStep] = Field(default_factory=list)
+    say: str = ""
+    thought: str = ""
 
 
 _BOX_TARGET = {
@@ -66,17 +66,19 @@ def decision_json_schema(actions: tuple[ActionSpec, ...]) -> dict[str, Any]:
     names = [n for n in BEHAVIORS if n != "perform" or actions]
     return {
         "type": "object",
+        # Order matters: the runtime acts on each field as soon as it is complete (brain/stream.py), so
+        # the fields that change what the robot does come first and the explanation comes last.
         "properties": {
-            "thought": {"type": "string", "maxLength": 60},
-            "say": {"type": "string", "maxLength": 120},
-            "new_task": {"type": "string", "maxLength": 200},
             "mode": {"type": "string", "enum": ["keep", "replace", "append"]},
+            "new_task": {"type": "string", "maxLength": 200},
             "plan": {
                 "type": "array",
                 "maxItems": 4,
                 "items": {"anyOf": [_step_schema(n, actions) for n in names]},
             },
+            "say": {"type": "string", "maxLength": 120},
+            "thought": {"type": "string", "maxLength": 60},
         },
-        "required": ["thought", "say", "new_task", "mode", "plan"],
+        "required": ["mode", "new_task", "plan", "say", "thought"],
         "additionalProperties": False,
     }

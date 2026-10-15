@@ -1,10 +1,16 @@
-"""Brain: one think = observation -> VLM -> validated behaviors."""
+"""Brain: one think = observation -> streamed VLM decision -> validated behaviors, delivered as they complete.
+
+The decision streams in field order (mode, new_task, plan, say, thought). Each plan step is validated and
+handed to the sink the moment it is complete, so the robot starts the first step while the model is still
+writing the rest. A rejected step stops the plan there; steps already handed over keep running.
+"""
 
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, Protocol
 
 from pydantic import ValidationError
 
@@ -13,28 +19,61 @@ from go2agent.behaviors.primitives import BEHAVIORS, TARGET_BEHAVIORS
 from go2agent.brain.client import VLMClient, VLMError
 from go2agent.brain.prompt import ImageSizes, Observation, build_messages
 from go2agent.brain.schema import BoxTarget, Decision, decision_json_schema
+from go2agent.brain.stream import (
+    DecisionStream,
+    DoneEvent,
+    ModeEvent,
+    NewTaskEvent,
+    PlanDoneEvent,
+    SayEvent,
+    StepEvent,
+    StreamError,
+    StreamEvent,
+)
 from go2agent.perception.base import Tracker
 
 log = logging.getLogger(__name__)
+
+SubmitMode = Literal["replace", "append"]
 
 
 class Rejected(Exception):
     pass
 
 
+class DecisionSink(Protocol):
+    """Receives a decision while it is generated, in field order."""
+
+    def new_task(self, text: str) -> None: ...
+
+    def step(self, behavior: Behavior[Any], mode: SubmitMode) -> None:
+        """`replace` for the first step of a replace decision, `append` for every other step."""
+        ...
+
+    def say(self, text: str) -> None: ...
+
+
+class _NullSink:
+    def new_task(self, text: str) -> None: ...
+    def step(self, behavior: Behavior[Any], mode: SubmitMode) -> None: ...
+    def say(self, text: str) -> None: ...
+
+
 @dataclass(slots=True)
 class ThinkResult:
     decision: Decision | None
-    behaviors: list[Behavior] = field(default_factory=list)
-    rejection: str | None = None  # the decision was invalid; fed back next think
-    error: str | None = None  # the VLM call itself failed
-    latency_ms: float = 0.0
+    behaviors: list[Behavior[Any]] = field(default_factory=list)  # steps handed to the sink
+    rejection: str | None = None  # part of the decision was invalid; fed back next think
+    error: str | None = None  # the VLM call or stream failed
+    latency_ms: float = 0.0  # request -> complete decision
+    ttft_ms: float | None = None  # request -> first text
+    first_step_ms: float | None = None  # request -> first step handed over (what the robot feels)
     messages: list[dict[str, Any]] = field(default_factory=list)
     raw: str = ""
 
     @property
     def mode(self) -> str:
-        if self.decision is None or self.rejection or not self.behaviors:
+        if self.decision is None or not self.behaviors:
             return "keep"
         return self.decision.mode
 
@@ -54,48 +93,46 @@ class Brain:
         self.actions = tuple(env.actions.values())
         self.schema = decision_json_schema(self.actions)
 
-    async def think(self, obs: Observation) -> ThinkResult:
+    async def think(self, obs: Observation, sink: DecisionSink | None = None) -> ThinkResult:
         messages = build_messages(obs, self.actions, self.env.camera, self.sizes)
+        run = _Think(self, obs, sink or _NullSink(), ThinkResult(None, messages=messages))
+        stream = self.client.stream_json(messages, self.schema)
+        parser = DecisionStream()
         try:
-            reply = await self.client.complete_json(messages, self.schema)
+            async for chunk in stream:
+                for event in parser.feed(chunk):
+                    await run.on(event)
+            await run.on(parser.finish())
         except VLMError as e:
-            return ThinkResult(None, error=str(e), messages=messages)
-        res = ThinkResult(None, latency_ms=reply.latency_ms, messages=messages, raw=reply.raw)
+            run.res.error = str(e)
+        except StreamError as e:
+            run.res.error = f"invalid output stream: {e}"
+        run.res.raw = parser.text
+        run.res.ttft_ms = stream.ttft_ms
+        run.res.latency_ms = (time.monotonic() - run.t0) * 1000
+        if run.res.rejection:
+            log.info("decision rejected: %s", run.res.rejection)
+        return run.res
+
+    async def resolve_step(self, i: int, step: dict[str, Any], obs: Observation) -> Behavior[Any]:
+        """Validate plan step `i` against the observation; Rejected carries a reason for the model."""
+        name = step.get("behavior")
+        cls = BEHAVIORS.get(name) if isinstance(name, str) else None
+        if cls is None:
+            raise Rejected(f"第{i + 1}步：没有行为 {name!r}")
+        raw_args = step.get("args")
+        args: dict[str, Any] = dict(raw_args) if isinstance(raw_args, dict) else {}
+        if name in TARGET_BEHAVIORS and "target" in args:
+            args["target"] = await self._target(args["target"], obs, i)
+        if name == "perform" and args.get("action") not in self.env.actions:
+            raise Rejected(f"第{i + 1}步：动作 {args.get('action')!r} 不在可用动作中")
         try:
-            res.decision = decision = Decision.model_validate(reply.data)
-            res.behaviors = await self.resolve(decision, obs)
+            return cls(cls.args_model.model_validate(args), self.env)
         except ValidationError as e:
-            res.rejection = f"输出格式错误：{_short(e)}"
-        except Rejected as e:
-            res.rejection = str(e)
-        if res.rejection:
-            res.behaviors = []
-            log.info("decision rejected: %s", res.rejection)
-        return res
+            raise Rejected(f"第{i + 1}步 {name} 参数错误：{_short(e)}") from e
 
-    async def resolve(self, d: Decision, obs: Observation) -> list[Behavior]:
-        if d.mode == "keep":
-            return []
-        if not d.plan:
-            raise Rejected(f"mode={d.mode} 但 plan 为空")
+    async def _target(self, target: Any, obs: Observation, i: int) -> int:
         visible = {t.id for t in obs.tracks.items} if obs.tracks else set()
-        out: list[Behavior] = []
-        for i, step in enumerate(d.plan):
-            cls = BEHAVIORS.get(step.behavior)
-            if cls is None:
-                raise Rejected(f"第{i + 1}步：没有行为 {step.behavior!r}")
-            args = dict(step.args)
-            if step.behavior in TARGET_BEHAVIORS and "target" in args:
-                args["target"] = await self._target(args["target"], visible, obs, i)
-            if step.behavior == "perform" and args.get("action") not in self.env.actions:
-                raise Rejected(f"第{i + 1}步：动作 {args.get('action')!r} 不在可用动作中")
-            try:
-                out.append(cls(cls.args_model.model_validate(args), self.env))
-            except ValidationError as e:
-                raise Rejected(f"第{i + 1}步 {step.behavior} 参数错误：{_short(e)}") from e
-        return out
-
-    async def _target(self, target: Any, visible: set[int], obs: Observation, i: int) -> int:
         if isinstance(target, int) and not isinstance(target, bool):
             if target not in visible:
                 raise Rejected(
@@ -115,6 +152,46 @@ class Brain:
             return await self.tracker.add_box(obs.frames[-1].seq, bt.box, bt.label)
         except Exception as e:  # tracker errors are reported back to the model, never crash the loop
             raise Rejected(f"第{i + 1}步：无法跟踪该 box（{e}）") from e
+
+
+class _Think:
+    """State of one streamed decision."""
+
+    def __init__(self, brain: Brain, obs: Observation, sink: DecisionSink, res: ThinkResult) -> None:
+        self.brain, self.obs, self.sink, self.res = brain, obs, sink, res
+        self.t0 = time.monotonic()
+        self.mode: str | None = None
+
+    async def on(self, event: StreamEvent) -> None:
+        match event:
+            case ModeEvent(mode=mode):
+                self.mode = mode
+            case NewTaskEvent(text=text) if text.strip():
+                self.sink.new_task(text.strip())
+            case StepEvent(index=i, step=step) if (
+                self.mode in ("replace", "append") and not self.res.rejection
+            ):
+                try:
+                    behavior = await self.brain.resolve_step(i, step, self.obs)
+                except Rejected as e:
+                    self.res.rejection = str(e)
+                    return
+                first = not self.res.behaviors
+                self.sink.step(behavior, "replace" if first and self.mode == "replace" else "append")
+                self.res.behaviors.append(behavior)
+                if first:
+                    self.res.first_step_ms = (time.monotonic() - self.t0) * 1000
+            case PlanDoneEvent(count=0) if self.mode in ("replace", "append"):
+                self.res.rejection = f"mode={self.mode} 但 plan 为空"
+            case SayEvent(text=text) if text.strip():
+                self.sink.say(text.strip())
+            case DoneEvent(data=data):
+                try:
+                    self.res.decision = Decision.model_validate(data)
+                except ValidationError as e:
+                    self.res.rejection = self.res.rejection or f"输出格式错误：{_short(e)}"
+            case _:
+                pass
 
 
 def _short(e: ValidationError) -> str:

@@ -182,7 +182,7 @@ def test_piper_voice_path_and_wav_output(monkeypatch, tmp_path):
         tts.PiperEngine(model_dir=tmp_path)
 
 
-VLM_PATHS = {"/models", "/models/brain/load", "/models/brain/unload", "/v1/{path}"}
+VLM_PATHS = {"/models", "/models/brain/load", "/models/brain/unload"}  # /v1 proxy is not in the schema
 
 
 @pytest.mark.parametrize(

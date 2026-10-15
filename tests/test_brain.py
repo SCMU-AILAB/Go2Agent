@@ -6,11 +6,11 @@ import cv2
 import httpx
 import numpy as np
 import pytest
-from conftest import make_frame
+from conftest import compact, make_frame, sse_response
 
-from go2agent.behaviors.base import BehaviorEnv
+from go2agent.behaviors.base import Behavior, BehaviorEnv
 from go2agent.behaviors.geometry import CameraModel
-from go2agent.brain.brain import Brain
+from go2agent.brain.brain import Brain, SubmitMode
 from go2agent.brain.client import VLMClient, VLMConfig
 from go2agent.brain.prompt import Observation, build_messages, observation_text
 from go2agent.brain.schema import decision_json_schema
@@ -42,12 +42,11 @@ class FakeTracker(Tracker):
         return 42
 
 
-def vlm(reply: dict | str, status=200, seen=None):
-    def handler(request: httpx.Request):
+def vlm(reply: dict[str, Any] | str, status: int = 200, seen: list[Any] | None = None) -> VLMClient:
+    def handler(request: httpx.Request) -> httpx.Response:
         if seen is not None:
             seen.append(json.loads(request.content))
-        content = reply if isinstance(reply, str) else json.dumps(reply)
-        return httpx.Response(status, json={"choices": [{"message": {"content": content}}], "usage": {}})
+        return sse_response(reply if isinstance(reply, str) else compact(reply), status)
 
     return VLMClient(VLMConfig(base_url="http://vlm/v1"), transport=httpx.MockTransport(handler))
 
@@ -68,8 +67,8 @@ def obs(**kw):
     return Observation(**base)
 
 
-def decision(mode="replace", plan=(), say=""):
-    return {"thought": "t", "say": say, "new_task": "", "mode": mode, "plan": list(plan)}
+def decision(mode="replace", plan=(), say="", new_task=""):
+    return {"mode": mode, "new_task": new_task, "plan": list(plan), "say": say, "thought": "t"}
 
 
 async def test_valid_plan_becomes_behaviors_and_request_is_constrained():
@@ -86,6 +85,7 @@ async def test_valid_plan_becomes_behaviors_and_request_is_constrained():
         "perform(action='hello')",
     ]
     req = seen[0]
+    assert req["stream"] is True
     assert req["response_format"]["type"] == "json_schema"
     assert req["messages"][1]["content"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
@@ -121,7 +121,7 @@ async def test_box_target_creates_track():
 
 async def test_vlm_failures_are_errors_not_exceptions():
     assert "http 500" in str((await Brain(vlm({}, status=500), ENV).think(obs())).error)
-    assert "invalid json" in str((await Brain(vlm("not json"), ENV).think(obs())).error)
+    assert "invalid output stream" in str((await Brain(vlm("not json"), ENV).think(obs())).error)
 
 
 def test_schema_lists_only_allowed_actions():
@@ -150,3 +150,68 @@ def test_history_frames_are_smaller_than_the_newest():
         assert image is not None
         widths.append(image.shape[1])
     assert widths == [256, 512]
+
+
+class RecordingSink:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def new_task(self, text: str) -> None:
+        self.calls.append(("new_task", text))
+
+    def step(self, behavior: Behavior[Any], mode: SubmitMode) -> None:
+        self.calls.append((mode, repr(behavior)))
+
+    def say(self, text: str) -> None:
+        self.calls.append(("say", text))
+
+
+async def test_steps_task_and_speech_are_delivered_in_order_as_they_complete():
+    sink = RecordingSink()
+    plan = [
+        {"behavior": "approach", "args": {"target": 3}},
+        {"behavior": "perform", "args": {"action": "hello"}},
+    ]
+    res = await Brain(vlm(decision(plan=plan, say="你好", new_task="和人打招呼")), ENV).think(obs(), sink)
+    assert sink.calls == [
+        ("new_task", "和人打招呼"),
+        ("replace", "approach(target=3, stop_distance=0.8)"),
+        ("append", "perform(action='hello')"),
+        ("say", "你好"),
+    ]
+    assert res.first_step_ms is not None and res.ttft_ms is not None
+    assert res.first_step_ms <= res.latency_ms
+
+
+async def test_append_decision_appends_every_step():
+    sink = RecordingSink()
+    await Brain(vlm(decision(mode="append", plan=[{"behavior": "wait", "args": {"seconds": 1}}])), ENV).think(
+        obs(), sink
+    )
+    assert sink.calls == [("append", "wait(seconds=1.0)")]
+
+
+async def test_rejected_step_stops_the_plan_but_keeps_earlier_steps():
+    sink = RecordingSink()
+    plan = [
+        {"behavior": "approach", "args": {"target": 3}},
+        {"behavior": "follow", "args": {"target": 9}},
+        {"behavior": "perform", "args": {"action": "hello"}},
+    ]
+    res = await Brain(vlm(decision(plan=plan)), ENV).think(obs(), sink)
+    assert [c[0] for c in sink.calls] == ["replace"]
+    assert res.mode == "replace" and len(res.behaviors) == 1
+    assert "#9 不在当前画面" in str(res.rejection)
+
+
+async def test_broken_stream_keeps_steps_already_delivered():
+    sink = RecordingSink()
+    full = compact(
+        decision(
+            plan=[{"behavior": "face", "args": {"target": 3}}, {"behavior": "wait", "args": {"seconds": 1}}]
+        )
+    )
+    cut = full[: full.index('{"behavior":"wait"') + 5]
+    res = await Brain(vlm(cut), ENV).think(obs(), sink)
+    assert sink.calls == [("replace", "face(target=3)")]
+    assert res.error is not None and len(res.behaviors) == 1
