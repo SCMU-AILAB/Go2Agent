@@ -1,8 +1,11 @@
+import asyncio
 import socket
 import sys
+import time
 
 import httpx
 import pytest
+import uvicorn
 from fastapi import FastAPI
 
 from go2agent.server.models import ModelState, VLLMConfig, VLLMManager, create_router
@@ -23,6 +26,12 @@ class H(BaseHTTPRequestHandler):
         self._send({"ok": True, "model": model})
     def do_POST(self):
         n = int(self.headers["content-length"]); req = json.loads(self.rfile.read(n))
+        if req.get("stream"):
+            import time
+            self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
+            for part in ("a", "b", "c"):
+                self.wfile.write(f"data: {part}\n\n".encode()); self.wfile.flush(); time.sleep(0.3)
+            return
         self._send({"echo": req, "model": model})
 HTTPServer(("127.0.0.1", port), H).serve_forever()
 """
@@ -81,3 +90,27 @@ async def test_loopback_ignores_proxy_env(manager, monkeypatch):
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
     st = await manager.load()
     assert st["state"] == ModelState.READY
+
+
+async def test_proxy_streams_chunks_as_they_arrive(manager):
+    await manager.load()
+    app = FastAPI()
+    app.include_router(create_router(manager))
+    config = uvicorn.Config(app, host="127.0.0.1", port=free_port(), log_level="warning")
+    server = uvicorn.Server(config)
+    task = asyncio.create_task(server.serve())
+    try:
+        while not server.started:
+            await asyncio.sleep(0.02)
+        url = f"http://127.0.0.1:{config.port}/v1/chat/completions"
+        arrivals = []
+        async with httpx.AsyncClient(trust_env=False) as c, c.stream("POST", url, json={"stream": True}) as r:
+            t0 = time.monotonic()
+            async for line in r.aiter_lines():
+                if line:
+                    arrivals.append((line, time.monotonic() - t0))
+        assert [a[0] for a in arrivals] == ["data: a", "data: b", "data: c"]
+        assert arrivals[0][1] < 0.25 < arrivals[-1][1]  # first chunk did not wait for the last
+    finally:
+        server.should_exit = True
+        await task

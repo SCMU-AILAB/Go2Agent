@@ -28,8 +28,9 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 log = logging.getLogger(__name__)
 
@@ -232,16 +233,23 @@ def create_router(manager: VLLMManager) -> APIRouter:
                 {"error": f"model {manager.config.served_name} not loaded (state: {state})"}, status_code=503
             )
         headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_HEADERS}
+        upstream = proxy.build_request(
+            request.method,
+            f"{manager.base_url}/v1/{path}",
+            content=await request.body(),
+            headers=headers,
+            params=request.query_params,
+        )
         try:
-            r = await proxy.request(
-                request.method,
-                f"{manager.base_url}/v1/{path}",
-                content=await request.body(),
-                headers=headers,
-                params=request.query_params,
-            )
+            r = await proxy.send(upstream, stream=True)
         except httpx.HTTPError as e:
             return JSONResponse({"error": f"vLLM unreachable: {e}"}, status_code=502)
-        return Response(r.content, status_code=r.status_code, media_type=r.headers.get("content-type"))
+        # Pass bytes through as they arrive: buffering would turn a streamed decision into one late blob.
+        return StreamingResponse(
+            r.aiter_raw(),
+            status_code=r.status_code,
+            media_type=r.headers.get("content-type"),
+            background=BackgroundTask(r.aclose),
+        )
 
     return router

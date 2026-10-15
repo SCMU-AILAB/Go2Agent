@@ -60,3 +60,14 @@ def test_refused_action_fails_behavior():
     e.submit([make("perform", action="hello")], "replace")
     out = e.tick(tick(0))
     assert out.events[0].kind is EventKind.BEHAVIOR_FAILED and out.events[0].data["reason"] == "estop"
+
+
+def test_replace_with_the_running_behavior_does_not_restart_it():
+    e, _ = ex()
+    e.submit([make("follow", target=1), make("wait", seconds=1)], "replace")
+    e.tick(tick(0, [person()], depth=2.0))
+    running = e.current
+    e.submit([make("follow", target=1), make("perform", action="hello")], "replace")
+    assert e.current is running and [b.name for b in e.queue] == ["perform"]
+    e.submit([make("follow", target=1, distance=2.0)], "replace")
+    assert e.current is None and [repr(b) for b in e.queue] == ["follow(target=1, distance=2.0)"]

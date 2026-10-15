@@ -391,6 +391,8 @@ class _LiveDecision:
         self.spoken_to = any(e.kind is EventKind.USER_SPEECH for e in triggers)
 
     def new_task(self, text: str) -> None:
+        if text == self.rt.task:
+            return  # the model restated the task; nothing changed
         self.rt.task = text
         if self.rt.safety.estopped and self.spoken_to:
             self.rt.safety.release()  # a spoken new task after an e-stop resumes operation

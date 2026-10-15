@@ -33,12 +33,16 @@ class Executor:
     def submit(self, plan: Sequence[Behavior], mode: Mode) -> None:
         if mode == "keep" or not plan:
             return
-        if mode == "replace":
-            self.queue.clear()
-            self.current = None
         if plan[0].name == "stop":
             self.clear()
             return
+        if mode == "replace":
+            self.queue.clear()
+            if self.current is not None and same_behavior(self.current, plan[0]):
+                # Re-issuing what is already running must not restart it (a restart is a visible jerk).
+                plan = plan[1:]
+            else:
+                self.current = None
         self.queue.extend(plan)
 
     def clear(self) -> None:
@@ -75,3 +79,7 @@ class Executor:
             "current": repr(self.current) if self.current else None,
             "queue": [repr(b) for b in self.queue],
         }
+
+
+def same_behavior(a: Behavior, b: Behavior) -> bool:
+    return a.name == b.name and a.args.model_dump() == b.args.model_dump()

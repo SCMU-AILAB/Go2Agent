@@ -170,3 +170,16 @@ async def test_periodic_watch_when_idle_only_with_someone_in_view(clock):
     clock.advance(1.5)
     rt.control_step(clock())
     assert not rt._periodic_due(clock())  # nobody in view -> save the GPU
+
+
+async def test_restated_task_and_repeated_plan_change_nothing(clock):
+    restate = {**follow_reply(), "new_task": "跟着我"}
+    rt, *_ = make_runtime(clock, [follow_reply(), restate])
+    rt.control_step(clock())
+    rt.set_task("跟着我")
+    await rt.think(rt._pending)
+    rt.control_step(clock())
+    running = rt.executor.current
+    assert running is not None and rt.task == "跟着我"
+    await rt.think([])
+    assert rt.executor.current is running and rt.task == "跟着我"
