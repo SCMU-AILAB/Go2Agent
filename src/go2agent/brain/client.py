@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,6 +47,17 @@ class VLMClient:
     async def close(self) -> None:
         await self._http.aclose()
 
+    def stream_json(self, messages: list[dict[str, Any]], schema: dict[str, Any]) -> VLMStream:
+        """Stream a schema-constrained completion (OpenAI SSE, `stream: true`).
+
+        Iterate the returned VLMStream for text chunks as they arrive. The whole stream must finish
+        within `config.timeout` (else VLMError("timeout ...")); connection, HTTP-status and malformed-SSE
+        problems raise VLMError like complete_json. After iteration, `stream.ttft_ms` is the time to the
+        first non-empty text chunk and `stream.latency_ms` the time to the end of the stream;
+        `stream.usage` is filled when the server sends it (request `stream_options.include_usage`).
+        """
+        return VLMStream(self, messages, schema)
+
     async def complete_json(self, messages: list[dict[str, Any]], schema: dict[str, Any]) -> VLMReply:
         c = self.config
         body = {
@@ -75,3 +87,16 @@ class VLMClient:
         except json.JSONDecodeError as e:
             raise VLMError(f"invalid json: {raw[:200]}") from e
         return VLMReply(data, raw, latency, payload.get("usage", {}))
+
+
+class VLMStream:
+    """Async iterator of text chunks for one streamed completion. See VLMClient.stream_json."""
+
+    def __init__(self, client: VLMClient, messages: list[dict[str, Any]], schema: dict[str, Any]) -> None:
+        self.ttft_ms: float | None = None
+        self.latency_ms: float | None = None
+        self.usage: dict[str, Any] = {}
+        raise NotImplementedError
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        raise NotImplementedError
