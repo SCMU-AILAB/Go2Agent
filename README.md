@@ -37,18 +37,17 @@ uv sync --all-extras          # 开发机
 uv run pytest                 # 全部测试，无需硬件 / 模型
 uv run ruff check src tests && uv run basedpyright   # 必须零报错
 
-# GPU 服务器：感知 + ASR + TTS + VLM 生命周期，全部在 :8100
-uv sync --extra server
-uv run go2agent-server all                # 模型文件取自 --models-dir（默认 /models）
-uv run go2agent-server model load         # 手动加载 VLM（vLLM 子进程），就绪后返回
-uv run go2agent-server model status
-uv run go2agent-server model unload       # 结束 vLLM 进程，显存全部释放
+# GPU 服务器（192.168.0.239）：感知 + ASR + TTS + VLM 生命周期，全部在 :8100，跑在 tmux 会话 go2agent 里
+scripts/start_server.sh --load            # 启动并加载 VLM（只启动不加载：去掉 --load）
+scripts/start_server.sh load | unload     # 手动加载 / 卸载 VLM（卸载即释放全部显存）
+scripts/start_server.sh status | logs | stop
 
-# 狗端（真机）
-uv run go2agent run --server <GPU服务器IP> --robot go2 --camera realsense
+# 狗端（arm64，与服务器同一局域网）：首次运行会装 Python 3.12、依赖，并编译 Go2 SDK 绑定
+scripts/start_dog.sh                      # 环境变量见脚本头部：GO2_SERVER、GO2_NETWORK、GO2_AUDIO_INPUT ...
+scripts/start_dog.sh --task "跟着穿黑衣服的人"
 
 # 不连真狗：模拟机器人 + 视频文件
-uv run go2agent run --server <GPU服务器IP> --robot sim --camera video:clip.mp4 --task "跟着穿黑衣服的人"
+GO2_ROBOT=sim GO2_CAMERA=video:clip.mp4 scripts/start_dog.sh
 ```
 
 模型目录（`--models-dir`，每个模型家族一个子目录；不存在时回退到 hub 名称并自动下载）：
