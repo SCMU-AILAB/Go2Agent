@@ -59,9 +59,12 @@ class Runtime:
         config: RuntimeConfig | None = None,
         speaker: Speaker | None = None,
         task: str = "",
+        closeup: Camera | None = None,
     ) -> None:
+        """`closeup`: optional second camera whose newest frame the brain also sees (not tracked)."""
         self.robot = robot
         self.camera = camera
+        self.closeup = closeup
         self.tracker = tracker
         self.brain = brain
         self.safety = safety
@@ -85,7 +88,7 @@ class Runtime:
         self._brain_failing_since: float | None = None
         self._brain_down_announced = False
         self._rejection: str | None = None
-        self._history: deque[str] = deque(maxlen=self.config.history)
+        self._history: deque[tuple[str, int]] = deque(maxlen=self.config.history)  # (decision, repeats)
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._tasks: list[asyncio.Task] = []
         self._background: set[asyncio.Future] = set()
@@ -155,6 +158,8 @@ class Runtime:
     async def start(self) -> None:
         self.robot.connect()
         self.camera.start()
+        if self.closeup is not None:
+            self.closeup.start()
         await self.tracker.start()
         self.safety.start_watchdog()
         self._tasks = [
@@ -176,6 +181,7 @@ class Runtime:
             ("watchdog", self.safety.stop_watchdog),
             ("tracker", self.tracker.close),
             ("camera", self.camera.close),
+            ("closeup camera", self.closeup.close if self.closeup else lambda: None),
             ("robot close", self.robot.close),
             ("brain client", self.brain.client.close),
             ("timeline", self.timeline.close),
@@ -316,12 +322,26 @@ class Runtime:
             recent_events=tuple(recent[-self.config.recent_events :]),
             executor=ex,
             frames=self._keyframes(tracks),
+            closeup=self._closeup_frame(now),
             tracks=tracks,
             robot=self.robot.state(),
             obstacles=self.robot.obstacles(),
-            history=tuple(self._history),
+            history=tuple(text if n == 1 else f"{text}（连续 {n} 次）" for text, n in self._history),
             rejection=self._rejection,
         )
+
+    def _remember(self, entry: str) -> None:
+        """Collapse identical consecutive decisions: a list of repeats anchors the model on its own past."""
+        if self._history and self._history[-1][0] == entry:
+            self._history[-1] = (entry, self._history[-1][1] + 1)
+        else:
+            self._history.append((entry, 1))
+
+    def _closeup_frame(self, now: float) -> Frame | None:
+        frame = self.closeup.latest() if self.closeup is not None else None
+        if frame is None or now - frame.stamp > 1.0:
+            return None  # a stale close-up would show the past as the present
+        return frame
 
     def _keyframes(self, tracks: Tracks | None) -> tuple[Frame, ...]:
         """Frames spaced keyframe_spacing_s apart, ending at the frame the tracks belong to."""
@@ -364,7 +384,7 @@ class Runtime:
             "think_id": think_id,
         }
         thought = d.thought if d else "（输出不完整）"
-        self._history.append(f"{thought} -> {res.mode} {plan}" + (f" 说「{d.say}」" if d and d.say else ""))
+        self._remember(f"{thought} -> {res.mode} {plan}" + (f" 说「{d.say}」" if d and d.say else ""))
         self.emit(Event(EventKind.BRAIN_DECISION, now, self.last_decision))
 
     def _on_brain_error(self, error: str, now: float) -> None:

@@ -16,8 +16,10 @@ SYSTEM_PROMPT = """你是一只四足机器狗的大脑。你通过相机持续�
 你不直接控制腿：你输出「行为」，由本地控制器高频闭环执行（跟随、走近、转向等会自己持续修正）。
 你只在有新情况时被唤醒：新任务、有人说话、行为完成或失败、目标出现或丢失、障碍、定期复查。
 
-图像说明：多张图按时间从旧到新排列，最后一张是当前画面。当前画面中被跟踪的目标画了带编号的框，
-编号就是 target 的取值。需要的目标没有编号框时，target 可以给 {"box":[x1,y1,x2,y2],"label":"..."}，
+图像说明：前方视角的多张图按时间从旧到新排列，最后一张是当前画面。当前画面中被跟踪的目标画了带编号的框，
+编号就是 target 的取值。如果另有一张「近景视角」，它来自朝上看的相机：离你很近的人在前方视角里往往只露出
+腿，他的上半身、脸和手要在近景视角里看。判断手势时两种视角都要看。
+需要的目标没有编号框时，target 可以给 {"box":[x1,y1,x2,y2],"label":"..."}，
 坐标是当前画面上 0~1 的归一化值。
 
 输出字段按顺序：mode、plan、say、new_task、thought。系统会边生成边执行，前面的字段先生效：
@@ -33,6 +35,7 @@ SYSTEM_PROMPT = """你是一只四足机器狗的大脑。你通过相机持续�
 - new_task：几乎总是空字符串。只有用户刚说的话下达了新任务或修改了任务时，才填写更新后的完整任务；
   禁止照抄当前任务。
 - thought：极简短（不超过 20 字）说明依据，只用于记录。
+有没有人在挥手、比手势，只根据当前这几张图判断，不要沿用之前决策里的结论。
 没有任务、也没有需要回应的人时，保持安静（keep 或 stop）。
 「上次输出被拒绝」说明你上次的输出有错，按原因修正。"""
 
@@ -69,6 +72,7 @@ class Observation:
     tracks: Tracks | None
     robot: RobotState
     obstacles: Obstacles | None = None
+    closeup: Frame | None = None  # newest frame of a second, upward camera (near people's upper body)
     history: tuple[str, ...] = ()  # short summaries of previous decisions, oldest first
     rejection: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
@@ -135,6 +139,7 @@ class ImageSizes:
 
     newest: int = 512  # ~192 tokens
     history: int = 256  # ~48 tokens each
+    closeup: int = 448
 
 
 def build_messages(
@@ -142,10 +147,16 @@ def build_messages(
 ) -> list[dict[str, Any]]:
     sizes = sizes or ImageSizes()
     content: list[dict[str, Any]] = []
+    if obs.closeup is not None:
+        content.append({"type": "text", "text": "【前方视角，按时间从旧到新，最后一张带编号框】"})
     for i, f in enumerate(obs.frames):
         newest = i == len(obs.frames) - 1
         rgb = draw_marks(f.rgb, obs.tracks) if newest else f.rgb
         rgb = resize_long_side(rgb, sizes.newest if newest else sizes.history)
+        content.append({"type": "image_url", "image_url": {"url": data_url(jpeg_bytes(rgb))}})
+    if obs.closeup is not None:
+        content.append({"type": "text", "text": "【近景视角（当前，朝上看，没有编号框）】"})
+        rgb = resize_long_side(obs.closeup.rgb, sizes.closeup)
         content.append({"type": "image_url", "image_url": {"url": data_url(jpeg_bytes(rgb))}})
     content.append({"type": "text", "text": observation_text(obs, cam)})
     return [

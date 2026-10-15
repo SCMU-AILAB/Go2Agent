@@ -1,8 +1,10 @@
 import asyncio
 import json
+import time
+from collections.abc import Callable
 
 import httpx
-from conftest import FakeClock, compact, make_frame, sse_response
+from conftest import compact, make_frame, sse_response
 
 from go2agent.behaviors.base import BehaviorEnv
 from go2agent.behaviors.geometry import CameraModel
@@ -20,7 +22,7 @@ from go2agent.timeline import Timeline, load_think
 class StepCamera(Camera):
     """Returns a new frame on every call, stamped with the fake clock."""
 
-    def __init__(self, clock: FakeClock) -> None:
+    def __init__(self, clock: Callable[[], float]) -> None:
         self.clock, self.seq = clock, 0
 
     def start(self) -> None: ...
@@ -231,3 +233,21 @@ async def test_perception_health_flaps_are_debounced(clock):
         clock.advance(0.25)
         rt.control_step(clock())
     assert health_events() == [True, False]
+
+
+async def test_closeup_frame_reaches_the_brain_and_repeats_collapse(clock):
+    rt, _, _, seen, _ = make_runtime(clock, [follow_reply(), follow_reply()])
+    rt.closeup = StepCamera(time.monotonic)  # think() stamps observations with the real clock
+    rt.control_step(clock())
+    rt.set_task("跟着我")
+    await rt.think(rt._pending)
+    content = seen[0]["messages"][1]["content"]
+    labels = [p["text"] for p in content if p["type"] == "text"][:2]
+    assert labels == [
+        "【前方视角，按时间从旧到新，最后一张带编号框】",
+        "【近景视角（当前，朝上看，没有编号框）】",
+    ]
+    rt._remember("x -> keep []")
+    rt._remember("x -> keep []")
+    obs = rt.observe([], clock())
+    assert obs.history[-1] == "x -> keep []（连续 2 次）"

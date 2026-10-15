@@ -59,6 +59,14 @@ def _make_camera(args: argparse.Namespace) -> tuple[Camera, CameraModel]:
     return _make_plain_camera(args), CameraModel()
 
 
+def _make_closeup(args: argparse.Namespace) -> Camera | None:
+    if args.closeup == "none":
+        return None
+    from go2agent.sensors.realsense import RealSenseCamera
+
+    return RealSenseCamera(rgb_rotation_deg=args.camera_rotation)
+
+
 def _make_plain_camera(args: argparse.Namespace) -> Camera:
     spec: str = args.camera
     if spec == "realsense":
@@ -101,6 +109,7 @@ async def _run(args: argparse.Namespace) -> None:
         timeline,
         task=args.task,
         speaker=speaker.say if speaker else None,
+        closeup=_make_closeup(args),
     )
     mic: Microphone | None = None
     if speaker is not None:
@@ -187,6 +196,12 @@ def main() -> None:
     run.add_argument("--network", default="eth0", help="Go2 network interface")
     run.add_argument("--camera", default="go2front", help="go2front | realsense | video:PATH | device:N")
     run.add_argument("--camera-rotation", type=int, default=0, choices=[0, 90, 180, 270])
+    run.add_argument(
+        "--closeup",
+        choices=["none", "realsense"],
+        default="none",
+        help="second camera the brain also sees (the upward-looking D435i shows people up close)",
+    )
     run.add_argument("--perception-url", help=f"override, default ws://SERVER:{SERVICES_PORT}/track")
     run.add_argument("--task", default="", help="initial task")
     run.add_argument(

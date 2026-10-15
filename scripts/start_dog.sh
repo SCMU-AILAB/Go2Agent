@@ -6,7 +6,7 @@
 #   scripts/start_dog.sh --task "跟着我"       extra args go to `go2agent run`
 #
 # Env:
-#   GO2_SERVER            GPU server LAN address (192.168.0.239, eno1 of the 3080 server)
+#   GO2_SERVER            GPU server LAN address (192.168.0.241, eno1 of the 3080 server; DHCP, may change)
 #   GO2_NETWORK           network interface connected to the Go2 (eth0)
 #   GO2_ROBOT             go2 | sim (go2)
 #   GO2_CAMERA            go2front | realsense | video:PATH | device:N (go2front: the Go2's level wide-angle camera)
@@ -21,7 +21,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.local/bin:$PATH"
 
-SERVER="${GO2_SERVER:-192.168.0.239}"
+SERVER="${GO2_SERVER:-192.168.0.241}"
 NETWORK="${GO2_NETWORK:-eth0}"
 ROBOT="${GO2_ROBOT:-go2}"
 CAMERA="${GO2_CAMERA:-go2front}"
@@ -52,6 +52,11 @@ if [[ "$ROBOT" == "go2" ]] && ! py "import unitree_sdk2_cpp"; then
   py "import unitree_sdk2_cpp" || die "Go2 SDK bindings still not importable"
 fi
 
+closeup=(--closeup none)
+if [[ "$CAMERA" == "go2front" ]] && py "import pyrealsense2"; then
+  closeup=(--closeup realsense)  # the upward D435i shows the upper body of people standing close
+fi
+
 if [[ "$CAMERA" == "realsense" ]] && ! py "import pyrealsense2"; then
   if [[ -n "$RS_WHEEL" && -f "$RS_WHEEL" ]]; then
     say "installing $RS_WHEEL"
@@ -79,7 +84,7 @@ elif ! grep -q '"state":"ready"' <<<"${status// /}"; then
   warn "VLM not loaded on the server: run scripts/start_server.sh load there"
 fi
 
-say "starting: robot=$ROBOT network=$NETWORK camera=$CAMERA server=$SERVER (app API :8080 unless --api-port)"
+say "starting: robot=$ROBOT network=$NETWORK camera=$CAMERA ${closeup[*]} server=$SERVER (app API :8080 unless --api-port)"
 exec uv run --no-sync go2agent run \
   --server "$SERVER" --robot "$ROBOT" --network "$NETWORK" --camera "$CAMERA" \
-  "${voice[@]}" "$@"
+  "${closeup[@]}" "${voice[@]}" "$@"
