@@ -9,7 +9,7 @@
 #   GO2_SERVER            GPU server LAN address (192.168.0.239, eno1 of the 3080 server)
 #   GO2_NETWORK           network interface connected to the Go2 (eth0)
 #   GO2_ROBOT             go2 | sim (go2)
-#   GO2_CAMERA            realsense | video:PATH | device:N (realsense)
+#   GO2_CAMERA            go2front | realsense | video:PATH | device:N (go2front: the Go2's level wide-angle camera)
 #   GO2_SDK_BINDINGS      unitree_sdk2_bindings source, built once if the SDK is missing
 #                         (~/unitree_sdk2_bindings or ~/unitree_sdk2/unitree_sdk2_bindings)
 #   GO2_REALSENSE_WHEEL   pyrealsense2 wheel built for this Python (PyPI has none for arm64), installed once
@@ -24,7 +24,7 @@ export PATH="$HOME/.local/bin:$PATH"
 SERVER="${GO2_SERVER:-192.168.0.239}"
 NETWORK="${GO2_NETWORK:-eth0}"
 ROBOT="${GO2_ROBOT:-go2}"
-CAMERA="${GO2_CAMERA:-realsense}"
+CAMERA="${GO2_CAMERA:-go2front}"
 first_existing() { for p in "$@"; do [[ -e "$p" ]] && { echo "$p"; return; }; done; echo "${1:-}"; }
 BINDINGS="${GO2_SDK_BINDINGS:-$(first_existing "$HOME/unitree_sdk2_bindings" "$HOME/unitree_sdk2/unitree_sdk2_bindings")}"
 # shellcheck disable=SC2012  # newest file by name order is what we want; names have no newlines

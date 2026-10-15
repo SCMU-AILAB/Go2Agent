@@ -20,7 +20,7 @@ from go2agent.behaviors.base import BehaviorEnv
 from go2agent.behaviors.geometry import CameraModel
 from go2agent.brain.brain import Brain
 from go2agent.brain.client import VLMClient, VLMConfig, VLMError
-from go2agent.brain.prompt import system_message
+from go2agent.brain.prompt import ImageSizes, system_message
 from go2agent.brain.schema import decision_json_schema
 from go2agent.robot.base import Robot
 from go2agent.robot.go2_actions import GO2_ACTIONS
@@ -48,7 +48,18 @@ def _make_robot(args: argparse.Namespace) -> Robot:
     return Go2Robot(Go2Config(network_interface=args.network))
 
 
-def _make_camera(args: argparse.Namespace) -> Camera:
+def _make_camera(args: argparse.Namespace) -> tuple[Camera, CameraModel]:
+    spec: str = args.camera
+    if spec == "go2front":
+        from go2agent.sensors.go2_front import GO2_FRONT_MODEL, Go2FrontCamera
+
+        # With the real Go2 the driver owns the DDS channel; with the simulated robot the camera opens it.
+        camera = Go2FrontCamera(network_interface=args.network, owns_channel=args.robot != "go2")
+        return camera, GO2_FRONT_MODEL
+    return _make_plain_camera(args), CameraModel()
+
+
+def _make_plain_camera(args: argparse.Namespace) -> Camera:
     spec: str = args.camera
     if spec == "realsense":
         from go2agent.sensors.realsense import RealSenseCamera
@@ -60,7 +71,7 @@ def _make_camera(args: argparse.Namespace) -> Camera:
         return VideoCamera(int(spec.removeprefix("device:")))
     if spec.startswith("video:"):
         return VideoCamera(spec.removeprefix("video:"), loop=True)
-    raise SystemExit(f"unknown --camera {spec!r}; use realsense, video:PATH or device:N")
+    raise SystemExit(f"unknown --camera {spec!r}; use go2front, realsense, video:PATH or device:N")
 
 
 async def _run(args: argparse.Namespace) -> None:
@@ -71,16 +82,19 @@ async def _run(args: argparse.Namespace) -> None:
 
     robot = _make_robot(args)
     safety = SafetyGate(robot, SafetyConfig(allow_dangerous=args.allow_dangerous))
-    env = BehaviorEnv(CameraModel(), {a.name: a for a in safety.allowed_actions()})
+    camera, camera_model = _make_camera(args)
+    env = BehaviorEnv(camera_model, {a.name: a for a in safety.allowed_actions()})
     tracker = RemoteTracker(args.perception_url or f"ws://{args.server}:{SERVICES_PORT}/track")
     client = VLMClient(VLMConfig(base_url=_vlm_url(args), model=args.model, timeout=args.vlm_timeout))
-    brain = Brain(client, env, tracker)
+    # The wide front camera shows people smaller, so give the brain a larger newest frame.
+    sizes = ImageSizes(newest=640, history=320) if args.camera == "go2front" else ImageSizes()
+    brain = Brain(client, env, tracker, sizes)
     timeline = Timeline(None if args.no_log else Path(args.log_dir))
     voice_base = f"http://{args.server}:{SERVICES_PORT}"
     speaker = Speaker(f"{voice_base}/tts", device=_device(args.speaker_device)) if args.voice else None
     rt = Runtime(
         robot,
-        _make_camera(args),
+        camera,
         tracker,
         brain,
         safety,
@@ -171,7 +185,7 @@ def main() -> None:
     common(run)
     run.add_argument("--robot", choices=["sim", "go2"], default="sim")
     run.add_argument("--network", default="eth0", help="Go2 network interface")
-    run.add_argument("--camera", default="realsense", help="realsense | video:PATH | device:N")
+    run.add_argument("--camera", default="go2front", help="go2front | realsense | video:PATH | device:N")
     run.add_argument("--camera-rotation", type=int, default=0, choices=[0, 90, 180, 270])
     run.add_argument("--perception-url", help=f"override, default ws://SERVER:{SERVICES_PORT}/track")
     run.add_argument("--task", default="", help="initial task")
