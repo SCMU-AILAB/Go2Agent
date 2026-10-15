@@ -213,5 +213,5 @@ async def test_broken_stream_keeps_steps_already_delivered():
     )
     cut = full[: full.index('{"behavior":"wait"') + 5]
     res = await Brain(vlm(cut), ENV).think(obs(), sink)
-    assert sink.calls == [("replace", "face(target=3)")]
+    assert sink.calls == [("replace", "face(target=3, timeout=3.0)")]
     assert res.error is not None and len(res.behaviors) == 1

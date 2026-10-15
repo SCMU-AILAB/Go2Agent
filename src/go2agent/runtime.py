@@ -33,7 +33,7 @@ _TASKLESS_TRIGGERS = frozenset({EventKind.TASK, EventKind.USER_SPEECH})
 @dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     control_hz: float = 20.0
-    periodic_s: float = 4.0  # re-check interval while a behavior runs
+    periodic_s: float = 2.0  # re-check interval while a behavior runs
     idle_watch_s: float = 0.0  # look interval while idle with a task and someone in view (0 = back to back)
     service_debounce_s: float = 1.0  # a service health change is reported once it has lasted this long
     keyframes: int = 3

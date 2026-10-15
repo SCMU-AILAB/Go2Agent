@@ -105,11 +105,16 @@ class Approach(_TargetBehavior[ApproachArgs]):
 
 class FaceArgs(TargetArgs):
     target: int = Field(description="track id of the target to turn toward")
+    timeout: float = Field(3.0, ge=0.5, le=10.0, description="seconds before giving up on centering")
+
+
+FACE_TOLERANCE = 0.15  # rad (~9 deg): facing someone, not aiming at them
+MIN_TURN_WZ = 0.3  # rad/s: smaller yaw commands do not turn the Go2 at all (seen on the robot)
 
 
 class Face(_TargetBehavior[FaceArgs]):
     name = "face"
-    description = "Turn in place until a tracked target is centered in view."
+    description = "Turn in place toward a tracked target. Ends when roughly centered or after `timeout`."
     args_model = FaceArgs
 
     def step(self, t: Tick) -> Step:
@@ -117,9 +122,11 @@ class Face(_TargetBehavior[FaceArgs]):
         if isinstance(track, Step):
             return track
         b, wz = self._turn(track)
-        if abs(b) < 0.08:
+        if abs(b) < FACE_TOLERANCE:
             return Step.ok()
-        return Step(velocity=Velocity(0.0, 0.0, wz))
+        if self.elapsed(t) > self.args.timeout:
+            return Step.ok(reason="timeout")  # good enough: never block what was planned after facing
+        return Step(velocity=Velocity(0.0, 0.0, math.copysign(max(abs(wz), MIN_TURN_WZ), wz)))
 
 
 class SearchArgs(BehaviorArgs):

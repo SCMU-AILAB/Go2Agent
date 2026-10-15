@@ -125,3 +125,13 @@ def test_perform_fails_when_the_robot_reports_the_action_failed():
     )
     step = b.tick(failed)
     assert step.status is Status.FAILED and "3104" in step.reason
+
+
+def test_face_turns_at_least_the_minimum_rate_and_gives_up_after_timeout():
+    b = make("face", target=1, timeout=3)
+    s = b.tick(tick(0, [person(cx=0.63)]))  # ~10 deg off: 1.5 * 0.177 = 0.27 rad/s would not move the Go2
+    assert vel(s).wz <= -0.3
+    assert b.tick(tick(2.0, [person(cx=0.63)])).status is Status.RUNNING
+    done = b.tick(tick(3.1, [person(cx=0.63)]))
+    assert done.status is Status.SUCCEEDED and done.reason == "timeout"
+    assert make("face", target=1).tick(tick(0, [person(cx=0.54)])).status is Status.SUCCEEDED  # within ~9 deg
