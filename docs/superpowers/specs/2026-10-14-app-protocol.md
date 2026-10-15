@@ -1,101 +1,107 @@
-# Go2Agent App 协议 — 前后端契约草案
+# Go2Agent App 协议
 
-日期：2026-10-14 · 状态：草案（前端按此实现，狗端 `api` 实现时以此为准，改动需同步更新本文档）
+日期：2026-10-15 · 状态：**以狗端实现为准**（`src/go2agent/api/server.py`）。前端按本文实现；狗端接口变化时同步更新本文。
 
-所有传输都走狗端 `api` 服务，默认 `http://<dog-host>:8200`，仅限可信局域网。
+狗端 `api` 默认 `http://<dog-host>:8080`（`go2agent run --api-port` 可改），无鉴权，仅限可信局域网。
+狗当前在 `192.168.0.171`。
 
 ## 1. REST
 
 | 方法 | 路径 | 请求体 | 响应 |
 | --- | --- | --- | --- |
-| GET | `/health` | — | `{"status": "ok"}` |
-| GET | `/status` | — | `StatusSnapshot`（见 2.3） |
-| POST | `/task` | `{"text": "跟着我"}` | `{"ok": true}` |
-| POST | `/estop` | `{"source": "app"}` | `{"ok": true, "estopped": true}` |
-| POST | `/release` | `{}` | `{"ok": true, "estopped": false}` |
+| GET | `/status` | — | `Status`（见 3.1），也用作连通性检查 |
+| POST | `/task` | `{"text": "跟着我"}` | `Status`。空字符串 = 清除任务并停止；同时解除急停 |
+| POST | `/hear` | `{"text": "..."}` | `{"ok": true}`。等同麦克风听到一句话（App 端语音识别可用） |
+| POST | `/estop` | 无 | `Status`（`estopped: true`）。本地立即生效，不经 VLM，幂等 |
+| POST | `/resume` | 无 | `Status`（`estopped: false`）。只解除急停，不改任务 |
+| GET | `/frame.jpg` | — | 当前画面 JPEG（已画编号框）；无画面时 404 |
 
-- `/task`：下达新任务，立即返回，思考结果走事件流。
-- `/estop`：急停，不经 VLM，本地立即生效（安全通道）。幂等。
-- `/release`：解除急停。幂等。
+## 2. WebSocket
 
-## 2. WebSocket `/stream`
+两条独立连接：
 
-一个连接同时承载：状态快照、事件流（文本）与画面帧流（二进制）。
+- **`/events`**（文本）：连接后第一条是 `{"kind": "status", "data": Status}`，之后推送每条时间线记录：
+  `{"wall": 1792040000.12, "mono": 12345.67, "kind": "<EventKind>", "data": {...}}`。
+  `wall` 是 Unix 时间，`mono` 是狗端单调时钟。不会定期推送状态：需要最新状态时轮询 `GET /status`（建议 1–2 s）。
+- **`/video?fps=10`**（二进制）：每条消息是一张完整 JPEG（最长边 640，**已画好跟踪编号框**），没有额外帧头。
+  `fps` 取 1–30，默认 10。只在有新画面时发送。
 
-### 2.1 文本消息（服务端 → 客户端，JSON）
+断线由 App 自行重连（建议指数退避 0.5 s → 5 s）。
 
-事件（与 `core/types.py` 的 `Event.to_json()` 对齐）：
+## 3. 数据结构
 
-```json
-{"type": "event", "event": {"kind": "behavior_done", "stamp": 12345.67, "data": {"behavior": "face", "args": {...}, "queue_empty": true}}}
-```
-
-状态快照（连接时先推一次，之后事件驱动 + 每 2s 定期）：
-
-```json
-{"type": "status", "status": {"estopped": false, "task": "...", "robot": {"connected": true, "busy": false}, "executor": {"current": "follow #1", "queue": [], "running_s": 3.2}, "tracks": [...], "services": {"vlm": true, "perception": true, "asr": false, "tts": true}, "frame_seq": 1024}}
-```
-
-### 2.2 二进制消息（服务端 → 客户端，画面帧）
-
-```
-| uint32 BE seq | float64 BE stamp | JPEG bytes (RGB, 16:9) |
-```
-
-- `stamp` 为狗端 `time.monotonic()` 秒，与事件 `stamp` 同源（仅用于服务端侧排序，App 显示用本地接收时间）。
-- 帧率约 10–15 fps；客户端始终显示最新帧，跳帧即丢弃。
-
-### 2.3 数据结构
-
-`Track`（对齐 `core/types.py`）：
-
-```json
-{"id": 1, "label": "person", "box": [0.10, 0.17, 0.21, 0.67], "score": 0.92}
-```
-
-`box` 为归一化 `x1, y1, x2, y2`（origin 左上）。跟踪框由 App 本地叠加绘制（帧图像本身不带框，便于复用）。
-
-事件 `kind` 全集（对齐 `EventKind`）：`task` / `user_speech` / `behavior_done` / `behavior_failed` / `track_appeared` / `track_lost` / `obstacle_close` / `periodic` / `estop` / `brain_decision` / `brain_error` / `say` / `service`。
-
-各 `kind` 的 `data`：
-
-| kind | data |
-| --- | --- |
-| `task`, `user_speech`, `say` | `{"text": "..."}` |
-| `behavior_done` | `{"behavior", "args", "reason", "queue_empty"}` |
-| `behavior_failed` | `{"behavior", "args", "reason"}`（reason 为机器可读原因，如 `target_lost`） |
-| `track_appeared`, `track_lost` | `{"id", "label"}` |
-| `obstacle_close` | `{"distance"}`（米） |
-| `estop` | `{"source"}`（`app` / `voice` / `api`） |
-| `service` | `{"service", "ok", "detail"}` |
-| `brain_error` | `{"reason"}` |
-| `periodic` | `{}` |
-
-`brain_decision`（思考详情，供 App 展开回放）：
+### 3.1 Status
 
 ```json
 {
-  "thought": "任务要求跟随，#1 是同一个人，继续跟",
-  "say": "收到",
-  "mode": "keep",
-  "plan": [{"behavior": "follow", "args": {"target": 1, "distance": 1.2}}],
-  "latency_ms": 812.5,
-  "rejection": null,
-  "frames": ["data:image/jpeg;base64,..."]
+  "task": "跟着穿黑衣服的人",
+  "estopped": false,
+  "thinking": false,
+  "executor": {"current": "follow(target=3, distance=1.2)", "queue": ["perform(action='hello')"]},
+  "robot": {"connected": true, "busy": false, "mode": 0, "gait_type": 0, "position": [0.1, 0.2, 0.3],
+            "velocity": [0, 0, 0], "rpy": [0, 0, 0.6], "error_code": 100, "telemetry_age": 0.003,
+            "last_error": null, "command_refusal": null, "stopping": false},
+  "tracker_healthy": true,
+  "tracks": [{"id": 3, "label": "person", "box": [0.40, 0.20, 0.60, 0.90]}],
+  "last_decision": { ...与 brain_decision 的 data 相同... },
+  "run_dir": "runs/20261015-220143"
 }
 ```
 
-- `frames`：本次思考的输入关键帧缩略图（≤256px、quality 60、最多 3 张），仅在 `brain_decision` 事件携带，避免常态流量膨胀。
-- `rejection`：非 null 表示该输出被校验拒绝（App 显示为警告色）。
-- `mode`：`keep` / `replace` / `append`。
+- `executor.current` / `queue` 是行为的可读字符串（`名称(参数=值, ...)`）。
+- `robot` 中除 `connected`、`busy` 外的字段来自具体机器人（Go2 遥测），可能缺省，App 不应依赖。
+- `box` 为归一化 `x1, y1, x2, y2`（原点左上）。`/video` 的画面已经画了框，App 无需叠加；如要自绘，注意框与帧不保证同一时刻。
 
-### 2.4 客户端 → 服务端
+### 3.2 事件 kind 与 data（`core/types.py` 的 `EventKind`）
 
-暂无（连接即全量订阅）。预留 `{"type": "subscribe", ...}` 扩展（如按需关帧流）。连接断开由客户端自动重连（指数退避 0.5s → 5s）。
+| kind | data |
+| --- | --- |
+| `task` | `{"text", "source"}`（`source`: `app` / `startup`） |
+| `user_speech`, `say` | `{"text"}` |
+| `behavior_done` | `{"behavior", "args", "reason", "queue_empty"}`（`reason` 可能是 `timeout` 等补充说明） |
+| `behavior_failed` | `{"behavior", "args", "reason", "queue_empty"}`（`reason` 机器可读，如 `target_lost`、`action_failed: ...`） |
+| `track_appeared`, `track_lost` | `{"id", "label"}` |
+| `obstacle_close` | `{"direction", "distance"}`（`direction`: `front` / `back` / `left` / `right`，米，从车身边缘算） |
+| `estop` | `{"source"}`（`app` / `voice`） |
+| `service` | `{"service", "ok"}`（目前只有 `perception`；状态变化持续 1 s 才上报） |
+| `brain_error` | `{"reason"}`，流式中断但已执行部分步骤时另有 `"partial": true` |
+| `periodic` | `{}` |
+| `brain_decision` | 见下 |
 
-## 3. App 端行为约定
+`brain_decision`：
 
-- 急停按钮：点击立即 POST `/estop`，**无确认弹窗**；急停态下再点即 POST `/release`。
-- 事件时间线：本地环形缓冲保留最近 400 条；`brain_decision` 可展开详情。
-- `stamp` 是服务端单调时钟，App 显示相对时间一律用本地接收时刻。
-- 本地网络 HTTP：App 需在 Info.plist 声明 `NSAllowsLocalNetworking`（iOS 另需 `NSLocalNetworkUsageDescription`）。
+```json
+{
+  "mode": "replace",
+  "new_task": "",
+  "plan": ["approach(target=3, stop_distance=0.8)", "perform(action='hello')"],
+  "say": "你好",
+  "thought": "目标3在挥手，走过去打招呼",
+  "rejection": null,
+  "ttft_ms": 450,
+  "first_step_ms": 820,
+  "latency_ms": 1390,
+  "think_id": "0012"
+}
+```
+
+- `plan` 是**已开始执行**的步骤的可读字符串（流式决策中被拒绝的后续步骤不在其中）。
+- `rejection` 非 null 表示部分输出被校验拒绝（App 用警告色显示）。
+- `first_step_ms` 是「请求 → 第一步开始执行」，即机器人感受到的延迟；`latency_ms` 是完整决策耗时。
+- 思考时的输入关键帧不随事件推送；需要时在狗端 `runs/<run>/thinks/<think_id>-N.jpg` 查看。
+
+## 4. 前端需要的改动（相对 frontend1st）
+
+1. 端口 `8200` → `8080`。
+2. `WS /stream` → 两条连接：`/events`（JSON，记录格式见 §2）和 `/video`（纯 JPEG，无帧头，已画框）。
+3. `POST /release` → `POST /resume`；`/estop` 不需要请求体。
+4. 没有 `/health`：用 `GET /status` 判断连通。
+5. `/task`、`/estop`、`/resume` 返回完整 `Status`，可直接刷新界面。
+6. 事件格式是 `{"wall","mono","kind","data"}`，不是 `{"type":"event","event":{...}}`；状态只在连接时推一次，之后轮询。
+7. `brain_decision.plan` 是字符串数组，没有 `frames` 缩略图；新增 `new_task`、`ttft_ms`、`first_step_ms`、`think_id`。
+8. 安全与稳定性（代码审查发现）：
+   - 急停与解除不要用同一个按钮切换：解除急停应是单独操作并带确认（长按或二次确认），避免连点把急停立刻撤销。
+   - `EventStream` 每次重连都新建 `URLSession` 且从不 `invalidateAndCancel()`，断续网络下会持续泄漏。
+   - `EventStream` 的 `socket` 被多个任务读写，存在数据竞争；`MockFeed` 有 14 个 Swift 6 并发警告。
+9. `.gitignore`：不要提交 `.dart_tool/`、Flutter 生成目录、`.workbuddy/` 等工具状态（frontend1st 曾把含 Cookies/Login Data 的
+   Chrome 目录推到公开仓库，已从 `new` 历史中清除）。
